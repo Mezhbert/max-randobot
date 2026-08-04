@@ -81,7 +81,10 @@ func (s *Scheduler) publishOne(ctx context.Context, g store.Giveaway) error {
 			s.log.Warn("publish to channel", "channel", ch.ChatID, "err", err)
 			continue
 		}
-		_ = s.db.StorePublishMessageID(ctx, g.ID, ch.ChatID, mid)
+		s.log.Info("published to channel", "giveaway", g.ID, "channel", ch.ChatID, "mid", mid)
+		if err := s.db.StorePublishMessageID(ctx, g.ID, ch.ChatID, mid); err != nil {
+			s.log.Warn("store publish mid", "err", err)
+		}
 		publishedAny = true
 	}
 	if !publishedAny {

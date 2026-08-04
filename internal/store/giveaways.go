@@ -3,13 +3,15 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // CreateDraftGiveaway создаёт новый черновик розыгрыша для пользователя.
-// Если уже есть активный черновик в режиме создания — возвращаем его (один черновик на сессию).
+// Каждый «Создать розыгрыш» = новый черновик. Старые продолжаются отдельно
+// через ResumeDraft (кнопка «Продолжить создание» в списке черновиков).
 func (s *Store) CreateDraftGiveaway(ctx context.Context, ownerUserID int64, step string) (Giveaway, error) {
 	var g Giveaway
 	err := s.pool.QueryRow(ctx, `
@@ -218,27 +220,37 @@ func (s *Store) ActiveFinished(ctx context.Context, now time.Time) ([]Giveaway, 
 }
 
 // StorePublishMessageID сохраняет mid опубликованного сообщения в канале.
+// Ключ — chat_id (как текст), значение — mid. chatID конвертируем в строку
+// в Go: pgx не умеет кодировать int64 → text напрямую (OID 25).
 func (s *Store) StorePublishMessageID(ctx context.Context, id, chatID int64, mid string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE giveaways
-		SET publish_message_ids = publish_message_ids || jsonb_build_object($2::text, $3)
+		SET publish_message_ids = publish_message_ids || jsonb_build_object($2::text, $3::text)
 		WHERE id=$1
-	`, id, chatID, mid)
+	`, id, strconv.FormatInt(chatID, 10), mid)
 	return err
 }
 
-// StoreResultsMessageID — mid поста с итогами.
+// StoreResultsMessageID — mid поста с итогами (тот же паттерн, что StorePublishMessageID).
 func (s *Store) StoreResultsMessageID(ctx context.Context, id, chatID int64, mid string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE giveaways
-		SET results_message_ids = results_message_ids || jsonb_build_object($2::text, $3)
+		SET results_message_ids = results_message_ids || jsonb_build_object($2::text, $3::text)
 		WHERE id=$1
-	`, id, chatID, mid)
+	`, id, strconv.FormatInt(chatID, 10), mid)
 	return err
 }
 
 // SaveWinners — фиксируем победителей.
+// SaveWinners сохраняет список ID победителей. Колонка winners_user_ids —
+// BIGINT[] NOT NULL, поэтому пустой slice нельзя передавать как NULL: при
+// отсутствии участников явно пишем пустой массив '{}'.
 func (s *Store) SaveWinners(ctx context.Context, id int64, winnerIDs []int64) error {
+	if len(winnerIDs) == 0 {
+		// Явный пустой массив — избегаем NULL для NOT NULL-колонки.
+		_, err := s.pool.Exec(ctx, `UPDATE giveaways SET winners_user_ids='{}' WHERE id=$1`, id)
+		return err
+	}
 	_, err := s.pool.Exec(ctx, `UPDATE giveaways SET winners_user_ids=$2 WHERE id=$1`, id, winnerIDs)
 	return err
 }
@@ -291,6 +303,7 @@ func (s *Store) scanGiveawayRow(rows rowIter, g *Giveaway) error { return s.scan
 
 func (s *Store) scanRow(sc interface{ Scan(dest ...any) error }, g *Giveaway) error {
 	var publishAt, finishAt pgtype.Timestamptz
+	var draftStep pgtype.Text // draft_step NULL после публикации — сканируем через pgtype
 	var mediaTokens []byte
 	var publishMsgs, resultsMsgs []byte
 	err := sc.Scan(
@@ -298,10 +311,13 @@ func (s *Store) scanRow(sc interface{ Scan(dest ...any) error }, g *Giveaway) er
 		&g.SubscribeChannelIDs, &g.PublishChannelIDs, &g.ResultsInOriginalPost, &g.ResultsPostText,
 		&publishAt, &finishAt, &g.WinnersCount, &g.WinnersMessage,
 		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
-		&g.DraftStep, &g.Status, &publishMsgs, &resultsMsgs, &g.WinnersUserIDs, &g.CreatedAt, &g.UpdatedAt,
+		&draftStep, &g.Status, &publishMsgs, &resultsMsgs, &g.WinnersUserIDs, &g.CreatedAt, &g.UpdatedAt,
 	)
 	if err != nil {
 		return err
+	}
+	if draftStep.Valid {
+		g.DraftStep = draftStep.String
 	}
 	if publishAt.Valid {
 		g.PublishAt = &publishAt.Time
