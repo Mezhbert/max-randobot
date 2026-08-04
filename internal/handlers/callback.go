@@ -55,8 +55,6 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 		b.showChannels(ctx, uid)
 	case util.CBChannelAnalytics:
 		b.showChannelListForAnalytics(ctx, uid)
-	case util.CBChannelRefresh:
-		b.refreshChannels(ctx, uid)
 	default:
 		// подпункты (фильтры/открыть/удалить и т.д.)
 		b.handleSubPayload(ctx, uid, p)
@@ -188,6 +186,11 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwOpen), 10, 64)
 		b.showGiveawayDetails(ctx, uid, id)
 
+	case strings.HasPrefix(p, util.CBGwEdit):
+		// «Продолжить создание» (для черновика) или «Редактировать» (для активного).
+		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwEdit), 10, 64)
+		b.resumeGiveaway(ctx, uid, id)
+
 	case strings.HasPrefix(p, util.CBGwCancel):
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwCancel), 10, 64)
 		if err := b.db.SetStatus(ctx, id, store.StatusCancelled); err == nil {
@@ -227,6 +230,21 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 	default:
 		b.sendMainMenu(ctx, uid, "Главное меню:")
 	}
+}
+
+// resumeGiveaway — продолжает создание черновика (или открывает активный для правок).
+// Для черновика: активирует FSM на текущем шаге и показывает его.
+func (b *Bot) resumeGiveaway(ctx context.Context, uid, id int64) {
+	g, err := b.engine.ResumeDraft(ctx, id)
+	if err != nil {
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось продолжить: "+err.Error())
+		return
+	}
+	if g.OwnerUserID != uid {
+		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+		return
+	}
+	b.showStep(ctx, uid, g, g.DraftStep)
 }
 
 // fmtErr — короткий текст ошибки для пользователя.

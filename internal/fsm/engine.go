@@ -96,12 +96,33 @@ func PromptForStep(step string) string {
 }
 
 // StartDraft начинает новый черновик или возвращает существующий (один на пользователя).
+// StartDraft начинает создание НОВОГО розыгрыша. Всегда создаёт свежий черновик
+// и стартует с первого шага. Старые черновики НЕ подтягиваются — их можно
+// продолжить отдельно через ResumeDraft (из «Мои розыгрыши → В процессе создания»).
 func (e *Engine) StartDraft(ctx context.Context, ownerUserID int64) (store.Giveaway, error) {
-	// Есть ли уже активный черновик в режиме создания?
-	if g, err := e.DB.GetDraftGiveaway(ctx, ownerUserID); err == nil {
-		return g, nil
-	}
 	return e.DB.CreateDraftGiveaway(ctx, ownerUserID, FirstStep)
+}
+
+// ResumeDraft возобновляет создание существующего черновика по id.
+// Используется кнопкой «Продолжить создание» в карточке черновика.
+// Если шаг создания пуст (черновик сохранён через «Отменить») — стартуем с первого шага.
+func (e *Engine) ResumeDraft(ctx context.Context, id int64) (store.Giveaway, error) {
+	g, err := e.DB.GetGiveawayAny(ctx, id)
+	if err != nil {
+		return g, err
+	}
+	if g.Status != store.StatusDraft {
+		return g, fmt.Errorf("это не черновик")
+	}
+	step := g.DraftStep
+	if step == "" {
+		step = FirstStep
+		if err := e.DB.SetDraftStep(ctx, id, step); err != nil {
+			return g, err
+		}
+		g.DraftStep = step
+	}
+	return g, nil
 }
 
 // Abandon закрывает создание (кнопка Отменить) — черновик сохраняется, выход в меню.

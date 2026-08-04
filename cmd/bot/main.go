@@ -18,6 +18,7 @@ import (
 	"github.com/maxbot/giveawaybot/internal/config"
 	"github.com/maxbot/giveawaybot/internal/handlers"
 	"github.com/maxbot/giveawaybot/internal/maxapi"
+	"github.com/maxbot/giveawaybot/internal/scheduler"
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
@@ -66,6 +67,16 @@ func main() {
 
 	bot := handlers.New(api, db, slog.Default())
 
+	// Встроенный планировщик: сам раз в 30 секунд публикует наступившие
+	// розыгрыши (scheduled → active) и подводит итоги завершившихся
+	// (active → finished). Раньше это делал внешний crontab, который легко
+	// забывается настроить — из-за чего розыгрыши не публиковались во время.
+	// Встроенный тикер убирает эту зависимость: всё работает в одном процессе.
+	sch := scheduler.New(api, db, slog.Default())
+	schedCtx, schedStop := context.WithCancel(context.Background())
+	defer schedStop()
+	go runScheduler(schedCtx, sch)
+
 	// Регистрируем webhook при старте (идемпотентно со стороны MAX).
 	go func() {
 		regCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -76,19 +87,12 @@ func main() {
 	}()
 
 	// Узнаём публичное имя бота — нужно для построения UTM-диплинков (max.ru/<bot>/start/...).
-	// Заодно сохраняем userID самого бота (нужен для /clear — фильтр своих сообщений).
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if info, err := api.Bots.GetMyInfo(ic); err == nil {
-			if info.Username != "" {
-				bot.SetUsername(info.Username)
-				slog.Info("bot username", "name", info.Username)
-			}
-			if info.UserID != 0 {
-				bot.SetBotUserID(info.UserID)
-				slog.Info("bot user_id", "id", info.UserID)
-			}
+		if info, err := api.Bots.GetMyInfo(ic); err == nil && info.Username != "" {
+			bot.SetUsername(info.Username)
+			slog.Info("bot username", "name", info.Username)
 		}
 	}()
 
@@ -147,7 +151,42 @@ func main() {
 	<-stop
 	slog.Info("завершение...")
 
+	schedStop() // остановить тикер планировщика
+
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutCtx)
+}
+
+// runScheduler — встроенный цикл планировщика. Каждые 30 секунд:
+//   - публикует scheduled-розыгрыши с наступившим publish_at (→ active);
+//   - подводит итоги active-розыгрышей с наступившим finish_at (→ finished).
+//
+// Запускается отдельной горутиной, останавливается по отмене ctx.
+func runScheduler(ctx context.Context, sch *scheduler.Scheduler) {
+	const interval = 30 * time.Second
+	// Сразу один проход при старте — чтобы «догнать» пропущенные публикации
+	// (например, бот был выключен в момент publish_at).
+	tick := func() {
+		c, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		if err := sch.PublishPending(c); err != nil {
+			slog.Warn("scheduler PublishPending", "err", err)
+		}
+		if err := sch.FinishPending(c); err != nil {
+			slog.Warn("scheduler FinishPending", "err", err)
+		}
+	}
+	tick()
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tick()
+		}
+	}
 }

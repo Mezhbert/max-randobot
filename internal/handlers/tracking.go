@@ -57,58 +57,6 @@ func (b *Bot) onUserRemoved(ctx context.Context, u model.Update) {
 	_ = b.db.UTMAccountUnsub(ctx, userID, chatID)
 }
 
-// onBotAdded — бота добавили в чат/канал. Авто-сбор в «Мои каналы» того, кто добавил
-// (inviter_id). Сразу проверяем админство бота через GetMembership.
-func (b *Bot) onBotAdded(ctx context.Context, u model.Update) {
-	chatID := u.ChatID
-	inviterID := u.GetChat().InviterID
-	if chatID == 0 || inviterID == 0 {
-		return
-	}
-	// Узнаём инфо о чате (title, тип) — нужен только если это канал/группа (не диалог).
-	chat, err := b.api.GetChatInfo(ctx, chatID)
-	if err != nil {
-		b.log.Debug("bot_added getchat", "chat", chatID, "err", err)
-		return
-	}
-	// Диалоги (лички) не добавляем — только каналы/группы/публичные чаты.
-	if chat.Type == model.ChatTypeDialog {
-		return
-	}
-	// Проверяем админство бота в этом чате.
-	isAdmin := b.checkBotAdmin(ctx, chatID)
-	_, err = b.db.AddChannel(ctx, store.Channel{
-		OwnerUserID: inviterID,
-		ChatID:      chatID,
-		Title:       chat.Title,
-		Link:        chat.Link,
-		IsPublic:    chat.Type == model.ChatTypeChannel,
-		IsBotAdmin:  isAdmin,
-	})
-	if err != nil {
-		b.log.Debug("bot_added addchannel", "chat", chatID, "err", err)
-	}
-}
-
-// onBotRemoved — бота кикнули/он вышел из чата. Снимаем флаг админства.
-func (b *Bot) onBotRemoved(ctx context.Context, u model.Update) {
-	chatID := u.ChatID
-	if chatID == 0 {
-		return
-	}
-	_ = b.db.MarkChannelRemovedByChat(ctx, chatID)
-}
-
-// checkBotAdmin — обёртка над CheckChannelAdmin для внутреннего использования.
-func (b *Bot) checkBotAdmin(ctx context.Context, chatID int64) bool {
-	_, ok, err := b.api.CheckChannelAdmin(ctx, chatID)
-	if err != nil {
-		b.log.Debug("check bot admin", "chat", chatID, "err", err)
-		return false
-	}
-	return ok
-}
-
 // onBotStartedPayload — обработка payload диплинка из bot_started.
 // payload приходит в формате "utm_<code>". Если есть — фиксируем клик + атрибуцию.
 func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload string) {

@@ -67,9 +67,16 @@ func ParseStartedUserID(body []byte) int64 {
 	return probe.User.UserID
 }
 
-// SubscribeWebhook регистрирует webhook в MAX. Идемпотентно вызывать при старте.
+// SubscribeWebhook регистрирует ровно один webhook в MAX и вызывается при
+// старте бота. Это идемпотентная операция в строгом смысле: перед подпиской
+// на новый URL бот отписывается от ВСЕХ ранее зарегистрированных URL.
+//
+// Зачем: quick-tunnel при каждом запуске выдаёт новый URL. Если не чистить
+// старые подписки — в MAX копятся мёртвые/дублирующиеся endpoints, и платформа
+// начинает слать КАЖДЫЙ апдейт несколько раз (по разу на каждую подписку),
+// из-за чего бот отвечает дублями на каждое действие. Чистка — единственный
+// правильный путь (а не дедупликация на приёме).
 func (a *API) SubscribeWebhook(ctx context.Context, url, secret string) error {
-	a.rl.wait(ctx)
 	types := []string{
 		string(model.UpdateBotStarted),
 		string(model.UpdateBotStopped),
@@ -80,10 +87,28 @@ func (a *API) SubscribeWebhook(ctx context.Context, url, secret string) error {
 		// Трекинг подписок/отписок на каналы, где бот админ:
 		string(model.UpdateUserAdded),
 		string(model.UpdateUserRemoved),
-		// Авто-сбор каналов: бот добавлен/удалён в чате (для «Мои каналы»):
-		string(model.UpdateBotAdded),
-		string(model.UpdateBotRemoved),
 	}
+
+	// 1) Чистим все ранее зарегистрированные подписки, чтобы не плодить дублей.
+	existing, err := a.Subscriptions.GetSubscriptions(ctx)
+	if err != nil {
+		slog.Warn("get subscriptions (пропускаем чистку)", "err", err)
+	} else {
+		for _, s := range existing.Subscriptions {
+			if s.URL == "" || s.URL == url {
+				continue
+			}
+			a.rl.wait(ctx)
+			if _, uerr := a.Subscriptions.Unsubscribe(ctx, s.URL); uerr != nil {
+				slog.Warn("unsubscribe old", "url", s.URL, "err", uerr)
+			} else {
+				slog.Info("отписан старый webhook", "url", s.URL)
+			}
+		}
+	}
+
+	// 2) Подписываемся на актуальный URL.
+	a.rl.wait(ctx)
 	res, err := a.Subscriptions.Subscribe(ctx, url, secret, types, "")
 	if err != nil {
 		return err
@@ -221,37 +246,6 @@ func (a *API) GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error)
 	return a.Chats.GetChat(ctx, chatID)
 }
 
-// DeleteDialogMessages удаляет последние сообщения бота в диалоге с userID.
-// В диалоге MAX chat_id == user_id. Берём последние limit сообщений и удаляем
-// те, где sender = botUserID (бот не может удалять чужие сообщения). Если
-// botUserID == 0 — удаляем все найденные сообщения (фолбэк). Возвращает кол-во
-// удалённых. Ошибки отдельных удалений не прерывают цикл — логируются.
-func (a *API) DeleteDialogMessages(ctx context.Context, userID, botUserID int64) (int, error) {
-	const limit int64 = 50
-	// Получаем последние сообщения диалога. from/to=0 — без диапазона, count=limit.
-	list, err := a.Messages.GetMessages(ctx, userID, 0, 0, limit, nil)
-	if err != nil {
-		return 0, err
-	}
-	deleted := 0
-	for _, m := range list.Messages {
-		// Пропускаем сообщения юзера (если знаем свой ID — фильтр точный).
-		if botUserID != 0 && m.Sender.UserID != botUserID {
-			continue
-		}
-		mid := m.Body.Mid
-		if mid == "" {
-			continue
-		}
-		a.rl.wait(ctx)
-		if _, derr := a.Messages.DeleteMessage(ctx, mid); derr != nil {
-			slog.Debug("delete message", "mid", mid, "err", derr)
-			continue
-		}
-		deleted++
-	}
-	return deleted, nil
-}
 // AnswerCallback — подтверждение callback (снять "часики").
 func (a *API) AnswerCallback(ctx context.Context, callbackID, notification string) {
 	a.rl.wait(ctx)

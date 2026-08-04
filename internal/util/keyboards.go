@@ -31,7 +31,6 @@ const (
 	CBChannelAdd       = "ch_add"
 	CBChannelBack      = "ch_back"
 	CBChannelAnalytics = "ch_analytics" // вход в аналитику/UTM канала
-	CBChannelRefresh   = "ch_refresh"  // обновить список каналов (чек админства)
 
 	// UTM-трекинг
 	CBChannelUTM  = "ch_utm:"  // + channel_id — меню UTM конкретного канала
