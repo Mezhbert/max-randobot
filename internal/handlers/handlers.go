@@ -80,6 +80,12 @@ func (b *Bot) Handle(ctx context.Context, u model.Update) {
 		b.onUserAdded(ctx, u)
 	case model.UpdateUserRemoved:
 		b.onUserRemoved(ctx, u)
+	case model.UpdateBotAdded:
+		// Бота добавили в чат/канал (часто — как админа). Авто-сбор в «Мои каналы».
+		b.onBotAdded(ctx, u)
+	case model.UpdateBotRemoved:
+		// Бота кикнули из чата/канала — снимаем флаг админства.
+		b.onBotRemoved(ctx, u)
 	case model.UpdateMessageEdited, model.UpdateMessageRemoved:
 		// пока не используется
 	default:

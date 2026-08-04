@@ -62,6 +62,7 @@ const FirstStep = StepPostText
 // optionalSteps — шаги, которые можно пропустить (кнопка "Пропустить").
 var optionalSteps = map[string]bool{
 	StepMedia:      true,
+	StepButtonText: true, // дефолт "Участвовать"
 	StepWinnersMsg: true,
 	StepReferral:   true,
 	StepCaptcha:    true,

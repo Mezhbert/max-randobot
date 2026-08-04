@@ -55,6 +55,8 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 		b.showChannels(ctx, uid)
 	case util.CBChannelAnalytics:
 		b.showChannelListForAnalytics(ctx, uid)
+	case util.CBChannelRefresh:
+		b.refreshChannels(ctx, uid)
 	default:
 		// подпункты (фильтры/открыть/удалить и т.д.)
 		b.handleSubPayload(ctx, uid, p)

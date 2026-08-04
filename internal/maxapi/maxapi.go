@@ -80,6 +80,9 @@ func (a *API) SubscribeWebhook(ctx context.Context, url, secret string) error {
 		// Трекинг подписок/отписок на каналы, где бот админ:
 		string(model.UpdateUserAdded),
 		string(model.UpdateUserRemoved),
+		// Авто-сбор каналов: бот добавлен/удалён в чате (для «Мои каналы»):
+		string(model.UpdateBotAdded),
+		string(model.UpdateBotRemoved),
 	}
 	res, err := a.Subscriptions.Subscribe(ctx, url, secret, types, "")
 	if err != nil {
@@ -105,6 +108,31 @@ func (a *API) SendTextWithKeyboard(ctx context.Context, userID int64, text strin
 	msg := maxbot.NewMessage().SetUser(userID).SetText(text)
 	if kb != nil {
 		msg.AddKeyboard(kb)
+	}
+	_, err := a.Messages.Send(ctx, msg)
+	return err
+}
+
+// SendWithAttachments — отправка сообщения с вложениями (медиа + inline-клавиатура)
+// в личный диалог с пользователем. Используется для предпросмотра поста розыгрыша.
+func (a *API) SendWithAttachments(ctx context.Context, userID int64, text string, attachments []model.Attachment, format model.TextFormat) error {
+	a.rl.wait(ctx)
+	msg := maxbot.NewMessage().SetUser(userID).SetText(text).SetFormat(format)
+	for _, at := range attachments {
+		switch at.Type {
+		case model.AttachImage:
+			if at.Payload.Token != "" {
+				msg.AddAttachByToken(at.Payload.Token, model.AttachImage)
+			} else if at.Payload.URL != "" {
+				msg.AddImageUrl(at.Payload.URL)
+			}
+		case model.AttachVideo:
+			if at.Payload.Token != "" {
+				msg.AddAttachByToken(at.Payload.Token, model.AttachVideo)
+			}
+		case model.AttachInlineKeyboard:
+			addInlineKeyboard(msg, at.Payload.Buttons)
+		}
 	}
 	_, err := a.Messages.Send(ctx, msg)
 	return err

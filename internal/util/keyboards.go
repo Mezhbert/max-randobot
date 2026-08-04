@@ -31,6 +31,7 @@ const (
 	CBChannelAdd       = "ch_add"
 	CBChannelBack      = "ch_back"
 	CBChannelAnalytics = "ch_analytics" // вход в аналитику/UTM канала
+	CBChannelRefresh   = "ch_refresh"  // обновить список каналов (чек админства)
 
 	// UTM-трекинг
 	CBChannelUTM  = "ch_utm:"  // + channel_id — меню UTM конкретного канала
@@ -104,6 +105,51 @@ func ParticipateKeyboardBuilder(buttonText string, giveawayID int64) *model.Keyb
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack(buttonText, CBParticipate+strconv.FormatInt(giveawayID, 10))
 	return kb
+}
+
+// PreviewKeyboardBuilder — кнопка участия для ПРЕДПРОСМОТРА (с пометкой "превью",
+// визуально та же что будет в посте, но callback никуда не ведёт).
+func PreviewKeyboardBuilder(buttonText string, giveawayID int64) *model.Keyboard {
+	kb := model.NewKeyboard()
+	// Текст кнопки как будет в посте, callback пустой (no-op).
+	kb.AddRow().AddCallBack(buttonText+" (превью)", "preview_btn:"+strconv.FormatInt(giveawayID, 10))
+	return kb
+}
+
+// GiveawayAttachments строит список вложений для поста розыгрыша:
+// медиа (image/video по токенам) + inline-клавиатура кнопки участия.
+// Используется и при публикации, и при предпросмотре (preview=true → PreviewKeyboard).
+func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []MediaTokenSimple, preview bool) []model.Attachment {
+	var attachments []model.Attachment
+	for _, m := range mediaTokens {
+		switch m.Type {
+		case "image":
+			attachments = append(attachments, model.Attachment{
+				Type:    model.AttachImage,
+				Payload: model.Payload{Token: m.Token},
+			})
+		case "video":
+			attachments = append(attachments, model.Attachment{
+				Type:    model.AttachVideo,
+				Payload: model.Payload{Token: m.Token},
+			})
+		}
+	}
+	// Клавиатура как inline-attachment через Build().
+	var kb *model.Keyboard
+	if preview {
+		kb = PreviewKeyboardBuilder(buttonText, giveawayID)
+	} else {
+		kb = ParticipateKeyboardBuilder(buttonText, giveawayID)
+	}
+	attachments = append(attachments, kb.Build())
+	return attachments
+}
+
+// MediaTokenSimple — упрощённая пара тип/токен (без зависимости на store).
+type MediaTokenSimple struct {
+	Type  string
+	Token string
 }
 
 // BackKeyboard — «В меню».

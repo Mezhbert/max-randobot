@@ -67,6 +67,9 @@ func (e *Engine) SkipStep(ctx context.Context, g store.Giveaway) error {
 		return errors.New("этот шаг нельзя пропустить")
 	}
 	switch g.DraftStep {
+	case StepButtonText:
+		// Дефолтный текст кнопки участия.
+		_ = e.DB.UpdateGiveawayField(ctx, g.ID, "button_text", "Участвовать")
 	case StepWinnersMsg:
 		// ничего не пишем — остаётся пустое сообщение
 	case StepReferral:

@@ -130,3 +130,33 @@ func (b *Bot) toggleChannelSelection(ctx context.Context, uid int64, p string) {
 	gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
 	b.showStep(ctx, uid, gg, gg.DraftStep)
 }
+
+// refreshChannels — кнопка «🔄 Обновить»: перепроверяет админство бота по всем
+// сохранённым каналам и обновляет список. Каналы где бот больше не админ
+// помечаются ⚠️ (но не удаляются — чтобы сохранить историю UTM/аналитики).
+func (b *Bot) refreshChannels(ctx context.Context, uid int64) {
+	channels, err := b.db.ListChannels(ctx, uid)
+	if err != nil {
+		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка загрузки каналов.")
+		return
+	}
+	if len(channels) == 0 {
+		_ = b.api.SendTextWithKeyboard(ctx, uid,
+			"📢 Каналов пока нет.\n\nПросто добавьте бота администратором в канал — он появится здесь автоматически.",
+			util.BackKeyboard())
+		return
+	}
+	checked, stillAdmin := 0, 0
+	for _, c := range channels {
+		isAdmin := b.checkBotAdmin(ctx, c.ChatID)
+		_ = b.db.SetChannelAdminByChat(ctx, c.ChatID, isAdmin)
+		checked++
+		if isAdmin {
+			stillAdmin++
+		}
+	}
+	_ = b.api.SendText(ctx, uid,
+		fmt.Sprintf("🔄 Проверено каналов: %d. Админ в %d.\n\n", checked, stillAdmin))
+	// Перерисуем список с актуальными галочками.
+	b.showChannels(ctx, uid)
+}

@@ -74,6 +74,9 @@ func (b *Bot) showGiveawayDetails(ctx context.Context, uid, id int64) {
 }
 
 // showChannels — экран "мои каналы".
+// Каналы появляются автоматически: когда бота делают админом в канале,
+// приходит bot_added webhook и канал добавляется в список.
+// Кнопка «🔄 Обновить» перепроверяет админство по всем сохранённым каналам.
 func (b *Bot) showChannels(ctx context.Context, uid int64) {
 	items, err := b.db.ListChannels(ctx, uid)
 	if err != nil {
@@ -83,11 +86,13 @@ func (b *Bot) showChannels(ctx context.Context, uid int64) {
 	var text string
 	kb := model.NewKeyboard()
 	if len(items) == 0 {
-		text = "📢 Мои каналы пусты.\n\nЧтобы добавить канал:\n" +
-			"1) Добавьте бота администратором в канал.\n" +
-			"2) Отправьте ID канала или перешлите сообщение из него."
+		text = "📢 Мои каналы пусты.\n\n" +
+			"Каналы добавляются автоматически — просто добавьте бота администратором\n" +
+			"в свой канал, и он появится здесь.\n\n" +
+			"Если уже добавили, но канал не виден — нажмите «🔄 Обновить»."
 	} else {
-		text = "📢 Мои каналы. Нажмите на канал для деталей/UTM-аналитики:\n\n"
+		text = "📢 Мои каналы. Нажмите на канал для деталей/UTM-аналитики.\n" +
+			"✅ — бот админ, ⚠️ — бот НЕ админ.\n\n"
 		for _, c := range items {
 			admin := "✅"
 			if !c.IsBotAdmin {
@@ -101,7 +106,7 @@ func (b *Bot) showChannels(ctx context.Context, uid int64) {
 			kb.AddRow().AddCallBack(admin+" "+title, util.CBChannelUTM+fmt.Sprintf("%d", c.ID))
 		}
 	}
-	kb.AddRow().AddCallBack("➕ Добавить канал", util.CBChannelAdd)
+	kb.AddRow().AddCallBack("🔄 Обновить", util.CBChannelRefresh)
 	kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
 	_ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
 }

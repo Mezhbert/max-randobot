@@ -14,7 +14,7 @@ func (s *Store) CreateDraftGiveaway(ctx context.Context, ownerUserID int64, step
 	var g Giveaway
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO giveaways (owner_user_id, draft_step, status)
-		VALUES ($1, $2, 'draft')
+		VALUES ($1, $2, 'draft'::giveaway_status)
 		RETURNING id, owner_user_id, name, post_text, post_format, media_tokens, button_text,
 		          subscribe_channel_ids, publish_channel_ids, results_in_original_post, results_post_text,
 		          publish_at, finish_at, winners_count, winners_message,
@@ -155,12 +155,13 @@ func (s *Store) AbandonDraft(ctx context.Context, id int64) error {
 
 // PublishDraft — подтверждение создания: статус → scheduled (если publish_at в будущем)
 // или active (если уже пора). draft_step сбрасывается.
+// Явный cast в giveaway_status — статус хранится как enum, а CASE отдаёт text.
 func (s *Store) PublishDraft(ctx context.Context, id int64) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE giveaways
 		SET status = CASE
-		        WHEN publish_at IS NOT NULL AND publish_at > now() THEN 'scheduled'
-		        ELSE 'active'
+		        WHEN publish_at IS NOT NULL AND publish_at > now() THEN 'scheduled'::giveaway_status
+		        ELSE 'active'::giveaway_status
 		    END,
 		    draft_step = NULL
 		WHERE id=$1 AND status='draft'
@@ -169,8 +170,9 @@ func (s *Store) PublishDraft(ctx context.Context, id int64) error {
 }
 
 // SetStatus — смена статуса (cancel/finish).
+// Явный cast: колонка status имеет тип giveaway_status (enum).
 func (s *Store) SetStatus(ctx context.Context, id int64, status string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE giveaways SET status=$2 WHERE id=$1`, id, status)
+	_, err := s.pool.Exec(ctx, `UPDATE giveaways SET status=$2::giveaway_status WHERE id=$1`, id, status)
 	return err
 }
 

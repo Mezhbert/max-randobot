@@ -41,14 +41,31 @@ func (b *Bot) advance(ctx context.Context, userID, giveawayID int64, currentStep
 // showStep показывает приглашение конкретного шага.
 func (b *Bot) showStep(ctx context.Context, userID int64, g store.Giveaway, step string) {
 	if step == fsm.StepPreview {
-		// Предпросмотр: сначала пост, потом (если отдельным постом) пост итогов,
-		// затем сводка + кнопки Принять/Отклонить.
-		text := "👁 ПРЕДПРОСМОТР ПОСТА РОЗЫГРЫША:\n\n" + g.PostText
-		_ = b.api.SendTextWithKeyboard(ctx, userID, text, util.CancelOnlyKeyboard())
-		if !g.ResultsInOriginalPost && g.ResultsPostText != "" {
-			_ = b.api.SendText(ctx, userID, "👁 ПРЕДПРОСМОТР ПОСТА С ИТОГАМИ:\n\n"+g.ResultsPostText)
+		// Предпросмотр: ПОЛНЫЙ пост ровно как будет опубликован
+		// (текст + медиа + кнопка участия в виде "превью"),
+		// затем — сводка-инфо со стрелкой ↑ на пост выше + кнопки Принять/Отклонить.
+		buttonText := g.ButtonText
+		if buttonText == "" {
+			buttonText = "Участвовать"
 		}
-		_ = b.api.SendTextWithKeyboard(ctx, userID, fsm.FormatPreview(g, b.db), util.ConfirmKeyboard())
+		// Медиа-токены → упрощённая форма для хелпера.
+		mediaSimple := make([]util.MediaTokenSimple, 0, len(g.MediaTokens))
+		for _, mt := range g.MediaTokens {
+			mediaSimple = append(mediaSimple, util.MediaTokenSimple{Type: mt.Type, Token: mt.Token})
+		}
+		// 1) Полный предпросмотр поста (как будет в канале).
+		attachments := util.GiveawayAttachments(buttonText, g.ID, mediaSimple, true)
+		_ = b.api.SendWithAttachments(ctx, userID, g.PostText, attachments, model.TextFormat(g.PostFormat))
+
+		// 2) Если итоги отдельным постом — тоже предпросмотрим.
+		if !g.ResultsInOriginalPost && g.ResultsPostText != "" {
+			_ = b.api.SendText(ctx, userID, g.ResultsPostText)
+		}
+
+		// 3) Сводка со стрелкой ↑ (указывает на пост выше) + кнопки подтверждения.
+		summary := "⬆️ Так будет выглядеть пост выше (с кнопкой «" + buttonText + "»).\n\n" +
+			fsm.FormatPreview(g, b.db)
+		_ = b.api.SendTextWithKeyboard(ctx, userID, summary, util.ConfirmKeyboard())
 		return
 	}
 
@@ -74,6 +91,7 @@ func (b *Bot) showChannelSelectStep(ctx context.Context, userID int64, g store.G
 	}
 
 	kb := model.NewKeyboard()
+	hasChannels := false
 	if err == nil && len(channels) > 0 {
 		for _, c := range channels {
 			mark := "⬜ "
@@ -91,10 +109,10 @@ func (b *Bot) showChannelSelectStep(ctx context.Context, userID int64, g store.G
 				ctitle += " ⚠️"
 			}
 			kb.AddRow().AddCallBack(mark+ctitle, prefix+fmt.Sprintf("%d", c.ID))
+			hasChannels = true
 		}
-	} else {
-		kb.AddRow().AddCallBack("➕ Добавить канал (сначала)", util.CBChannelAdd)
 	}
+	_ = hasChannels
 	kb.AddRow().AddCallBack("Далее →", util.CBFSMOption+"next")
 	kb.AddRow().
 		AddCallBack("← Назад", util.CBFSMBack).
@@ -109,7 +127,7 @@ func (b *Bot) showChannelSelectStep(ctx context.Context, userID int64, g store.G
 // kbForStep возвращает клавиатуру для шага (навигация + опции).
 func kbForStep(step string) *model.Keyboard {
 	switch step {
-	case fsm.StepMedia, fsm.StepWinnersMsg:
+	case fsm.StepMedia, fsm.StepWinnersMsg, fsm.StepButtonText:
 		return util.NavWithSkipKeyboard()
 	case fsm.StepSubChannels, fsm.StepPubChannels:
 		kb := model.NewKeyboard()

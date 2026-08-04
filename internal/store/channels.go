@@ -75,6 +75,39 @@ func (s *Store) SetChannelAdminFlag(ctx context.Context, id int64, isAdmin bool)
 	return err
 }
 
+// MarkChannelRemovedByChat — бота кикнули из канала: снимаем флаг админства
+// по chat_id (среди всех владельцев, т.к. chat_id глобален).
+func (s *Store) MarkChannelRemovedByChat(ctx context.Context, chatID int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE channels SET is_bot_admin=FALSE, admin_checked_at=now() WHERE chat_id=$1`, chatID)
+	return err
+}
+
+// AllChannelChatIDs возвращает все известные chat_id каналов (для чек-апа админства).
+func (s *Store) AllChannelChatIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT chat_id FROM channels ORDER BY chat_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		res = append(res, id)
+	}
+	return res, rows.Err()
+}
+
+// SetChannelAdminByChat обновляет флаг админства по chat_id (глобально).
+func (s *Store) SetChannelAdminByChat(ctx context.Context, chatID int64, isAdmin bool) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE channels SET is_bot_admin=$2, admin_checked_at=now() WHERE chat_id=$1`, chatID, isAdmin)
+	return err
+}
+
 // ChannelsByIDs возвращает каналы по списку внутренних id (для публикаций).
 func (s *Store) ChannelsByIDs(ctx context.Context, ownerUserID int64, ids []int64) ([]Channel, error) {
 	if len(ids) == 0 {
