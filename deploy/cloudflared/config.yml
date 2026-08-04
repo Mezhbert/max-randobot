@@ -1,0 +1,17 @@
+# Конфигурация named-туннеля Cloudflare для MAX-бота.
+#
+# Файл кладётся в ~/.cloudflared/config.yml (или указывается через --config).
+# Переменная TUNNEL_UUID подставляется после `cloudflared tunnel create`.
+#
+# Подробности: см. deploy/cloudflared/SETUP.md
+
+tunnel: <TUNNEL_UUID>
+credentials-file: /home/ihb-minion003/.cloudflared/<TUNNEL_UUID>.json
+protocol: http2
+
+# Ингресс: единственный маршрут — локальный HTTP-сервер бота.
+# Все остальные пути возвращают 404 (явное правило catch-all обязательно).
+ingress:
+  - hostname: bot.<ВАШ-ДОМЕН>.ru
+    service: http://localhost:8080
+  - service: http_status:404

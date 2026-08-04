@@ -1,0 +1,25 @@
+[Unit]
+Description=Cloudflare named tunnel for MAX giveaway bot
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# cloudflared лежит в пользовательском ~/.local/bin — укажи абсолютный путь.
+# User/Group: юзер, под которым шёл `cloudflared tunnel login` (там же cert.pem).
+User=ihb-minion003
+Group=ihb-minion003
+
+ExecStart=/home/ihb-minion003/.local/bin/cloudflared --no-autoupdate tunnel run max-bot
+# Конфиг по умолчанию читается из ~/.cloudflared/config.yml — при желании:
+# ExecStart=... --config /home/ihb-minion003/.cloudflared/config.yml tunnel run max-bot
+
+Restart=on-failure
+RestartSec=5s
+
+# Логи идут в journald: journalctl -u cloudflared-max-bot -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

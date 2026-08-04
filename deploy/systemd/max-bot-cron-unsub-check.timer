@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-check unsubscriptions — every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+Unit=max-bot-cron@unsub-check.service
+
+[Install]
+WantedBy=timers.target

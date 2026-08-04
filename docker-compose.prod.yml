@@ -1,0 +1,42 @@
+# Полный прод-стек: PostgreSQL + бот (webhook-сервер).
+# Использование на Linux/VPS:
+#   cp .env.example .env  &&  отредактировать BOT_TOKEN/WEBHOOK_URL/WEBHOOK_SECRET
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# cron-задачи запускаются ОТДЕЛЬНО (см. README). Можно поднять второй контейнер
+# по тому же образу, переопределив command (пример в конце файла).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: giveaway
+      POSTGRES_PASSWORD: giveaway
+      POSTGRES_DB: giveaway
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U giveaway -d giveaway"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Внутри compose БД доступна по имени сервиса; DB_DSN из .env при необходимости
+      # переопределить (см. ниже значение по умолчанию).
+      DB_DSN: ${DB_DSN:-postgres://giveaway:giveaway@postgres:5432/giveaway?sslmode=disable}
+      DB_MIGRATE: "true"
+      TZ: Europe/Moscow
+      HTTP_PORT: "8080"
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

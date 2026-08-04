@@ -1,0 +1,30 @@
+[Unit]
+Description=MAX giveaway bot (webhook server)
+Documentation=file:///opt/max-bot/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+# Если postgres в docker-compose — дождись его:
+Requires=docker.service
+
+[Service]
+User=ihb-minion003
+Group=ihb-minion003
+
+WorkingDirectory=/opt/max-bot
+# Бинари: ./bin/giveawaybot-bot-linux-amd64 (собран через make build-linux).
+ExecStart=/opt/max-bot/bin/giveawaybot-bot-linux-amd64
+
+Restart=on-failure
+RestartSec=5s
+
+# .env подхватывается автоматически (см. config.Load).
+# Сертификат Минцифры встроен в бинарник — SSL_CERT_FILE НЕ НУЖЕН.
+EnvironmentFile=-/opt/max-bot/.env
+
+StandardOutput=journal
+StandardError=journal
+
+# Cron-задачи (публикация/итоги/отписки) — отдельный timer, см. ниже.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Finish expired giveaways — every minute
+
+[Timer]
+OnCalendar=*:0/1
+Persistent=true
+Unit=max-bot-cron@finish.service
+
+[Install]
+WantedBy=timers.target

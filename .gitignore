@@ -1,0 +1,42 @@
+# Binaries
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go workspace files
+/vendor/
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+
+# Environment / secrets
+.env
+.env.local
+*.local
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local toolchain cache (if cloned here)
+/go-toolchain/
+
+# ZCode internal (планы/снапшоты — не часть проекта)
+/.zcode/
+
+# Оффлайн-копия документации/SDK (чужой репозиторий, не коммитим)
+/документация/
+
+# Дубликат миграций в корне (каноничные — в internal/store/migrations/)
+/migrations/
+
+# Временные логи туннеля/бота (если сложили в корень)
+/*.log
+/tmp/

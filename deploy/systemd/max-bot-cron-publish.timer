@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish due giveaways — every minute
+
+[Timer]
+OnCalendar=*:0/1
+Persistent=true
+Unit=max-bot-cron@publish.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,37 @@
+# docker-compose для локального/dev запуска.
+# Для прода на VPS используйте systemd/cron + reverse-proxy (см. README).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: giveaway
+      POSTGRES_PASSWORD: giveaway
+      POSTGRES_DB: giveaway
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U giveaway -d giveaway"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bot:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Внутри compose БД доступна по имени сервиса.
+      DB_DSN: postgres://giveaway:giveaway@postgres:5432/giveaway?sslmode=disable
+      DB_MIGRATE: "true"
+      TZ: Europe/Moscow
+      HTTP_PORT: "8080"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

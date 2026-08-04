@@ -1,0 +1,14 @@
+[Unit]
+Description=MAX giveaway bot — cron tasks (publish/finish/unsub-check)
+After=max-bot.service
+
+[Service]
+Type=oneshot
+User=ihb-minion003
+Group=ihb-minion003
+WorkingDirectory=/opt/max-bot
+EnvironmentFile=-/opt/max-bot/.env
+# %i = экземпляр таймера (publish | finish | unsub-check), см. .timer-файлы.
+ExecStart=/opt/max-bot/bin/giveawaybot-cron-linux-amd64 %i
+StandardOutput=journal
+StandardError=journal
