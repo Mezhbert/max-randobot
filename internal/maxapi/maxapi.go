@@ -221,6 +221,37 @@ func (a *API) GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error)
 	return a.Chats.GetChat(ctx, chatID)
 }
 
+// DeleteDialogMessages удаляет последние сообщения бота в диалоге с userID.
+// В диалоге MAX chat_id == user_id. Берём последние limit сообщений и удаляем
+// те, где sender = botUserID (бот не может удалять чужие сообщения). Если
+// botUserID == 0 — удаляем все найденные сообщения (фолбэк). Возвращает кол-во
+// удалённых. Ошибки отдельных удалений не прерывают цикл — логируются.
+func (a *API) DeleteDialogMessages(ctx context.Context, userID, botUserID int64) (int, error) {
+	const limit int64 = 50
+	// Получаем последние сообщения диалога. from/to=0 — без диапазона, count=limit.
+	list, err := a.Messages.GetMessages(ctx, userID, 0, 0, limit, nil)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, m := range list.Messages {
+		// Пропускаем сообщения юзера (если знаем свой ID — фильтр точный).
+		if botUserID != 0 && m.Sender.UserID != botUserID {
+			continue
+		}
+		mid := m.Body.Mid
+		if mid == "" {
+			continue
+		}
+		a.rl.wait(ctx)
+		if _, derr := a.Messages.DeleteMessage(ctx, mid); derr != nil {
+			slog.Debug("delete message", "mid", mid, "err", derr)
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
+}
 // AnswerCallback — подтверждение callback (снять "часики").
 func (a *API) AnswerCallback(ctx context.Context, callbackID, notification string) {
 	a.rl.wait(ctx)

@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -22,6 +23,7 @@ type Bot struct {
 	subs        *subscription.Checker
 	log         *slog.Logger
 	botUsername string // публичное имя бота (для UTM-диплинков)
+	botUserID   int64  // userID самого бота (для фильтра своих сообщений при /clear)
 }
 
 // New создаёт обработчика.
@@ -42,6 +44,14 @@ func New(api *maxapi.API, db *store.Store, log *slog.Logger) *Bot {
 func (b *Bot) SetUsername(name string) {
 	if name != "" {
 		b.botUsername = strings.TrimPrefix(name, "@")
+	}
+}
+
+// SetBotUserID сохраняет userID самого бота (нужен для команды /clear —
+// чтобы удалять только сообщения бота в диалоге, не трогая сообщения юзера).
+func (b *Bot) SetBotUserID(id int64) {
+	if id != 0 {
+		b.botUserID = id
 	}
 }
 
@@ -119,13 +129,26 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 	msg := u.GetMessage()
 	text := strings.TrimSpace(msg.Body.Text)
 
-	// Команда /start → в меню
-	if text == "/start" || strings.HasPrefix(text, "/start ") {
+	// Команда /start. MAX при кнопке «Старт» шлёт ДВА апдейта: BotStarted
+	// (его уже обработал onBotStarted — отрисовал меню) И MessageCreated с
+	// текстом "/start". Чтобы меню не дублировалось — для голого /start тут
+	// ничего не делаем. /start <payload> — это диплинк, обрабатываем его.
+	if text == "/start" {
+		return
+	}
+	if strings.HasPrefix(text, "/start ") {
+		// Диплинк: payload обработан в OnDeepLinkStart (из bot_started).
+		// Здесь просто показываем меню — без повторного «Привет».
 		b.sendMainMenu(ctx, uid, "Главное меню:")
 		return
 	}
 	if text == "/menu" {
 		b.sendMainMenu(ctx, uid, "Главное меню:")
+		return
+	}
+	// /clear — очистить диалог от сообщений бота, затем свежее меню.
+	if text == "/clear" {
+		b.clearDialog(ctx, uid)
 		return
 	}
 
@@ -164,4 +187,26 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 // sendMainMenu отправляет главное меню пользователю.
 func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
 	_ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
+}
+
+// clearDialog — очищает диалог от сообщений бота и сбрасывает сессию юзера.
+// Берёт последние ~50 сообщений диалога (диалог = чат с тем же ID, что и userID),
+// удаляет те, где sender = сам бот, и сбрасывает FSM/сессию. В конце шлёт свежее меню.
+// Сообщения юзера не трогаются (MAX всё равно не даёт ботам удалять чужие сообщения).
+func (b *Bot) clearDialog(ctx context.Context, userID int64) {
+	// Сбрасываем активную сессию и черновик розыгрыша, чтобы «начать с чистого листа».
+	_ = b.db.ClearSession(ctx, userID)
+	if draft, err := b.db.GetDraftGiveaway(ctx, userID); err == nil && draft.ID != 0 {
+		_ = b.db.UpdateGiveawayField(ctx, draft.ID, "draft_step", "")
+	}
+
+	deleted, err := b.api.DeleteDialogMessages(ctx, userID, b.botUserID)
+	if err != nil {
+		b.log.Warn("clearDialog", "user", userID, "err", err, "deleted", deleted)
+		// Даже если не удалось удалить — меню всё равно покажем.
+		_ = b.api.SendText(ctx, userID, "Не удалось очистить диалог полностью. Вот свежее меню:")
+	} else {
+		_ = b.api.SendText(ctx, userID, fmt.Sprintf("🧹 Очищено сообщений: %d.", deleted))
+	}
+	b.sendMainMenu(ctx, userID, "Главное меню:")
 }

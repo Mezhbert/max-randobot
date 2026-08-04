@@ -76,12 +76,19 @@ func main() {
 	}()
 
 	// Узнаём публичное имя бота — нужно для построения UTM-диплинков (max.ru/<bot>/start/...).
+	// Заодно сохраняем userID самого бота (нужен для /clear — фильтр своих сообщений).
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if info, err := api.Bots.GetMyInfo(ic); err == nil && info.Username != "" {
-			bot.SetUsername(info.Username)
-			slog.Info("bot username", "name", info.Username)
+		if info, err := api.Bots.GetMyInfo(ic); err == nil {
+			if info.Username != "" {
+				bot.SetUsername(info.Username)
+				slog.Info("bot username", "name", info.Username)
+			}
+			if info.UserID != 0 {
+				bot.SetBotUserID(info.UserID)
+				slog.Info("bot user_id", "id", info.UserID)
+			}
 		}
 	}()
 
