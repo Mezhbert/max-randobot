@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"strconv"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // CreateDraftGiveaway создаёт новый черновик розыгрыша для пользователя.
@@ -17,20 +15,13 @@ func (s *Store) CreateDraftGiveaway(ctx context.Context, ownerUserID int64, step
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO giveaways (owner_user_id, draft_step, status)
 		VALUES ($1, $2, 'draft'::giveaway_status)
-		RETURNING id, owner_user_id, name, post_text, post_format, media_tokens, button_text,
-		          subscribe_channel_ids, publish_channel_ids, results_in_original_post, results_post_text,
-		          publish_at, finish_at, winners_count, winners_message,
-		          referral_enabled, referral_limit, captcha_mode, captcha_percent, promotion_enabled,
-		          draft_step, status, publish_message_ids, results_message_ids, winners_user_ids, created_at, updated_at
+		RETURNING `+giveawayCols+`
 	`, ownerUserID, step,
-	).Scan(&g.ID, &g.OwnerUserID, &g.Name, &g.PostText, &g.PostFormat, &g.MediaTokens, &g.ButtonText,
-		&g.SubscribeChannelIDs, &g.PublishChannelIDs, &g.ResultsInOriginalPost, &g.ResultsPostText,
-		&g.PublishAt, &g.FinishAt, &g.WinnersCount, &g.WinnersMessage,
-		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
-		&g.DraftStep, &g.Status, &g.PublishMessageIDs, &g.ResultsMessageIDs, &g.WinnersUserIDs, &g.CreatedAt, &g.UpdatedAt)
+	).Scan(scanDest(&g)...)
 	if err != nil {
 		return g, err
 	}
+	g.finalizeScan() // конвертируем сырые pgtype-поля (draftStep и т.д.) в типизированные
 	return g, nil
 }
 
@@ -125,7 +116,7 @@ func (s *Store) UpdateGiveawayField(ctx context.Context, id int64, field string,
 		"publish_at": true, "finish_at": true, "winners_count": true, "winners_message": true,
 		"referral_enabled": true, "referral_limit": true,
 		"captcha_mode": true, "captcha_percent": true, "promotion_enabled": true,
-		"draft_step": true, "name": true,
+		"draft_step": true, "name": true, "channel_select_mid": true,
 	}
 	if !allowed[field] {
 		return ErrNotFound
@@ -146,25 +137,34 @@ func (s *Store) SetDraftStep(ctx context.Context, id int64, step string) error {
 	return s.UpdateGiveawayField(ctx, id, "draft_step", step)
 }
 
-// SaveDraftAsDraft — пользователь нажал "Отменить": черновик остаётся draft,
-// но draft_step сбрасывается (выход из режима создания). По ТЗ отменённый
-// розыгрыш сохраняется как черновик.
+// AbandonDraft — пользователь вышел из создания (Отменить/В меню): черновик
+// сохраняется со статусом draft и ТЕКУЩИМ draft_step (НЕ сбрасывается!).
+// Так «Продолжить создание» начнёт с того шага, где остановились, а не с начала.
 func (s *Store) AbandonDraft(ctx context.Context, id int64) error {
+	// Ничего не меняем — просто оставляем черновик как есть.
+	// draft_step сохраняется, чтобы ResumeDraft продолжил с него.
 	_, err := s.pool.Exec(ctx,
-		`UPDATE giveaways SET draft_step=NULL WHERE id=$1 AND status='draft'`, id)
+		`UPDATE giveaways SET updated_at=now() WHERE id=$1 AND status='draft'`, id)
 	return err
 }
 
-// PublishDraft — подтверждение создания: статус → scheduled (если publish_at в будущем)
-// или active (если уже пора). draft_step сбрасывается.
-// Явный cast в giveaway_status — статус хранится как enum, а CASE отдаёт text.
+// DeleteEmptyDrafts удаляет черновики без названия (мусор от прерванных попыток
+// создания). Именованные черновики (сохранённые) не трогает.
+func (s *Store) DeleteEmptyDrafts(ctx context.Context, ownerUserID int64) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM giveaways WHERE owner_user_id=$1 AND status='draft' AND (name IS NULL OR name='')`, ownerUserID)
+	return err
+}
+
+// PublishDraft — подтверждение создания: статус всегда → scheduled.
+// Scheduler сам опубликует пост по наступлении publish_at (даже если оно
+// «прямо сейчас» — следующий тик подхватит). Это гарантирует, что статус active
+// появляется ТОЛЬКО после реальной публикации поста в канал, а не «мимо» —
+// иначе бот мог бы подвести итоги по неопубликованному розыгрышу.
 func (s *Store) PublishDraft(ctx context.Context, id int64) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE giveaways
-		SET status = CASE
-		        WHEN publish_at IS NOT NULL AND publish_at > now() THEN 'scheduled'::giveaway_status
-		        ELSE 'active'::giveaway_status
-		    END,
+		SET status = 'scheduled'::giveaway_status,
 		    draft_step = NULL
 		WHERE id=$1 AND status='draft'
 	`, id)
@@ -176,6 +176,95 @@ func (s *Store) PublishDraft(ctx context.Context, id int64) error {
 func (s *Store) SetStatus(ctx context.Context, id int64, status string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE giveaways SET status=$2::giveaway_status WHERE id=$1`, id, status)
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// Atomic claim — захват задачи планировщиком.
+//
+// Проблема: неатомарная цепочка publish/finish (PickWinners → SendText × N →
+// публикация итогов → смена статуса) успевала переотправить всё при следующем
+// тике, пока статус не сменился. Решение — перевод в промежуточный статус
+// 'publishing'/'finishing' атомарным UPDATE...RETURNING: выигрывает один вызов,
+// остальные получают ErrNotFound и пропускают. На успехе — переход в
+// 'active'/'finished'; на ошибке — Revert* обратно к предыдущему статусу.
+// Застрявшие после краша процесса (status stuck in 'publishing'/'finishing')
+// подбираются ListStaleClaimed.
+// ---------------------------------------------------------------------------
+
+// claimFrom атомарно переводит розыгрыш из fromStatus в toStatus.
+// Возвращает захваченный розыгрыш или ErrNotFound, если статус уже не from
+// (значит кто-то другой — или этот же процесс в прошлом тике — уже захватил).
+func (s *Store) claimFrom(ctx context.Context, id int64, fromStatus, toStatus string) (Giveaway, error) {
+	var g Giveaway
+	err := s.pool.QueryRow(ctx, `
+		UPDATE giveaways SET status=$3::giveaway_status
+		WHERE id=$1 AND status=$2::giveaway_status
+		RETURNING `+giveawayCols+`
+	`, id, fromStatus, toStatus).Scan(scanDest(&g)...)
+	if err != nil {
+		return g, wrapNotFound(err)
+	}
+	g.finalizeScan()
+	return g, nil
+}
+
+// ClaimForPublish переводит scheduled-розыгрыш в 'publishing' (захват).
+// Возвращает ErrNotFound, если статус уже не scheduled.
+func (s *Store) ClaimForPublish(ctx context.Context, id int64) (Giveaway, error) {
+	return s.claimFrom(ctx, id, StatusScheduled, StatusPublishing)
+}
+
+// ClaimForFinish переводит active-розыгрыш (finish_at<=now) в 'finishing'.
+func (s *Store) ClaimForFinish(ctx context.Context, id int64) (Giveaway, error) {
+	return s.claimFrom(ctx, id, StatusActive, StatusFinishing)
+}
+
+// RevertPublish откатывает публикацию обратно в scheduled (ошибка/нет каналов).
+func (s *Store) RevertPublish(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE giveaways SET status='scheduled'::giveaway_status WHERE id=$1 AND status='publishing'`, id)
+	return err
+}
+
+// RevertFinish откатывает подведение итогов обратно в active.
+func (s *Store) RevertFinish(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE giveaways SET status='active'::giveaway_status WHERE id=$1 AND status='finishing'`, id)
+	return err
+}
+
+// MarkPublished завершает публикацию: publishing → active.
+func (s *Store) MarkPublished(ctx context.Context, id int64) error {
+	return s.SetStatus(ctx, id, StatusActive)
+}
+
+// MarkFinished завершает розыгрыш и помечает итоги опубликованными.
+func (s *Store) MarkFinished(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE giveaways SET status='finished'::giveaway_status, results_published=TRUE
+		 WHERE id=$1 AND status='finishing'`, id)
+	return err
+}
+
+// ListStaleClaimed возвращает розыгрыши, застрявшие в 'publishing'/'finishing'
+// дольше olderThan (например, после краха процесса). Scheduler переоткатывает их
+// (Revert*), чтобы они снова попали в очередь. Ограничиваем batchSize, чтобы
+// один проход не перегрузил.
+func (s *Store) ListStaleClaimed(ctx context.Context, olderThan time.Time, batchSize int) ([]Giveaway, error) {
+	if batchSize <= 0 {
+		batchSize = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+giveawayCols+` FROM giveaways
+		WHERE status IN ('publishing','finishing') AND updated_at < $1
+		ORDER BY updated_at
+		LIMIT $2
+	`, olderThan, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return s.scanGiveaways(rows)
 }
 
 // DeleteGiveaway удаляет розыгрыш (черновики — по ТЗ можно удалять).
@@ -255,25 +344,50 @@ func (s *Store) SaveWinners(ctx context.Context, id int64, winnerIDs []int64) er
 	return err
 }
 
+// MarkWinnersNotified фиксирует, кому из победителей уже отправлено ЛС
+// (идемпотентность: после краша не слать повторно). Добавляет к существующему
+// массиву, чтобы повторный частичный прогон добил недополучивших.
+func (s *Store) MarkWinnersNotified(ctx context.Context, id int64, userIDs []int64) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE giveaways SET winners_notified_user_ids =
+		    ARRAY(SELECT DISTINCT unnest(winners_notified_user_ids || $2::bigint[]))
+		 WHERE id=$1`, id, userIDs)
+	return err
+}
+
+// SetResultsPublished помечает итоги опубликованными (для идемпотентности
+// повторного прогона finish после краша между публикацией и сменой статуса).
+func (s *Store) SetResultsPublished(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE giveaways SET results_published=TRUE WHERE id=$1`, id)
+	return err
+}
+
 // ---------- сканеры ----------
 
 const giveawayCols = `id, owner_user_id, name, post_text, post_format, media_tokens, button_text,
 	subscribe_channel_ids, publish_channel_ids, results_in_original_post, results_post_text,
 	publish_at, finish_at, winners_count, winners_message,
 	referral_enabled, referral_limit, captcha_mode, captcha_percent, promotion_enabled,
-	draft_step, status, publish_message_ids, results_message_ids, winners_user_ids, created_at, updated_at`
+	draft_step, status, publish_message_ids, results_message_ids, winners_user_ids,
+	winners_notified_user_ids, results_published, channel_select_mid, created_at, updated_at`
+
+// giveawayColNames — имена колонок в том же порядке, что giveawayCols.
+// Используется giveawayColsAlias для подстановки алиаса в JOIN'ах.
+var giveawayColNames = []string{
+	"id", "owner_user_id", "name", "post_text", "post_format", "media_tokens", "button_text",
+	"subscribe_channel_ids", "publish_channel_ids", "results_in_original_post", "results_post_text",
+	"publish_at", "finish_at", "winners_count", "winners_message",
+	"referral_enabled", "referral_limit", "captcha_mode", "captcha_percent", "promotion_enabled",
+	"draft_step", "status", "publish_message_ids", "results_message_ids", "winners_user_ids",
+	"winners_notified_user_ids", "results_published", "channel_select_mid", "created_at", "updated_at",
+}
 
 func giveawayColsAlias(alias string) string {
-	// подставляет префикс алиаса к каждой колонке — для JOIN'ов.
-	cols := []string{
-		"id", "owner_user_id", "name", "post_text", "post_format", "media_tokens", "button_text",
-		"subscribe_channel_ids", "publish_channel_ids", "results_in_original_post", "results_post_text",
-		"publish_at", "finish_at", "winners_count", "winners_message",
-		"referral_enabled", "referral_limit", "captcha_mode", "captcha_percent", "promotion_enabled",
-		"draft_step", "status", "publish_message_ids", "results_message_ids", "winners_user_ids", "created_at", "updated_at",
-	}
 	out := ""
-	for i, c := range cols {
+	for i, c := range giveawayColNames {
 		if i > 0 {
 			out += ", "
 		}
@@ -287,9 +401,10 @@ type rowScanner interface {
 }
 
 func (s *Store) scanGiveaway(row rowScanner, g *Giveaway) error {
-	if err := s.scanRow(row, g); err != nil {
+	if err := row.Scan(scanDest(g)...); err != nil {
 		return wrapNotFound(err)
 	}
+	g.finalizeScan()
 	return nil
 }
 
@@ -299,44 +414,54 @@ type rowIter interface {
 	Err() error
 }
 
-func (s *Store) scanGiveawayRow(rows rowIter, g *Giveaway) error { return s.scanRow(rows, g) }
-
-func (s *Store) scanRow(sc interface{ Scan(dest ...any) error }, g *Giveaway) error {
-	var publishAt, finishAt pgtype.Timestamptz
-	var draftStep pgtype.Text // draft_step NULL после публикации — сканируем через pgtype
-	var mediaTokens []byte
-	var publishMsgs, resultsMsgs []byte
-	err := sc.Scan(
-		&g.ID, &g.OwnerUserID, &g.Name, &g.PostText, &g.PostFormat, &mediaTokens, &g.ButtonText,
-		&g.SubscribeChannelIDs, &g.PublishChannelIDs, &g.ResultsInOriginalPost, &g.ResultsPostText,
-		&publishAt, &finishAt, &g.WinnersCount, &g.WinnersMessage,
-		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
-		&draftStep, &g.Status, &publishMsgs, &resultsMsgs, &g.WinnersUserIDs, &g.CreatedAt, &g.UpdatedAt,
-	)
-	if err != nil {
+func (s *Store) scanGiveawayRow(rows rowIter, g *Giveaway) error {
+	if err := rows.Scan(scanDest(g)...); err != nil {
 		return err
 	}
-	if draftStep.Valid {
-		g.DraftStep = draftStep.String
+	g.finalizeScan()
+	return nil
+}
+
+// scanDest возвращает slice приёмников под giveawayCols — единое место, чтобы
+// порядок колонок и порядок приёмников не разошёлся (был дубликат в 3 местах).
+func scanDest(g *Giveaway) []any {
+	return []any{
+		&g.ID, &g.OwnerUserID, &g.Name, &g.PostText, &g.PostFormat, &g.mediaTokensRaw, &g.ButtonText,
+		&g.SubscribeChannelIDs, &g.PublishChannelIDs, &g.ResultsInOriginalPost, &g.ResultsPostText,
+		&g.publishAt, &g.finishAt, &g.WinnersCount, &g.WinnersMessage,
+		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
+		&g.draftStep, &g.Status, &g.publishMsgs, &g.resultsMsgs, &g.WinnersUserIDs,
+		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.CreatedAt, &g.UpdatedAt,
 	}
-	if publishAt.Valid {
-		g.PublishAt = &publishAt.Time
+}
+
+// finalizeScan расшифровывает «сырые» поля (JSONB, timestamptz) в типизированные.
+// Должен вызываться после Scan. Вынесен отдельно, т.к. scanDest хранит сырое.
+func (g *Giveaway) finalizeScan() {
+	if g.draftStep.Valid {
+		g.DraftStep = g.draftStep.String
 	}
-	if finishAt.Valid {
-		g.FinishAt = &finishAt.Time
+	if g.channelSelectMID.Valid {
+		g.ChannelSelectMID = g.channelSelectMID.String
+	}
+	if g.publishAt.Valid {
+		g.PublishAt = &g.publishAt.Time
+	}
+	if g.finishAt.Valid {
+		g.FinishAt = &g.finishAt.Time
 	}
 	if g.MediaTokens == nil {
 		g.MediaTokens = []MediaToken{}
 	}
-	_ = json.Unmarshal(mediaTokens, &g.MediaTokens)
+	_ = json.Unmarshal(g.mediaTokensRaw, &g.MediaTokens)
 	if g.PublishMessageIDs == nil {
 		g.PublishMessageIDs = map[int64]string{}
 	}
-	_ = json.Unmarshal(publishMsgs, &g.PublishMessageIDs)
+	_ = json.Unmarshal(g.publishMsgs, &g.PublishMessageIDs)
 	if g.ResultsMessageIDs == nil {
 		g.ResultsMessageIDs = map[int64]string{}
 	}
-	_ = json.Unmarshal(resultsMsgs, &g.ResultsMessageIDs)
+	_ = json.Unmarshal(g.resultsMsgs, &g.ResultsMessageIDs)
 	if g.SubscribeChannelIDs == nil {
 		g.SubscribeChannelIDs = []int64{}
 	}
@@ -346,16 +471,19 @@ func (s *Store) scanRow(sc interface{ Scan(dest ...any) error }, g *Giveaway) er
 	if g.WinnersUserIDs == nil {
 		g.WinnersUserIDs = []int64{}
 	}
-	return nil
+	if g.WinnersNotifiedUserIDs == nil {
+		g.WinnersNotifiedUserIDs = []int64{}
+	}
 }
 
 func (s *Store) scanGiveaways(rows pgxRows) ([]Giveaway, error) {
 	var res []Giveaway
 	for rows.Next() {
 		var g Giveaway
-		if err := s.scanRow(rows, &g); err != nil {
+		if err := rows.Scan(scanDest(&g)...); err != nil {
 			return nil, err
 		}
+		g.finalizeScan()
 		res = append(res, g)
 	}
 	return res, rows.Err()

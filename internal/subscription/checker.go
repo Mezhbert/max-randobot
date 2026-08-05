@@ -15,13 +15,13 @@ import (
 
 // Checker проверяет подписки пользователя на каналы.
 type Checker struct {
-	api *maxapi.API
+	api maxapi.BotAPI
 	db  *store.Store
 	log *slog.Logger
 }
 
 // New создаёт проверщика.
-func New(api *maxapi.API, db *store.Store, log *slog.Logger) *Checker {
+func New(api maxapi.BotAPI, db *store.Store, log *slog.Logger) *Checker {
 	if log == nil {
 		log = slog.Default()
 	}

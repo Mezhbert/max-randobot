@@ -17,7 +17,7 @@ func (b *Bot) startAddChannel(ctx context.Context, uid int64) {
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка: "+err.Error())
 		return
 	}
-	_ = b.api.SendTextWithKeyboard(ctx, uid,
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		"➕ Добавление канала.\n\n"+
 			"Бот должен быть администратором в канале. Отправьте:\n"+
 			"• ID канала (число), или\n"+
@@ -52,7 +52,7 @@ func (b *Bot) handleAddChannelInput(ctx context.Context, uid int64, msg model.Me
 		return true
 	}
 	if !isAdmin {
-		_ = b.api.SendTextWithKeyboard(ctx, uid,
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 			"⚠️ Бот НЕ является администратором в этом канале. Добавьте бота админом и повторите.",
 			util.ChannelAddKeyboard())
 		return true
@@ -77,7 +77,7 @@ func (b *Bot) handleAddChannelInput(ctx context.Context, uid int64, msg model.Me
 	if title == "" {
 		title = fmt.Sprintf("канал #%d", c.ChatID)
 	}
-	_ = b.api.SendTextWithKeyboard(ctx, uid,
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		fmt.Sprintf("✅ Канал «%s» добавлен! Теперь вы можете использовать его в розыгрышах и генерировать UTM-ссылки.", title),
 		util.BackKeyboard())
 	return true
@@ -122,11 +122,26 @@ func (b *Bot) toggleChannelSelection(ctx context.Context, uid int64, p string) {
 	}
 
 	if err := b.db.UpdateGiveawayField(ctx, g.ID, field, updated); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка обновления: "+err.Error())
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "⚠️ Ошибка обновления: "+err.Error(), nil)
 		return
 	}
 
-	// Перерисовываем шаг с актуальными галочками.
+	// Перерисовываем шаг edit-in-place (редактируем то же сообщение, не шлём новое).
 	gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
-	b.showStep(ctx, uid, gg, gg.DraftStep)
+	text, kb := buildChannelSelectKB(ctx, b, uid, gg, gg.DraftStep)
+	if gg.ChannelSelectMID != "" {
+		if err := b.api.EditChatText(ctx, gg.ChannelSelectMID, text, []model.Attachment{kb.Build()}, ""); err != nil {
+			// Edit упал — шлём новым сообщением и обновляем mid.
+			mid, _ := b.api.SendTextWithKeyboard(ctx, uid, text, kb)
+			if mid != "" {
+				_ = b.db.UpdateGiveawayField(ctx, g.ID, "channel_select_mid", mid)
+			}
+		}
+	} else {
+		// mid не запомнен (старая сессия) — шлём новое и запоминаем.
+		mid, _ := b.api.SendTextWithKeyboard(ctx, uid, text, kb)
+		if mid != "" {
+			_ = b.db.UpdateGiveawayField(ctx, g.ID, "channel_select_mid", mid)
+		}
+	}
 }

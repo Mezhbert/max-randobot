@@ -3,6 +3,7 @@
 package maxapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -12,12 +13,38 @@ import (
 
 	maxbot "github.com/max-messenger/max-bot-api-client-go/v2"
 	"github.com/max-messenger/max-bot-api-client-go/v2/model"
+	"github.com/maxbot/giveawaybot/internal/metrics"
 )
 
 // API оборачивает официальный клиент, добавляя rate-limit и хелперы.
 type API struct {
 	*maxbot.Api
-	rl *rateLimiter
+	rl      *rateLimiter
+	metrics *metrics.Counters
+}
+
+// BotAPI — интерфейс, покрывающий методы, используемые логикой бота
+// (handlers/scheduler/subscription). Реальный *API ему удовлетворяет; в тестах
+// подставляется mock. Это граница, необходимая для тестируемости: иначе
+// встроенный *maxbot.Api (конкретный тип) мокать нельзя.
+//
+// Методы, связанные с webhook-инфраструктурой (GetHandler, SubscribeWebhook)
+// и получением имени бота (GetMyInfo), сюда не входят — они нужны только в
+// cmd/bot и используют специфичные SDK-типы.
+type BotAPI interface {
+	SendText(ctx context.Context, userID int64, text string) error
+	SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) (string, error)
+	SendWithAttachments(ctx context.Context, userID int64, text string, attachments []model.Attachment, format model.TextFormat) error
+	SendToChat(ctx context.Context, chatID int64, text string, attachments []model.Attachment, format model.TextFormat) (string, error)
+	EditChatText(ctx context.Context, messageID, text string, attachments []model.Attachment, format model.TextFormat) error
+	IsSubscriber(ctx context.Context, chatID, userID int64) (bool, error)
+	IsBotAdminInChat(ctx context.Context, chatID int64) (bool, error)
+	CheckChannelAdmin(ctx context.Context, chatID int64) (model.Chat, bool, error)
+	GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error)
+	SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error
+	SendFile(ctx context.Context, userID int64, filename string, data []byte) error
+	DeleteDialogMessages(ctx context.Context, chatID, botUserID int64) (int, error)
+	AnswerCallback(ctx context.Context, callbackID, notification string)
 }
 
 // New создаёт обёртку. maxRPS — целевой лимит (платформа: 30).
@@ -33,8 +60,12 @@ func New(token string, maxRPS int, httpClient *http.Client) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &API{Api: base, rl: newRateLimiter(maxRPS)}, nil
+	return &API{Api: base, rl: newRateLimiter(maxRPS), metrics: metrics.New()}, nil
 }
+
+// Metrics возвращает счётчики вызовов MAX API (для endpoint /metrics).
+// Ненулевой всегда — создаётся в New.
+func (a *API) Metrics() *metrics.Counters { return a.metrics }
 
 // ParseStartedPayload достаёт поле "payload" диплинка из raw JSON тела webhook
 // для update_type=bot_started. Либа max-bot-api-client-go НЕ парсит это поле,
@@ -94,6 +125,10 @@ func (a *API) SubscribeWebhook(ctx context.Context, url, secret string) error {
 	if err != nil {
 		slog.Warn("get subscriptions (пропускаем чистку)", "err", err)
 	} else {
+		slog.Info("текущие подписки в MAX", "count", len(existing.Subscriptions))
+		for i, s := range existing.Subscriptions {
+			slog.Info("подписка", "idx", i, "url", s.URL, "time", s.Time)
+		}
 		for _, s := range existing.Subscriptions {
 			if s.URL == "" || s.URL == url {
 				continue
@@ -124,18 +159,27 @@ func (a *API) SendText(ctx context.Context, userID int64, text string) error {
 	if err != nil {
 		slog.Warn("SendText", "err", err, "user", userID)
 	}
+	a.metrics.Inc(metrics.MethodSendText, err)
 	return err
 }
 
 // SendTextWithKeyboard — текст + inline-клавиатура пользователю.
-func (a *API) SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) error {
+// Возвращает mid отправленного сообщения (нужно для edit-in-place, напр. тоггл каналов).
+func (a *API) SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) (string, error) {
 	a.rl.wait(ctx)
 	msg := maxbot.NewMessage().SetUser(userID).SetText(text)
 	if kb != nil {
 		msg.AddKeyboard(kb)
 	}
-	_, err := a.Messages.Send(ctx, msg)
-	return err
+	res, err := a.Messages.Send(ctx, msg)
+	if err != nil {
+		slog.Warn("SendTextWithKeyboard", "err", err, "user", userID)
+	}
+	a.metrics.Inc(metrics.MethodSendTextWithKeyboard, err)
+	if err != nil {
+		return "", err
+	}
+	return res.Message.Body.Mid, nil
 }
 
 // SendWithAttachments — отправка сообщения с вложениями (медиа + inline-клавиатура)
@@ -160,6 +204,7 @@ func (a *API) SendWithAttachments(ctx context.Context, userID int64, text string
 		}
 	}
 	_, err := a.Messages.Send(ctx, msg)
+	a.metrics.Inc(metrics.MethodSendWithAttachments, err)
 	return err
 }
 
@@ -185,6 +230,7 @@ func (a *API) SendToChat(ctx context.Context, chatID int64, text string, attachm
 		}
 	}
 	res, err := a.Messages.Send(ctx, msg)
+	a.metrics.Inc(metrics.MethodSendToChat, err)
 	if err != nil {
 		return "", err
 	}
@@ -192,11 +238,15 @@ func (a *API) SendToChat(ctx context.Context, chatID int64, text string, attachm
 }
 
 // EditChatText — редактирование сообщения в канале (публикация итогов в исходном посте).
-func (a *API) EditChatText(ctx context.Context, messageID, text string, attachments []model.Attachment) error {
+// Возвращает ошибку явно (раньше проглатывалась) — планировщик должен её видеть,
+// чтобы при неудаче (например, истёк лимит времени на редактирование) сделать
+// fallback: опубликовать итоги отдельным постом.
+func (a *API) EditChatText(ctx context.Context, messageID, text string, attachments []model.Attachment, format model.TextFormat) error {
 	a.rl.wait(ctx)
-	body := model.NewMessageBody{Text: text}
+	body := model.NewMessageBody{Text: text, Format: format}
 	body.Attachments = attachments
 	_, err := a.Messages.EditMessage(ctx, messageID, body)
+	a.metrics.Inc(metrics.MethodEditChatText, err)
 	return err
 }
 
@@ -205,6 +255,7 @@ func (a *API) EditChatText(ctx context.Context, messageID, text string, attachme
 func (a *API) IsSubscriber(ctx context.Context, chatID, userID int64) (bool, error) {
 	a.rl.wait(ctx)
 	list, err := a.Chats.GetMembers(ctx, chatID, 0, 0, []int64{userID})
+	a.metrics.Inc(metrics.MethodIsSubscriber, err)
 	if err != nil {
 		return false, err
 	}
@@ -220,6 +271,7 @@ func (a *API) IsSubscriber(ctx context.Context, chatID, userID int64) (bool, err
 func (a *API) IsBotAdminInChat(ctx context.Context, chatID int64) (bool, error) {
 	a.rl.wait(ctx)
 	m, err := a.Chats.GetMembership(ctx, chatID)
+	a.metrics.Inc(metrics.MethodIsBotAdminInChat, err)
 	if err != nil {
 		return false, err
 	}
@@ -231,10 +283,12 @@ func (a *API) IsBotAdminInChat(ctx context.Context, chatID int64) (bool, error) 
 func (a *API) CheckChannelAdmin(ctx context.Context, chatID int64) (model.Chat, bool, error) {
 	info, err := a.GetChatInfo(ctx, chatID)
 	if err != nil {
+		// GetChatInfo считает себя сам.
 		return model.Chat{}, false, err
 	}
 	isAdmin, err := a.IsBotAdminInChat(ctx, chatID)
 	if err != nil {
+		// IsBotAdminInChat считает себя сам.
 		return info, false, err
 	}
 	return info, isAdmin, nil
@@ -243,19 +297,124 @@ func (a *API) CheckChannelAdmin(ctx context.Context, chatID int64) (model.Chat, 
 // GetChatInfo возвращает информацию о канале/чате.
 func (a *API) GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error) {
 	a.rl.wait(ctx)
-	return a.Chats.GetChat(ctx, chatID)
+	res, err := a.Chats.GetChat(ctx, chatID)
+	a.metrics.Inc(metrics.MethodGetChatInfo, err)
+	return res, err
 }
 
-// AnswerCallback — подтверждение callback (снять "часики").
-func (a *API) AnswerCallback(ctx context.Context, callbackID, notification string) {
-	a.rl.wait(ctx)
-	var notif *string
-	if notification != "" {
-		notif = &notification
+// RegisterCommands регистрирует меню команд бота в MAX (PATCH /me/commands).
+// После этого при вводе «/» в диалоге появляется список доступных команд вместо
+// «команды не найдены». Список должен совпадать с командами, которые реально
+// обрабатывает бот (см. handlers.onMessageCreated).
+func (a *API) RegisterCommands(ctx context.Context) error {
+	commands := []model.BotCommand{
+		{Name: "/start", Description: "Запустить бота — описание и меню"},
+		{Name: "/menu", Description: "Показать главное меню"},
+		{Name: "/clear", Description: "Очистить чат с ботом"},
 	}
-	if _, err := a.Messages.AnswerOnCallback(ctx, callbackID, model.CallbackAnswer{Notification: notif}); err != nil {
+	a.rl.wait(ctx)
+	res, err := a.Bots.PatchCommands(ctx, model.BotPatchCommands{Commands: commands})
+	if err != nil {
+		return err
+	}
+	// Логируем ответ MAX для диагностики: что платформа реально сохранила.
+	names := make([]string, 0, len(res.Commands))
+	for _, c := range res.Commands {
+		names = append(names, c.Name)
+	}
+	slog.Info("MAX подтвердил команды бота", "echo_count", len(res.Commands), "names", names)
+	return nil
+}
+
+// SendImage отправляет PNG-картинку (напр. капчу) пользователю в диалог.
+// Загружает через Upload API → получает token → шлёт сообщение с image-attachment.
+func (a *API) SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error {
+	a.rl.wait(ctx)
+	token, err := a.Upload.Upload(ctx, model.UploadImage, bytes.NewReader(pngData), "captcha.png", int64(len(pngData)))
+	if err != nil {
+		slog.Warn("SendImage upload", "err", err, "user", userID)
+		return err
+	}
+	msg := maxbot.NewMessage().SetUser(userID).SetText(caption).AddAttachByToken(token, model.AttachImage)
+	_, err = a.Messages.Send(ctx, msg)
+	a.metrics.Inc(metrics.MethodSendWithAttachments, err)
+	return err
+}
+
+// SendFile отправляет файл (напр. CSV-выгрузку) пользователю в диалог.
+// Загружает через Upload API → получает token → шлёт сообщение с file-attachment.
+func (a *API) SendFile(ctx context.Context, userID int64, filename string, data []byte) error {
+	a.rl.wait(ctx)
+	token, err := a.Upload.Upload(ctx, model.UploadFile, bytes.NewReader(data), filename, int64(len(data)))
+	if err != nil {
+		slog.Warn("SendFile upload", "err", err, "user", userID)
+		return err
+	}
+	msg := maxbot.NewMessage().SetUser(userID).SetText("📎 " + filename).AddAttachByToken(token, model.AttachFile)
+	_, err = a.Messages.Send(ctx, msg)
+	a.metrics.Inc(metrics.MethodSendWithAttachments, err)
+	return err
+}
+
+// DeleteDialogMessages очищает диалог: удаляет все сообщения пачками по 50.
+// chatID — ID диалога (НЕ user_id!). Получается через GetDialogChatID.
+// Возвращает количество удалённых сообщений.
+func (a *API) DeleteDialogMessages(ctx context.Context, chatID, botUserID int64) (int, error) {
+	const limit int64 = 50
+	deleted := 0
+	for iter := 0; iter < 20; iter++ {
+		list, err := a.Messages.GetMessages(ctx, chatID, 0, 0, limit, nil)
+		if err != nil {
+			return deleted, err
+		}
+		if len(list.Messages) == 0 {
+			break
+		}
+		anyDeleted := false
+		for _, m := range list.Messages {
+			mid := m.Body.Mid
+			if mid == "" {
+				continue
+			}
+			a.rl.wait(ctx)
+			if _, derr := a.Messages.DeleteMessage(ctx, mid); derr != nil {
+				// Логируем Warn — чтобы видеть что MAX разрешает/запрещает.
+				slog.Warn("delete message", "mid", mid, "sender", m.Sender.UserID, "err", derr)
+				continue
+			}
+			deleted++
+			anyDeleted = true
+		}
+		if !anyDeleted {
+			break
+		}
+	}
+	return deleted, nil
+}
+
+// AnswerCallback — подтверждение callback (снять "часики" с кнопки).
+// Пустой callbackID — no-op (бывает при внутренней отправке ошибки без реального
+// callback, см. handlers.SkipStep): MAX не примет такой запрос, а платформа
+// потребует лишний rps.
+//
+// MAX требует в ответе callback хотя бы message или notification (пустой
+// CallbackAnswer отклоняется с 400). Поэтому при отсутствии осмысленного
+// текста передаём пробел как notification — часики снимаются, юзеру ничего
+// не показывается.
+func (a *API) AnswerCallback(ctx context.Context, callbackID, notification string) {
+	if callbackID == "" {
+		return
+	}
+	a.rl.wait(ctx)
+	notif := notification
+	if notif == "" {
+		notif = " " // MAX требует непустой notification для подтверждения callback.
+	}
+	_, err := a.Messages.AnswerOnCallback(ctx, callbackID, model.CallbackAnswer{Notification: &notif})
+	if err != nil {
 		slog.Debug("AnswerOnCallback", "err", err)
 	}
+	a.metrics.Inc(metrics.MethodAnswerCallback, err)
 }
 
 // ---------- хелперы ----------

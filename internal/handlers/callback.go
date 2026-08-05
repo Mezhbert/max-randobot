@@ -16,16 +16,18 @@ import (
 // onMessageCallback — обработка нажатий на inline-кнопки.
 func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	cb := u.GetCallback()
-	defer b.api.AnswerCallback(ctx, cb.CallbackID, "") // снять "часики" с кнопки
-
 	uid := cb.User.UserID
 	p := cb.Payload
 
-	// 1. Кнопка "Участвовать" под постом розыгрыша
+	// 1. Кнопка "Участвовать" под постом розыгрыша — обрабатываем отдельно,
+	//    т.к. onParticipate сам шлёт осмысленный alert через AnswerCallback.
 	if strings.HasPrefix(p, util.CBParticipate) {
-		b.onParticipate(ctx, uid, strings.TrimPrefix(p, util.CBParticipate))
+		b.onParticipate(ctx, uid, strings.TrimPrefix(p, util.CBParticipate), cb.CallbackID)
 		return
 	}
+
+	// Прочие callback'и — снимаем "часики" с кнопки.
+	defer b.api.AnswerCallback(ctx, cb.CallbackID, "")
 
 	// 2. Кнопки FSM создания розыгрыша
 	if isFSMPayload(p) {
@@ -36,8 +38,10 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	// 3. Главное меню и навигация
 	switch p {
 	case util.CBMainMenu:
+		_ = b.db.ClearSession(ctx, uid) // сброс любой активной сессии (UTM/captcha/etc)
 		b.sendMainMenu(ctx, uid, "Главное меню:")
 	case util.CBCreateGiveaway:
+		_ = b.db.ClearSession(ctx, uid) // гарантия: никаких висящих сессий при создании
 		b.startCreate(ctx, uid)
 	case util.CBMyGiveaways:
 		b.showGiveawayFilters(ctx, uid)
@@ -45,13 +49,16 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 		b.showChannels(ctx, uid)
 	case util.CBMyParticipations:
 		b.showMyParticipations(ctx, uid)
+	case util.CBAnalytics:
+		b.showAnalyticsMenu(ctx, uid)
 	case util.CBSupport:
-		_ = b.api.SendTextWithKeyboard(ctx, uid,
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 			"🆘 Поддержка\n\nПо всем вопросам пишите: @your_support_contact\n"+
 				"Или email: support@example.com", util.BackKeyboard())
 	case util.CBChannelAdd:
 		b.startAddChannel(ctx, uid)
 	case util.CBChannelBack:
+		_ = b.db.ClearSession(ctx, uid)
 		b.showChannels(ctx, uid)
 	case util.CBChannelAnalytics:
 		b.showChannelListForAnalytics(ctx, uid)
@@ -84,7 +91,7 @@ func (b *Bot) startCreate(ctx context.Context, uid int64) {
 func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string) {
 	g, err := b.db.GetDraftGiveaway(ctx, uid)
 	if err != nil {
-		_ = b.api.SendTextWithKeyboard(ctx, uid,
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 			"Создание не активно. Начните заново.", util.MainMenuKeyboard())
 		return
 	}
@@ -92,7 +99,13 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string) {
 	switch {
 	case p == util.CBFSMCancel:
 		_ = b.engine.Abandon(ctx, g.ID)
-		b.sendMainMenu(ctx, uid, "✖ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
+		if g.Name != "" {
+			b.sendMainMenu(ctx, uid, "✖ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+		} else {
+			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
+			b.sendMainMenu(ctx, uid, "✖ Создание отменено.")
+		}
 
 	case p == util.CBFSMBack:
 		prev, _ := b.engine.GoBack(ctx, g.ID, g.DraftStep)
@@ -117,11 +130,17 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string) {
 			}
 			return
 		}
-		b.sendMainMenu(ctx, uid, "✅ Розыгрыш создан и запланирован! Он будет опубликован по расписанию.")
+		b.sendMainMenu(ctx, uid, "✅ Розыгрыш запланирован! Пост будет опубликован автоматически в назначенное время. Следите в «Мои розыгрыши → Запланированные».")
 
 	case p == util.CBFSMReject:
 		_ = b.engine.Abandon(ctx, g.ID)
-		b.sendMainMenu(ctx, uid, "❌ Создание отклонено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
+		if g.Name != "" {
+			b.sendMainMenu(ctx, uid, "❌ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+		} else {
+			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
+			b.sendMainMenu(ctx, uid, "❌ Создание отменено.")
+		}
 
 	case strings.HasPrefix(p, util.CBFSMOption):
 		key := strings.TrimPrefix(p, util.CBFSMOption)
@@ -130,6 +149,7 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string) {
 }
 
 // handleOption обрабатывает опционные кнопки шагов (выбор каналов, режимы и т.д.).
+// Рефералы и продвижение убраны из MVP.
 func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key string) {
 	switch key {
 	case "next":
@@ -138,20 +158,11 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 
 	case "results_original":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", true)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		// «В исходном посте» — текст итогов не нужен, перепрыгиваем шаг results_text.
+		b.advanceSkipping(ctx, uid, g.ID, g.DraftStep, fsm.StepResultsText)
 	case "results_separate":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", false)
-		// Запросить текст поста с итогами
-		_ = b.db.SetDraftStep(ctx, g.ID, fsm.StepResultsLoc+"_msg")
-		_ = b.api.SendTextWithKeyboard(ctx, uid,
-			"Отправьте текст отдельного поста с итогами розыгрыша.",
-			util.NavKeyboard())
-
-	case "referral_on":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "referral_enabled", true)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-	case "referral_off":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "referral_enabled", false)
+		// «Отдельным постом» — запросить текст итогов (след. шаг results_text).
 		b.advance(ctx, uid, g.ID, g.DraftStep)
 
 	case "captcha_none":
@@ -165,13 +176,6 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 		_ = b.api.SendText(ctx, uid, "Введите процент участников (0-100), которым показывать капчу:")
 		// Дальнейший ввод обрабатывается через session (см. SessionCaptchaPct).
 		_ = b.db.SetSession(ctx, uid, store.SessionCaptchaPct)
-
-	case "promotion_on":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "promotion_enabled", true)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-	case "promotion_off":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "promotion_enabled", false)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
 	}
 }
 

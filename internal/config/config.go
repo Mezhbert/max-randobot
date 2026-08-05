@@ -14,16 +14,18 @@ import (
 
 // Config — конфигурация приложения.
 type Config struct {
-	BotToken       string
-	WebhookURL     string
-	WebhookSecret  string
-	WebhookPath    string
-	HTTPPort       string
-	DBDSN          string
-	DBMigrate      bool
-	TZ             string
-	MaxRPS         int
-	LogLevel       slog.Level
+	BotToken      string
+	WebhookURL    string
+	WebhookSecret string
+	WebhookPath   string
+	HTTPPort      string
+	DBDSN         string
+	DBMigrate     bool
+	TZ            string
+	MaxRPS        int
+	LogLevel      slog.Level
+	MetricsPath   string // путь для endpoint /metrics (по умолчанию /metrics)
+	DedupTTL      string // TTL дедупликатора (по умолчанию из dedup.DefaultTTL)
 }
 
 // Load загружает конфигурацию. Файл .env опционален (переменные окружения
@@ -45,6 +47,8 @@ func Load(files ...string) (*Config, error) {
 		TZ:            getEnv("TZ", "Europe/Moscow"),
 		MaxRPS:        getEnvInt("MAX_RPS", 28),
 		LogLevel:      parseLevel(getEnv("LOG_LEVEL", "info")),
+		MetricsPath:   getEnv("METRICS_PATH", "/metrics"),
+		DedupTTL:      getEnv("DEDUP_TTL", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -124,6 +128,6 @@ func parseLevel(s string) slog.Level {
 
 // String — безопасное строковое представление (без токена).
 func (c *Config) String() string {
-	return fmt.Sprintf("webhook=%s port=%s tz=%s rps=%d migrate=%v",
-		c.FullWebhookURL(), c.HTTPPort, c.TZ, c.MaxRPS, c.DBMigrate)
+	return fmt.Sprintf("webhook=%s port=%s tz=%s rps=%d migrate=%v metrics=%s",
+		c.FullWebhookURL(), c.HTTPPort, c.TZ, c.MaxRPS, c.DBMigrate, c.MetricsPath)
 }

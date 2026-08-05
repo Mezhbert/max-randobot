@@ -1,7 +1,8 @@
 # 🎁 MAX-бот для розыгрышей (Go, webhook-only)
 
 Бот для проведения розыгрышей в мессенджере **MAX**. Только **webhook** (никакого
-long polling), PostgreSQL, расписание через **внешний cron**.
+long polling), PostgreSQL, **встроенный планировщик** публикации/итогов с атомарным
+захватом задач (без внешнего cron).
 
 Использует официальный клиент [max-messenger/max-bot-api-client-go](https://github.com/max-messenger/max-bot-api-client-go)
 и следует [документации MAX для разработчиков](https://dev.max.ru/docs/chatbots/bots-coding/prepare).
@@ -14,11 +15,15 @@ long polling), PostgreSQL, расписание через **внешний cron
 - **Главное меню**: Создать розыгрыш · Мои розыгрыши · Мои каналы · Мои участия · Поддержка.
 - **Цепочка создания розыгрыша (13 шагов ТЗ)** с кнопками **«← Назад»** и **«✖ Отменить»** на каждом шаге.
 - Типы розыгрышей: текущие / запланированные / в процессе создания (черновики) / завершённые / отменённые.
-- Публикация поста по расписанию, подведение итогов по расписанию (внешний cron).
+- **Встроенный планировщик**: публикация поста и подведение итогов по расписанию
+  выполняются самим ботом (каждые 30 сек), с **атомарным захватом** через
+  промежуточные статусы `publishing`/`finishing` — никакой внешний cron не нужен.
 - **Проверка подписок** на каналы через `GET /chats/{id}/members?user_ids=...` — один
   запрос на проверку конкретного участника, в рамках лимита платформы 30 rps.
 - Даты по **московскому времени** (формат `ДД.ММ.ГГГГ ЧЧ:ММ`).
 - Безопасность webhook через заголовок `X-Max-Bot-Api-Secret`.
+- **Дедупликация** webhook-апдейтов (защита от ретраев MAX → дублей ответов).
+- **Мониторинг RPS**: счётчики вызовов MAX API по методу/исходу + gauge «rps» через `/metrics`.
 
 ### Управление каналами
 - **«Мои каналы»** → список добавленных каналов с кнопкой аналитики/UTM на каждый.
@@ -66,15 +71,18 @@ long polling), PostgreSQL, расписание через **внешний cron
 
 ```
 cmd/bot/      — webhook-сервер (точка входа)
-cmd/cron/     — cron-задачи: publish / finish / unsub-check
+cmd/cron/     — cron-задачи: publish / finish / unsub-check (опционально, основное — встроенный scheduler)
 internal/
   config/     — загрузка .env + валидация + TLS (встроенный CA Минцифры)
-  maxapi/     — обёртка над max-bot-api-client-go + rate-limit 30 rps + парсеры payload
+  maxapi/     — обёртка над max-bot-api-client-go + rate-limit 30 rps + метрики RPS
   store/      — PostgreSQL (pgx/v5) + миграции (embed)
-    migrations/  — 0001_init, 0002_utm_tracking, 0003_tiers
+    migrations/  — 0001_init, 0002_utm_tracking, 0003_tiers, 0004/0005_scheduler_claim
   fsm/        — конечный автомат создания розыгрыша (шаги 1-13)
   handlers/   — роутинг update, главное меню, экраны, callback'и, UTM, каналы
-  scheduler/  — публикация/итоги по расписанию
+  scheduler/  — публикация/итоги по расписанию + атомарный claim + идемпотентность
+  draw/       — weighted-выбор победителей (детерминированный, тестируемый)
+  dedup/      — дедупликация webhook-апдейтов (TTL map)
+  metrics/    — счётчики RPS/ошибок по API MAX + Prometheus text
   subscription/ — проверка подписок через GetMembers(user_ids)
   util/       — даты (МСК), клавиатуры
 deploy/
@@ -83,7 +91,8 @@ deploy/
 ```
 
 **Лимит платформы MAX — 30 rps.** Все вызовы в `internal/maxapi` проходят через
-token-bucket rate-limiter (`MAX_RPS`, дефолт 28 для запаса).
+token-bucket rate-limiter (`MAX_RPS`, дефолт 28 для запаса) и учитываются в
+локальных счётчиках (`internal/metrics`) — без нагрузки на платформу.
 
 ---
 
@@ -102,7 +111,57 @@ go version  # должно быть >= 1.25
 go build ./...
 ```
 
-Также есть `Makefile` с целями `build`, `build-linux`, `run`, `test`.
+Также есть `Makefile` с целями `build`, `run`, `test`, `test-unit`, `test-integration`, `test-store`, `vet`.
+
+---
+
+## Тесты
+
+Тесты покрывают все ключевые сценарии (FSM-флоу, participate с подпиской,
+гонку публикации, идемпотентность finish, итоги в исходном посте/fallback,
+дедуп, weighted-выбор победителей, atomic claim в store).
+
+```bash
+# Юнит-тесты (без Docker/сети, мгновенно)
+make test-unit
+
+# Интеграционные (нужен Docker — testcontainers поднимает реальный PostgreSQL)
+make test-integration
+
+# Только store (atomic claim race, finish идемпотентность, draw)
+make test-store
+
+# Всё
+make test
+```
+
+Для интеграционных тестов используется `go-test:alpine` (Go + git + docker-cli):
+```bash
+docker build -t go-test:alpine -f /tmp/go-test.Dockerfile .  # один раз
+# где /tmp/go-test.Dockerfile:
+#   FROM golang:1.25-alpine
+#   RUN apk add --no-cache git docker-cli
+```
+
+---
+
+## Мониторинг RPS
+
+Метрики вызовов MAX API (без нагрузки на платформу — считаются локально):
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+Вывод в формате Prometheus text:
+```
+max_api_calls_total{method="send_text",result="success"} 1234
+max_api_calls_total{method="send_text",result="error"} 2
+max_api_rps_last_second 5
+```
+
+Внешний скрейпер (Prometheus/Grafana) подключается опционально — pull-модель,
+path настраивается через `METRICS_PATH` (дефолт `/metrics`).
 
 ---
 
@@ -126,6 +185,8 @@ cp .env.example .env
 | `TZ`             | `Europe/Moscow`                                         |
 | `MAX_RPS`        | Лимит запросов к платформе (1-30), дефолт 28            |
 | `LOG_LEVEL`      | `debug`/`info`/`warn`/`error`                           |
+| `METRICS_PATH`   | Путь для `/metrics` (дефолт `/metrics`)                 |
+| `DEDUP_TTL`      | TTL дедупликатора (duration, дефолт `5m`)               |
 
 ---
 
@@ -196,18 +257,28 @@ sudo systemctl enable --now max-bot
 sudo journalctl -u max-bot -f
 ```
 
-### Cron-задачи (Europe/Moscow)
+### Планировщик (встроенный)
 
-Либо systemd-timer'ы из `deploy/systemd/`, либо классический crontab:
+Бот сам публикует и подводит итоги по расписанию — **внешний cron не нужен**.
+Встроенный планировщик (`internal/scheduler`) запускается отдельной горутиной и
+каждые 30 секунд:
+- публикует `scheduled`-розыгрыши с наступившим `publish_at` (→ `active`);
+- подводит итоги `active`-розыгрышей с наступившим `finish_at` (→ `finished`).
+
+Атомарный захват через промежуточные статусы `publishing`/`finishing`
+(`UPDATE...RETURNING WHERE status=...`) гарантирует, что даже при гонке тиков
+или дублирующем внешнем cron пост/ЛС/итоги отправляются **ровно один раз**.
+Застрявшие после краша задачи (`staleClaimAge=5мин`) автоматически откатываются.
+
+> `cmd/cron` оставлен как опциональный fallback (например, для `unsub-check`),
+> но для `publish`/`finish` он избыточен — встроенный планировщик покрывает всё.
+
+При использовании внешнего cron (опционально, только `unsub-check`) — для `TZ`
+нужна `Europe/Moscow`:
 
 ```cron
-* * * * * /opt/giveawaybot/giveawaybot-cron publish
-* * * * * /opt/giveawaybot/giveawaybot-cron finish
 */10 * * * * /opt/giveawaybot/giveawaybot-cron unsub-check
 ```
-
-У cron должна быть та же переменная `TZ=Europe/Moscow` (в `/etc/environment` или
-`CRON_TZ=Europe/Moscow`), либо заворачивайте в скрипт с `export TZ=Europe/Moscow`.
 
 ---
 
@@ -251,13 +322,15 @@ go build -o bin/giveawaybot-cron ./cmd/cron
    На каждом шаге — текст-приглашение + клавиатура с кнопками **Назад/Отменить**.
 3. **«Принять»** на предпросмотре → валидация обязательных полей → статус
    `scheduled` (если `publish_at` в будущем) или `active` (если уже пора).
-4. **Cron `publish`** каждую минуту → публикует пост в выбранные каналы с кнопкой
-   «Участвовать», статус → `active`.
+4. **Встроенный планировщик** (каждые 30 сек) → атомарно захватывает `scheduled`
+   (`→ publishing`), публикует пост в выбранные каналы с кнопкой «Участвовать»,
+   сохраняет mid каждого поста, `→ active`.
 5. **Участник жмёт «Участвовать»** → бот проверяет подписку на все каналы розыгрыша
    через `GetMembers(user_ids)` → регистрирует участника.
-6. **Cron `finish`** в `finish_at` → выбирает `winners_count` участников → шлёт им
-   сообщение → публикует итоги (в исходном посте через `EditMessage` или отдельным) →
-   статус `finished`.
+6. **Встроенный планировщик** в `finish_at` → атомарно захватывает (`→ finishing`),
+   weighted-выбор `winners_count` победителей → шлёт им ЛС (идемпотентно через
+   `winners_notified_user_ids`) → публикует итоги (в исходном посте через
+   `EditMessage`, с fallback на отдельный пост при ошибке) → `→ finished`.
 
 ### UTM-трекинг (поток атрибуции)
 ```
@@ -285,6 +358,8 @@ go build -o bin/giveawaybot-cron ./cmd/cron
 | `0001_init.sql` | `users`, `channels`, `giveaways` (все 13 полей ТЗ), `participants`, `subscriptions_log`, `referral_links`, `utm_links` (базовая) |
 | `0002_utm_tracking.sql` | `user_sessions`, расширение `utm_links` (owner/medium/post_ref/unsubs/enabled), `utm_clicks`, `user_utm_attribution`, расширение `subscriptions_log` (utm_link_id, inviter_id) |
 | `0003_tiers.sql` | `owners` (создатели с тарифом), `feature_limits` (справочник лимитов), `users.tier`, `giveaways.owner_tier` |
+| `0004_scheduler_claim.sql` | enum-значения `publishing`/`finishing` для `giveaway_status` (атомарный захват задач) |
+| `0005_scheduler_claim.sql` | `winners_notified_user_ids`, `results_published` + индексы для поиска застрявших `publishing`/`finishing` |
 
 ---
 
@@ -293,6 +368,9 @@ go build -o bin/giveawaybot-cron ./cmd/cron
 ```bash
 # healthcheck (должен вернуть "ok")
 curl https://bot.example.ru/healthz
+
+# метрики RPS/ошибок по API MAX (Prometheus text)
+curl https://bot.example.ru/metrics
 
 # проверить, что webhook зарегистрирован в MAX (нужен CA Минцифры в системе
 # ИЛИ запустить через бота: ./bin/giveawaybot-bot и смотреть лог "webhook подписан")

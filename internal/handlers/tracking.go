@@ -63,6 +63,13 @@ func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload str
 	if payload == "" {
 		return
 	}
+	// Кнопка «Участвовать» под постом розыгрыша (deep link открывает диалог).
+	if strings.HasPrefix(payload, "part_") {
+		idStr := strings.TrimPrefix(payload, "part_")
+		b.onParticipate(ctx, userID, idStr, "")
+		return
+	}
+	// UTM-диплинк.
 	code := strings.TrimPrefix(payload, utmPayloadPrefix)
 	if code == "" || code == payload {
 		return // не UTM-диплинк
@@ -93,16 +100,33 @@ func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
 	if title == "" {
 		title = fmt.Sprintf("канал #%d", ch.ChatID)
 	}
-	admin := "✅ бот админ"
-	if !ch.IsBotAdmin {
-		admin = "⚠️ бот НЕ админ (трекинг подписок невозможен)"
+
+	// Загружаем статистику по каналу.
+	stats, _ := b.db.ListUTMStats(ctx, uid, chID)
+	var totClicks, totSignups, totUnsubs int64
+	for _, s := range stats {
+		totClicks += s.Clicks
+		totSignups += s.Signups
+		totUnsubs += s.Unsubs
 	}
-	_ = b.api.SendTextWithKeyboard(ctx, uid,
-		fmt.Sprintf("📢 %s\n%s\n\nUTM-трекинг источников подписок.", title, admin),
-		util.ChannelUTMKeyboard(chID))
+	conv := float64(0)
+	if totClicks > 0 {
+		conv = float64(totSignups) / float64(totClicks) * 100
+	}
+
+	text := fmt.Sprintf("📊 %s\n\n", title) +
+		fmt.Sprintf("Ссылок: %d\n", len(stats)) +
+		fmt.Sprintf("Кликов: %d\n", totClicks) +
+		fmt.Sprintf("Регистраций: %d\n", totSignups) +
+		fmt.Sprintf("Отписок: %d\n", totUnsubs) +
+		fmt.Sprintf("Конверсия: %.1f%%\n\n", conv) +
+		"UTM-трекинг источников подписчиков."
+
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, util.ChannelUTMKeyboard(chID))
 }
 
-// startCreateUTM — начало создания UTM-ссылки (переход в режим ввода).
+// startCreateUTM — начало создания UTM-ссылки. Юзер вводит только название
+// источника (одно слово/фразу) — остальное бот генерит автоматически.
 func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 	idStr := strings.TrimPrefix(p, util.CBUTMCreate)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
@@ -113,16 +137,15 @@ func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
 		return
 	}
-	_ = b.api.SendTextWithKeyboard(ctx, uid,
-		"🔗 Создание UTM-ссылки.\n\nОтправьте одним сообщением в формате:\n"+
-			"источник | кампания | пост\n\n"+
-			"Пример:\n"+
-			"telegram | summer_giveaway | t.me/me/123\n\n"+
-			"Поле «пост» можно оставить пустым.",
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		"🔗 Создание трекинг-ссылки\n\n"+
+			"Отправьте название источника — откуда будут приходить подписчики.\n"+
+			"Например: «Telegram», «Реклама у Иванова», «Пост в VK»\n\n"+
+			"Бот сгенерирует уникальную ссылку с трекингом автоматически.",
 		util.CancelKeyboard())
 }
 
-// handleUTMCreateInput — ввод данных UTM-ссылки (режим SessionUTMCreate).
+// handleUTMCreateInput — ввод названия источника для UTM-ссылки.
 func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) bool {
 	sess, err := b.db.GetSessionPayload(ctx, uid)
 	if err != nil || sess.State != store.SessionUTMCreate {
@@ -135,25 +158,18 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 		_ = b.api.SendText(ctx, uid, "Канал утерян, начните заново.")
 		return true
 	}
-	chID := int64(chIDf.(float64))
+	chIDf2, _ := chIDf.(float64)
+	chID := int64(chIDf2)
 
-	parts := strings.Split(text, "|")
-	source := strings.TrimSpace(parts[0])
-	campaign := ""
-	postRef := ""
-	if len(parts) > 1 {
-		campaign = strings.TrimSpace(parts[1])
-	}
-	if len(parts) > 2 {
-		postRef = strings.TrimSpace(parts[2])
-	}
+	source := strings.TrimSpace(text)
 	if source == "" {
-		_ = b.api.SendText(ctx, uid, "⚠️ Источник обязателен. Отправьте: источник | кампания | пост")
+		_ = b.api.SendText(ctx, uid, "⚠️ Название не может быть пустым. Отправьте название источника.")
 		return true
 	}
 
+	// Генерим ссылку: source — что ввёл юзер, остальное авто.
 	code := util.RandomCode(10)
-	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "post", campaign, postRef, code); err != nil {
+	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "referral", source, "", code); err != nil {
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка: "+err.Error())
 		return true
 	}
@@ -161,15 +177,16 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 
 	botName := b.botUsername
 	if botName == "" {
+		b.log.Warn("botUsername не задан — UTM-диплинк будет нерабочим", "user", uid)
 		botName = "ВАШ_БОТ"
 	}
 	link := fmt.Sprintf("https://max.ru/%s/start/%s%s", botName, utmPayloadPrefix, code)
-	_ = b.api.SendTextWithKeyboard(ctx, uid,
-		fmt.Sprintf("✅ UTM-ссылка создана:\n\n%s\n\n"+
-			"Источник: %s\nКампания: %s\nПост: %s\n\n"+
-			"Когда пользователь перейдёт по ссылке и стартанёт бота — мы зафиксируем клик. "+
-			"Если он подпишется на канал (бот админ) — припишем подписку к этой ссылке.",
-			link, source, campaign, ifEmpty(postRef, "—")),
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\n"+
+			"Источник: %s\n\n"+
+			"Размещайте эту ссылку где угодно — каждый переход и подписка будут "+
+			"учтены в аналитике этого канала.",
+			link, source),
 		util.ChannelUTMKeyboard(chID))
 	return true
 }
@@ -187,7 +204,7 @@ func (b *Bot) showUTMStats(ctx context.Context, uid int64, p string) {
 		return
 	}
 	if len(stats) == 0 {
-		_ = b.api.SendTextWithKeyboard(ctx, uid, "📊 UTM-ссылок пока нет. Создайте первую.", util.ChannelUTMKeyboard(chID))
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "📊 UTM-ссылок пока нет. Создайте первую.", util.ChannelUTMKeyboard(chID))
 		return
 	}
 	var sb strings.Builder
@@ -200,10 +217,10 @@ func (b *Bot) showUTMStats(ctx context.Context, uid int64, p string) {
 		fmt.Fprintf(&sb, "• %s / %s\n  клики: %d | подписки: %d | отписки: %d | конверсия: %.0f%%\n",
 			s.Source, s.Campaign, s.Clicks, s.Signups, s.Unsubs, conv)
 	}
-	_ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), util.ChannelUTMStatsKeyboard(chID))
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), util.ChannelUTMStatsKeyboard(chID))
 }
 
-// exportUTMCSV — экспорт статистики UTM в CSV (текстом).
+// exportUTMCSV — экспорт статистики UTM в CSV-файл (через MAX Upload API).
 func (b *Bot) exportUTMCSV(ctx context.Context, uid int64, p string) {
 	idStr := strings.TrimPrefix(p, util.CBUTMExport)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
@@ -226,8 +243,20 @@ func (b *Bot) exportUTMCSV(ctx context.Context, uid int64, p string) {
 			csvEscape(s.Source), csvEscape(s.Medium), csvEscape(s.Campaign),
 			csvEscape(s.PostRef), s.Code, s.Clicks, s.Signups, s.Unsubs, conv)
 	}
-	_ = b.api.SendTextWithKeyboard(ctx, uid,
-		"📎 CSV-экспорт UTM-аналитики:\n\n"+csv.String(),
+
+	// Загружаем CSV как файл и отправляем.
+	filename := fmt.Sprintf("utm_stats_%d.csv", chID)
+	data := []byte(csv.String())
+	if err := b.api.SendFile(ctx, uid, filename, data); err != nil {
+		// Fallback: если загрузка файла упала — шлём текстом (как раньше).
+		b.log.Warn("CSV file upload failed, sending as text", "err", err, "user", uid)
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"📎 CSV-экспорт (файлом не удалось):\n\n"+csv.String(),
+			util.ChannelUTMKeyboard(chID))
+		return
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		"✅ CSV-файл отправлен выше. Открывается в Excel/Google Sheets.",
 		util.ChannelUTMKeyboard(chID))
 }
 

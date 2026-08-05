@@ -13,6 +13,7 @@ const (
 	SessionAddingChannel = "adding_channel"  // ожидание ID канала / пересылки
 	SessionCaptchaPct    = "captcha_pct"     // ожидание % капчи (FSM розыгрыша)
 	SessionUTMCreate     = "utm_create"      // создание UTM-ссылки
+	SessionCaptchaVerify = "captcha_verify"  // ожидание ответа капчи (при участии)
 )
 
 // UserSession — произвольное состояние юзера с контекстом (payload).

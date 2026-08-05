@@ -32,21 +32,22 @@ func (s *Store) CountParticipants(ctx context.Context, giveawayID int64) (int, e
 	return n, err
 }
 
-// PickWinners — выбирает N случайных победителей (с учётом билетов:权重ный выбор).
-// Реализовано через weighted random в SQL с window-function.
+// CountParticipant — участвует ли конкретный пользователь (0/1). Для проверки
+// идемпотентности до капчи.
+func (s *Store) CountParticipant(ctx context.Context, giveawayID, userID int64) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM participants WHERE giveaway_id=$1 AND user_id=$2`,
+		giveawayID, userID).Scan(&n)
+	return n, err
+}
+
+// PickWinners оставлен для обратной совместимости, но weighted-выбор теперь
+// выполняется в Go (см. internal/draw): SQL random() игнорировал билеты.
+// Здесь лишь возвращает N случайных ID без учёта весов — не используйте напрямую.
 func (s *Store) PickWinners(ctx context.Context, giveawayID int64, n int) ([]int64, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT user_id
-		FROM (
-			SELECT user_id,
-			       SUM(tickets) OVER (ORDER BY id) AS cum,
-			       SUM(tickets) OVER () AS total
-			FROM participants
-			WHERE giveaway_id=$1
-		) t
-		WHERE total > 0
-		ORDER BY random()  -- упрощённо: равновзвешенный выбор N строк; см. TODO в README про weighted
-		LIMIT $2
+		SELECT user_id FROM participants WHERE giveaway_id=$1 ORDER BY random() LIMIT $2
 	`, giveawayID, n)
 	if err != nil {
 		return nil, err
@@ -61,6 +62,40 @@ func (s *Store) PickWinners(ctx context.Context, giveawayID int64, n int) ([]int
 		res = append(res, uid)
 	}
 	return res, rows.Err()
+}
+
+// ParticipantTicket — участник с числом билетов (для weighted-выбора в Go).
+type ParticipantTicket struct {
+	UserID  int64
+	Tickets int
+}
+
+// ListParticipantsForDraw возвращает участников розыгрыша с их билетами.
+// Используется планировщиком для weighted-выбора победителей в Go
+// (вместо SQL random(), который билеты игнорировал).
+func (s *Store) ListParticipantsForDraw(ctx context.Context, giveawayID int64) ([]ParticipantTicket, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id, tickets FROM participants WHERE giveaway_id=$1 ORDER BY id
+	`, giveawayID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []ParticipantTicket
+	for rows.Next() {
+		var p ParticipantTicket
+		if err := rows.Scan(&p.UserID, &p.Tickets); err != nil {
+			return nil, err
+		}
+		res = append(res, p)
+	}
+	return res, rows.Err()
+}
+
+// CountParticipantsForDraw — число участников для розыгрыша (аналог CountParticipants,
+// явное имя под сценарий finish).
+func (s *Store) CountParticipantsForDraw(ctx context.Context, giveawayID int64) (int, error) {
+	return s.CountParticipants(ctx, giveawayID)
 }
 
 // AddSubscriptionLog — запись о подписке участника на канал.

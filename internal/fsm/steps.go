@@ -12,6 +12,7 @@
 //   step_winners      (9)   кол-во победителей (1-100) [обязательный]
 //   step_winners_msg  (10)  сообщение победителям    [опциональный]
 //   step_results_loc  (10.5) где публиковать итоги   [обязательный]
+//   step_results_text (10.6) текст итогов отдельного поста [опц., только при «отдельным постом»]
 //   step_referral     (11)  реферальная система      [опциональный]
 //   step_captcha      (12)  капча                    [опциональный]
 //   step_promotion    (13)  продвижение              [опциональный]
@@ -31,6 +32,7 @@ const (
 	StepWinners     = "winners"
 	StepWinnersMsg  = "winners_msg"
 	StepResultsLoc  = "results_loc"
+	StepResultsText = "results_text"
 	StepReferral    = "referral"
 	StepCaptcha     = "captcha"
 	StepPromotion   = "promotion"
@@ -38,10 +40,11 @@ const (
 )
 
 // orderedSteps — упорядоченный список шагов (для переходов вперёд/назад).
+// Реферальная система и продвижение убраны (не входят в MVP-сценарий).
 var orderedSteps = []string{
+	StepName,
 	StepPostText,
 	StepMedia,
-	StepName,
 	StepButtonText,
 	StepSubChannels,
 	StepPubChannels,
@@ -50,23 +53,21 @@ var orderedSteps = []string{
 	StepWinners,
 	StepWinnersMsg,
 	StepResultsLoc,
-	StepReferral,
+	StepResultsText,
 	StepCaptcha,
-	StepPromotion,
 	StepPreview,
 }
 
 // FirstStep — первый шаг цепочки.
-const FirstStep = StepPostText
+const FirstStep = StepName
 
 // optionalSteps — шаги, которые можно пропустить (кнопка "Пропустить").
 var optionalSteps = map[string]bool{
-	StepMedia:      true,
-	StepButtonText: true, // дефолт "Участвовать"
-	StepWinnersMsg: true,
-	StepReferral:   true,
-	StepCaptcha:    true,
-	StepPromotion:  true,
+	StepMedia:       true,
+	StepButtonText:  true, // дефолт "Участвовать"
+	StepWinnersMsg:  true,
+	StepResultsText: true, // дефолтный текст итогов при пустом
+	StepCaptcha:     true,
 }
 
 // IsOptional — можно ли пропустить шаг.

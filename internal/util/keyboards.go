@@ -18,6 +18,7 @@ const (
 	CBMyChannels       = "my_channels"
 	CBMyParticipations = "my_participations"
 	CBSupport          = "support"
+	CBAnalytics        = "analytics" // UTM-аналитика (главное меню)
 
 	// Фильтры "мои розыгрыши"
 	CBGiveawayFilter = "gw_filter:" // + status
@@ -39,31 +40,32 @@ const (
 	CBUTMExport   = "utm_exp:" // + channel_id — экспорт CSV
 
 	// FSM создания
-	CBFSMBack    = "fsm_back"
-	CBFSMCancel  = "fsm_cancel"
-	CBFSMSkip    = "fsm_skip"
-	CBFSMOption  = "fsm_opt:"
-	CBFSMConfirm = "fsm_confirm"
-	CBFSMReject  = "fsm_reject"
+	CBFSMBack     = "fsm_back"
+	CBFSMCancel   = "fsm_cancel"
+	CBFSMSkip     = "fsm_skip"
+	CBFSMOption   = "fsm_opt:"
+	CBFSMConfirm  = "fsm_confirm"
+	CBFSMReject   = "fsm_reject"
+	CBFSMSaveDraft = "fsm_save" // сохранить в черновик (выйти из FSM, сохранив)
 
 	// Кнопка "Участвовать" под постом розыгрыша
 	CBParticipate = "part:" // + giveaway_id
 )
 
-// MainMenuKeyboard — клавиатура главного меню.
+// MainMenuKeyboard — клавиатура главного меню. Каждая кнопка на отдельной строке.
 func MainMenuKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
-	kb.AddRow().
-		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways).
-		AddCallBack("📢 Мои каналы", CBMyChannels)
-	kb.AddRow().
-		AddCallBack("🎟 Мои участия", CBMyParticipations).
-		AddCallBack("🆘 Поддержка", CBSupport)
+	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
+	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
+	kb.AddRow().AddCallBack("🎟 Мои участия", CBMyParticipations)
+	kb.AddRow().AddCallBack("📊 Аналитика", CBAnalytics)
+	kb.AddRow().AddCallBack("🆘 Поддержка", CBSupport)
 	return kb
 }
 
 // NavKeyboard — Назад / Отменить.
+// «Сохранить в черновик» убран — черновик автосохраняется после ввода названия.
 func NavKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().
@@ -72,7 +74,7 @@ func NavKeyboard() *model.Keyboard {
 	return kb
 }
 
-// NavWithSkipKeyboard — то же + «Пропустить».
+// NavWithSkipKeyboard — Пропустить / Назад / Отменить.
 func NavWithSkipKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("⏭ Пропустить", CBFSMSkip)
@@ -99,10 +101,18 @@ func ConfirmKeyboard() *model.Keyboard {
 	return kb
 }
 
-// ParticipateKeyboardBuilder — возвращает *Keyboard для кнопки под постом розыгрыша.
-func ParticipateKeyboardBuilder(buttonText string, giveawayID int64) *model.Keyboard {
+// ParticipateKeyboardBuilder — кнопка «Участвовать» под постом розыгрыша.
+// Использует ButtonLink с deep link (https://max.ru/<bot>/start/part_<id>) —
+// при нажатии MAX ОТКРЫВАЕТ диалог с ботом (callback-кнопка этого не делает).
+// botUsername — публичное имя бота (без @).
+func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername string) *model.Keyboard {
 	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack(buttonText, CBParticipate+strconv.FormatInt(giveawayID, 10))
+	botName := botUsername
+	if botName == "" {
+		botName = "max_bot"
+	}
+	link := "https://max.ru/" + botName + "/start/part_" + strconv.FormatInt(giveawayID, 10)
+	kb.AddRow().AddLink(buttonText, link)
 	return kb
 }
 
@@ -118,7 +128,8 @@ func PreviewKeyboardBuilder(buttonText string, giveawayID int64) *model.Keyboard
 // GiveawayAttachments строит список вложений для поста розыгрыша:
 // медиа (image/video по токенам) + inline-клавиатура кнопки участия.
 // Используется и при публикации, и при предпросмотре (preview=true → PreviewKeyboard).
-func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []MediaTokenSimple, preview bool) []model.Attachment {
+// botUsername — для построения deep-link кнопки участия (открывает диалог).
+func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []MediaTokenSimple, preview bool, botUsername string) []model.Attachment {
 	var attachments []model.Attachment
 	for _, m := range mediaTokens {
 		switch m.Type {
@@ -139,7 +150,7 @@ func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []Medi
 	if preview {
 		kb = PreviewKeyboardBuilder(buttonText, giveawayID)
 	} else {
-		kb = ParticipateKeyboardBuilder(buttonText, giveawayID)
+		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, botUsername)
 	}
 	attachments = append(attachments, kb.Build())
 	return attachments

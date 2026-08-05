@@ -3,8 +3,10 @@ package fsm
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/maxbot/giveawaybot/internal/store"
+	"github.com/maxbot/giveawaybot/internal/util"
 )
 
 // ConfirmPublish — пользователь нажал "Принять" на предпросмотре.
@@ -49,6 +51,14 @@ func validate(g store.Giveaway) error {
 		return &ValidationError{Msg: fmt.Sprintf(
 			"дата итогов (%s) должна быть позже даты публикации (%s)",
 			g.FinishAt.UTC().Format("2006-01-02 15:04"), g.PublishAt.UTC().Format("2006-01-02 15:04"))}
+	}
+	// Защита от случайного ввода прошедшего времени: публикация «в прошлом»
+	// сработала бы мгновенно (статус active), что выглядит как баг для юзера.
+	// Допускаем небольшой запас (1 мин) на случай медленной обработки.
+	if g.PublishAt.Before(time.Now().Add(-1 * time.Minute)) {
+		return &ValidationError{Msg: fmt.Sprintf(
+			"дата публикации (%s) уже прошла. Введите время в будущем",
+			g.PublishAt.In(util.MoscowLocation()).Format("02.01.2006 15:04"))}
 	}
 	if g.WinnersCount < 1 || g.WinnersCount > 100 {
 		return &ValidationError{Msg: "число победителей должно быть 1-100"}

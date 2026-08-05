@@ -3,8 +3,10 @@ package fsm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/maxbot/giveawaybot/internal/util"
@@ -34,12 +36,23 @@ func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text str
 		if err != nil {
 			return err
 		}
+		// Валидация на шаге (не в конце!): publish_at должен быть в будущем.
+		// Это убирает сюрприз «всё заполнил, а потом ошибка».
+		if !t.After(time.Now()) {
+			return fmt.Errorf("время публикации %s уже прошло — введите будущее время",
+				t.In(util.MoscowLocation()).Format("02.01.2006 15:04"))
+		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "publish_at", t)
 
 	case StepFinishAt:
 		t, err := util.ParseMoscowTime(text)
 		if err != nil {
 			return err
+		}
+		// Валидация на шаге: finish_at должен быть позже publish_at (если он задан).
+		if g.PublishAt != nil && !t.After(*g.PublishAt) {
+			return fmt.Errorf("время итогов должно быть позже публикации (%s)",
+				g.PublishAt.In(util.MoscowLocation()).Format("15:04"))
 		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "finish_at", t)
 
@@ -53,9 +66,12 @@ func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text str
 	case StepWinnersMsg:
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "winners_message", text)
 
+	case StepResultsText:
+		return e.DB.UpdateGiveawayField(ctx, g.ID, "results_post_text", text)
+
 	// Шаги с выбором каналов / опциями обрабатываются через callback, не текстом.
 	case StepMedia, StepSubChannels, StepPubChannels, StepResultsLoc,
-		StepReferral, StepCaptcha, StepPromotion, StepPreview:
+		StepCaptcha, StepPreview:
 		return errors.New("используйте кнопки под сообщением")
 	}
 	return errors.New("неизвестный шаг")
@@ -72,12 +88,8 @@ func (e *Engine) SkipStep(ctx context.Context, g store.Giveaway) error {
 		_ = e.DB.UpdateGiveawayField(ctx, g.ID, "button_text", "Участвовать")
 	case StepWinnersMsg:
 		// ничего не пишем — остаётся пустое сообщение
-	case StepReferral:
-		_ = e.DB.UpdateGiveawayField(ctx, g.ID, "referral_enabled", false)
 	case StepCaptcha:
 		_ = e.DB.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaNone)
-	case StepPromotion:
-		_ = e.DB.UpdateGiveawayField(ctx, g.ID, "promotion_enabled", false)
 	}
 	return nil
 }

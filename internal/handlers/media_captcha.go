@@ -28,7 +28,7 @@ func (b *Bot) handleMediaInput(ctx context.Context, uid int64, g store.Giveaway,
 		}
 	}
 	if len(newTokens) == 0 {
-		_ = b.api.SendTextWithKeyboard(ctx, uid,
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 			"Не увидел фото/видео во вложениях. Пришлите медиа или нажмите «Пропустить».",
 			util.NavWithSkipKeyboard())
 		return
@@ -39,7 +39,7 @@ func (b *Bot) handleMediaInput(ctx context.Context, uid int64, g store.Giveaway,
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения медиа: "+err.Error())
 		return
 	}
-	_ = b.api.SendTextWithKeyboard(ctx, uid,
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		"✅ Медиа добавлено ("+strconv.Itoa(len(newTokens))+" шт.). Можно добавить ещё или нажать «Пропустить».",
 		util.NavWithSkipKeyboard())
 }

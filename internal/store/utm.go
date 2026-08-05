@@ -136,6 +136,65 @@ func (s *Store) ListUTMStats(ctx context.Context, ownerUserID, channelID int64) 
 	return res, rows.Err()
 }
 
+// ListUTMStatsAll — все UTM-ссылки владельца по всем каналам (сводный отчёт).
+func (s *Store) ListUTMStatsAll(ctx context.Context, ownerUserID int64) ([]UTMStat, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, source, medium, campaign, post_ref, code, clicks, signups, COALESCE(unsubs,0)
+		FROM utm_links
+		WHERE owner_user_id=$1
+		ORDER BY created_at DESC
+	`, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []UTMStat
+	for rows.Next() {
+		var u UTMStat
+		if err := rows.Scan(&u.ID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
+			return nil, err
+		}
+		res = append(res, u)
+	}
+	return res, rows.Err()
+}
+
+// UTMChannelSummary — сводная статистика по одному каналу.
+type UTMChannelSummary struct {
+	ChannelID int64
+	Title     string
+	Links     int
+	Clicks    int64
+	Signups   int64
+	Unsubs    int64
+}
+
+// ListUTMChannelSummaries — сводка по всем каналам владельца с UTM-ссылками.
+func (s *Store) ListUTMChannelSummaries(ctx context.Context, ownerUserID int64) ([]UTMChannelSummary, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id, COALESCE(c.title, 'канал #' || c.chat_id),
+		       COUNT(u.id), COALESCE(SUM(u.clicks),0), COALESCE(SUM(u.signups),0), COALESCE(SUM(u.unsubs),0)
+		FROM channels c
+		LEFT JOIN utm_links u ON u.channel_id = c.id AND u.owner_user_id = $1
+		WHERE c.owner_user_id = $1
+		GROUP BY c.id, c.title, c.chat_id
+		ORDER BY c.created_at
+	`, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []UTMChannelSummary
+	for rows.Next() {
+		var sum UTMChannelSummary
+		if err := rows.Scan(&sum.ChannelID, &sum.Title, &sum.Links, &sum.Clicks, &sum.Signups, &sum.Unsubs); err != nil {
+			return nil, err
+		}
+		res = append(res, sum)
+	}
+	return res, rows.Err()
+}
+
 // EnsureReferralLink — создаёт реферальную ссылку участника (или возвращает существующий код).
 func (s *Store) EnsureReferralLink(ctx context.Context, giveawayID, userID int64, code string) (string, error) {
 	_, err := s.pool.Exec(ctx, `

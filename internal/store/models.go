@@ -1,15 +1,28 @@
 package store
 
-import "time"
+import (
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+)
 
 // Статусы розыгрыша (см. giveaway_status в БД).
 const (
-	StatusDraft     = "draft"     // в процессе создания (черновик)
-	StatusScheduled = "scheduled" // запланированный
-	StatusActive    = "active"    // текущий (опубликован)
-	StatusFinished  = "finished"  // завершённый
-	StatusCancelled = "cancelled" // отменён
+	StatusDraft      = "draft"      // в процессе создания (черновик)
+	StatusScheduled  = "scheduled"  // запланированный
+	StatusPublishing = "publishing" // захвачен планировщиком для публикации
+	StatusActive     = "active"     // текущий (опубликован)
+	StatusFinishing  = "finishing"  // захвачен планировщиком для подведения итогов
+	StatusFinished   = "finished"   // завершённый
+	StatusCancelled  = "cancelled"  // отменён
 )
+
+// InProcessStatuses — статусы «захвачено планировщиком» (atomic claim).
+// Пока розыгрыш в одном из них, его не подберёт ни другой тик, ни другой инстанс.
+var InProcessStatuses = map[string]bool{
+	StatusPublishing: true,
+	StatusFinishing:  true,
+}
 
 // Режимы капчи (captcha_mode).
 const (
@@ -26,13 +39,14 @@ type MediaToken struct {
 
 // User — пользователь MAX.
 type User struct {
-	UserID      int64
-	FirstName   string
-	Username    string
-	IsBot       bool
-	FlagInBase  bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	UserID        int64
+	FirstName     string
+	Username      string
+	IsBot         bool
+	FlagInBase    bool
+	DialogChatID  int64 // chat_id диалога bot↔user (для GetMessages при /clear)
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Channel — канал создателя ("мои каналы").
@@ -76,8 +90,21 @@ type Giveaway struct {
 	PublishMessageIDs      map[int64]string // chat_id -> mid
 	ResultsMessageIDs      map[int64]string
 	WinnersUserIDs         []int64
+	WinnersNotifiedUserIDs []int64 // кому из победителей уже отправлено ЛС (идемпотентность finish)
+	ResultsPublished       bool    // итоги уже опубликованы (обе ветки: edit поста / отдельный пост)
+	ChannelSelectMID       string // mid сообщения выбора каналов (для edit-in-place тоггла)
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
+
+	// Приватные «сырые» поля — приёмники под Scan, расшифровываются в finalizeScan.
+	// Хранятся в структуре, чтобы scanDest() возвращал указатели на валидные адреса.
+	draftStep         pgtype.Text
+	channelSelectMID  pgtype.Text
+	publishAt         pgtype.Timestamptz
+	finishAt          pgtype.Timestamptz
+	mediaTokensRaw    []byte
+	publishMsgs       []byte
+	resultsMsgs       []byte
 }
 
 // Participant — участник розыгрыша.

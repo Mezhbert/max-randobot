@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/maxbot/giveawaybot/internal/config"
+	"github.com/maxbot/giveawaybot/internal/dedup"
 	"github.com/maxbot/giveawaybot/internal/handlers"
 	"github.com/maxbot/giveawaybot/internal/maxapi"
 	"github.com/maxbot/giveawaybot/internal/scheduler"
@@ -66,6 +67,7 @@ func main() {
 	}
 
 	bot := handlers.New(api, db, slog.Default())
+	bot.SetDedup(dedup.New(dedupTTL(cfg.DedupTTL), 0))
 
 	// Встроенный планировщик: сам раз в 30 секунд публикует наступившие
 	// розыгрыши (scheduled → active) и подводит итоги завершившихся
@@ -87,12 +89,26 @@ func main() {
 	}()
 
 	// Узнаём публичное имя бота — нужно для построения UTM-диплинков (max.ru/<bot>/start/...).
+	// Заодно регистрируем меню команд бота (PatchCommands), чтобы при вводе «/»
+	// в MAX появлялся список доступных команд, а не «команды не найдены».
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if info, err := api.Bots.GetMyInfo(ic); err == nil && info.Username != "" {
-			bot.SetUsername(info.Username)
-			slog.Info("bot username", "name", info.Username)
+		if info, err := api.Bots.GetMyInfo(ic); err == nil {
+			if info.Username != "" {
+				bot.SetUsername(info.Username)
+				sch.SetBotUsername(info.Username)
+				slog.Info("bot username", "name", info.Username)
+			}
+			if info.UserID != 0 {
+				bot.SetBotUserID(info.UserID)
+				slog.Info("bot user_id", "id", info.UserID)
+			}
+		}
+		if err := api.RegisterCommands(ic); err != nil {
+			slog.Warn("register bot commands (продолжаю)", "err", err)
+		} else {
+			slog.Info("bot commands зарегистрированы")
 		}
 	}()
 
@@ -129,6 +145,14 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	// Метрики RPS/ошибок по API MAX в формате Prometheus text.
+	// Pull-модель: `curl /metrics` работает из коробки; внешний скрейпер
+	// (Prometheus/Grafana) подключается опционально — нагрузки на платформу
+	// это не создаёт, считаются локальные атомарные счётчики.
+	mux.HandleFunc(cfg.MetricsPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		api.Metrics().WritePrometheus(w)
 	})
 
 	srv := &http.Server{
@@ -189,4 +213,15 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler) {
 			tick()
 		}
 	}
+}
+
+// dedupTTL парсит DEDUP_TTL (duration, напр. "5m", "120s"); пусто — дефолт.
+func dedupTTL(s string) time.Duration {
+	if s == "" {
+		return dedup.DefaultTTL
+	}
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d
+	}
+	return dedup.DefaultTTL
 }
