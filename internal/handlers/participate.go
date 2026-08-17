@@ -3,9 +3,9 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/maxbot/giveawaybot/internal/util"
@@ -63,8 +63,8 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 		return
 	}
 
-	// Капча: если включена — определяем нужна ли данному пользователю.
-	if b.needCaptcha(g, userID) {
+	// Капча: если включена — показываем.
+	if b.needCaptcha(g) {
 		// НЕ шлём AnswerCallback (alert) — он блокирует открытие диалога.
 		// Сообщение с капчей само откроет диалог с ботом.
 		b.startCaptchaChallenge(ctx, userID, g.ID)
@@ -75,22 +75,10 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 	b.registerParticipant(ctx, userID, g, callbackID)
 }
 
-// needCaptcha определяет, нужна ли капча для данного пользователя.
-func (b *Bot) needCaptcha(g store.Giveaway, userID int64) bool {
-	switch g.CaptchaMode {
-	case store.CaptchaAll:
-		return true
-	case store.CaptchaPercent:
-		if g.CaptchaPercent <= 0 {
-			return false
-		}
-		if g.CaptchaPercent >= 100 {
-			return true
-		}
-		return rand.Intn(100) < g.CaptchaPercent
-	default:
-		return false
-	}
+// needCaptcha определяет, нужна ли капча. Только Да (all) или Нет (none) —
+// процентный режим убран из UI.
+func (b *Bot) needCaptcha(g store.Giveaway) bool {
+	return g.CaptchaMode == store.CaptchaAll
 }
 
 // startCaptchaChallenge генерирует капчу, отправляет картинку и переводит
@@ -167,11 +155,29 @@ func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giv
 		_ = b.db.AddSubscriptionLog(ctx, p.ID, g.ID, cid, userID, "post")
 	}
 
+	// Обновляем счётчик участников в кнопке поста (троттлинг 10с на розыгрыш).
+	gCopy := g
+	b.updateCounterThrottled(ctx, &gCopy)
+
 	if callbackID != "" {
 		b.api.AnswerCallback(ctx, callbackID, "🎉 Вы участвуете!")
 	}
 	_ = b.api.SendText(ctx, userID,
 		fmt.Sprintf("🎉 Вы участвуете в розыгрыше «%s»! Удачи!", g.Name))
+}
+
+// updateCounterThrottled обновляет счётчик в постах не чаще раза в 10 секунд
+// на розыгрыш (защита от rps при массовом наплыве участников).
+func (b *Bot) updateCounterThrottled(ctx context.Context, g *store.Giveaway) {
+	if b.counterUpd == nil {
+		return
+	}
+	now := time.Now().Unix()
+	if last, ok := b.lastCounters[g.ID]; ok && now-last < 10 {
+		return
+	}
+	b.lastCounters[g.ID] = now
+	go b.counterUpd(context.Background(), g)
 }
 
 // toInt64 конвертирует any (из JSON payload) в int64.

@@ -26,6 +26,45 @@ func (b *Bot) startAddChannel(ctx context.Context, uid int64) {
 		util.ChannelAddKeyboard())
 }
 
+// refreshChannels — 🔄 обновляет статус админства бота во ВСЕХ каналах юзера.
+// Безопасно: обходятся только каналы уже добавленные пользователем (никакого
+// перебора чужих каналов). Потерявшие админство помечаются ⚠️ в списке.
+func (b *Bot) refreshChannels(ctx context.Context, uid int64) {
+	channels, err := b.db.ListChannels(ctx, uid)
+	if err != nil || len(channels) == 0 {
+		b.showChannels(ctx, uid)
+		return
+	}
+
+	updated, lost := 0, 0
+	for _, c := range channels {
+		isAdmin, err := b.api.IsBotAdminInChat(ctx, c.ChatID)
+		if err != nil {
+			// Ошибка проверки (бот удалён из канала и т.п.) — считаем не админом.
+			isAdmin = false
+		}
+		if isAdmin != c.IsBotAdmin {
+			if err := b.db.SetChannelAdminFlag(ctx, c.ID, isAdmin); err == nil {
+				if isAdmin {
+					updated++
+				} else {
+					lost++
+				}
+			}
+		}
+	}
+
+	msg := fmt.Sprintf("🔄 Обновлено каналов: %d.", len(channels))
+	if updated > 0 {
+		msg += fmt.Sprintf("\n✅ Админство возвращено: %d.", updated)
+	}
+	if lost > 0 {
+		msg += fmt.Sprintf("\n⚠️ Потеряно админство: %d — передобавьте бота в эти каналы.", lost)
+	}
+	_ = b.api.SendText(ctx, uid, msg)
+	b.showChannels(ctx, uid)
+}
+
 // handleAddChannelInput — ввод пользователя в режиме добавления канала.
 // Возвращает true, если сообщение было обработано (канал добавлен/ошибка).
 func (b *Bot) handleAddChannelInput(ctx context.Context, uid int64, msg model.MessageUpdate) (handled bool) {

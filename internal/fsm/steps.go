@@ -27,8 +27,11 @@ const (
 	StepButtonText  = "button_text"
 	StepSubChannels = "sub_channels"
 	StepPubChannels = "pub_channels"
+	StepPublishMode = "publish_mode" // выбор: сразу / по времени
 	StepPublishAt   = "publish_at"
+	StepFinishMode  = "finish_mode" // выбор: по времени / по количеству
 	StepFinishAt    = "finish_at"
+	StepFinishCount = "finish_count" // кол-во участников для finish_mode=count
 	StepWinners     = "winners"
 	StepWinnersMsg  = "winners_msg"
 	StepResultsLoc  = "results_loc"
@@ -48,8 +51,11 @@ var orderedSteps = []string{
 	StepButtonText,
 	StepSubChannels,
 	StepPubChannels,
+	StepPublishMode,
 	StepPublishAt,
+	StepFinishMode,
 	StepFinishAt,
+	StepFinishCount,
 	StepWinners,
 	StepWinnersMsg,
 	StepResultsLoc,
@@ -60,6 +66,15 @@ var orderedSteps = []string{
 
 // FirstStep — первый шаг цепочки.
 const FirstStep = StepName
+
+// SkipStepAfter — шаги, которые ПРОПУСКАЮТСЯ в зависимости от выбора режима:
+// publish_now → пропустить publish_at; finish_time → пропустить finish_count;
+// finish_count → пропустить finish_at. Используется advanceSkipping.
+var conditionalSteps = map[string]bool{
+	StepPublishAt:   true, // пропускается при «Опубликовать сразу»
+	StepFinishCount: true, // пропускается при «По времени»
+	StepFinishAt:    true, // пропускается при «По количеству»
+}
 
 // optionalSteps — шаги, которые можно пропустить (кнопка "Пропустить").
 var optionalSteps = map[string]bool{

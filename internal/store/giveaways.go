@@ -106,23 +106,45 @@ func (s *Store) ListMyParticipations(ctx context.Context, userID int64) ([]Givea
 	return res, rows.Err()
 }
 
+// fieldWhitelist — разрешённые к точечному обновлению колонки giveaways.
+var fieldWhitelist = map[string]bool{
+	"post_text": true, "post_format": true, "media_tokens": true, "button_text": true,
+	"subscribe_channel_ids": true, "publish_channel_ids": true,
+	"results_in_original_post": true, "results_post_text": true,
+	"publish_at": true, "finish_at": true, "finish_mode": true, "finish_participants_count": true,
+	"winners_count": true, "winners_message": true,
+	"referral_enabled": true, "referral_limit": true,
+	"captcha_mode": true, "captcha_percent": true, "promotion_enabled": true,
+	"draft_step": true, "name": true, "channel_select_mid": true,
+}
+
 // UpdateGiveawayField — точечное обновление одного поля черновика в процессе FSM.
 // field — имя колонки, val — значение. Безопасно: field из белого списка FSM.
+// Только для status='draft' (для scheduled/active — UpdateGiveawayFieldAny).
 func (s *Store) UpdateGiveawayField(ctx context.Context, id int64, field string, val any) error {
-	allowed := map[string]bool{
-		"post_text": true, "post_format": true, "media_tokens": true, "button_text": true,
-		"subscribe_channel_ids": true, "publish_channel_ids": true,
-		"results_in_original_post": true, "results_post_text": true,
-		"publish_at": true, "finish_at": true, "winners_count": true, "winners_message": true,
-		"referral_enabled": true, "referral_limit": true,
-		"captcha_mode": true, "captcha_percent": true, "promotion_enabled": true,
-		"draft_step": true, "name": true, "channel_select_mid": true,
-	}
-	if !allowed[field] {
+	if !fieldWhitelist[field] {
 		return ErrNotFound
 	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE giveaways SET `+field+`=$2 WHERE id=$1 AND status='draft'`, id, val)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateGiveawayFieldAny — точечное обновление поля для ЛЮБОГО статуса
+// (редактура scheduled/active розыгрышей). Тот же белый список полей.
+// Не трогает finished/cancelled логику — это ответственность вызывающего.
+func (s *Store) UpdateGiveawayFieldAny(ctx context.Context, id int64, field string, val any) error {
+	if !fieldWhitelist[field] {
+		return ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE giveaways SET `+field+`=$2, updated_at=now() WHERE id=$1`, id, val)
 	if err != nil {
 		return err
 	}
@@ -294,12 +316,19 @@ func (s *Store) ScheduledReady(ctx context.Context, now time.Time) ([]Giveaway, 
 	return s.scanGiveaways(rows)
 }
 
-// ActiveFinished — текущие розыгрыши, у которых наступило finish_at.
+// ActiveFinished — текущие розыгрыши, готовые к завершению:
+//   - finish_mode='time': наступило finish_at;
+//   - finish_mode='count': число участников достигло finish_participants_count.
 func (s *Store) ActiveFinished(ctx context.Context, now time.Time) ([]Giveaway, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+giveawayCols+` FROM giveaways
-		WHERE status='active' AND finish_at IS NOT NULL AND finish_at<=$1
-		ORDER BY finish_at
+		SELECT `+giveawayCols+` FROM giveaways g
+		WHERE status='active' AND (
+		    (COALESCE(finish_mode,'time')='time' AND finish_at IS NOT NULL AND finish_at<=$1)
+		    OR
+		    (finish_mode='count' AND finish_participants_count > 0 AND
+		     finish_participants_count <= (SELECT COUNT(*) FROM participants p WHERE p.giveaway_id = g.id))
+		)
+		ORDER BY finish_at NULLS LAST
 	`, now)
 	if err != nil {
 		return nil, err
@@ -369,7 +398,7 @@ func (s *Store) SetResultsPublished(ctx context.Context, id int64) error {
 
 const giveawayCols = `id, owner_user_id, name, post_text, post_format, media_tokens, button_text,
 	subscribe_channel_ids, publish_channel_ids, results_in_original_post, results_post_text,
-	publish_at, finish_at, winners_count, winners_message,
+	publish_at, finish_at, finish_mode, finish_participants_count, winners_count, winners_message,
 	referral_enabled, referral_limit, captcha_mode, captcha_percent, promotion_enabled,
 	draft_step, status, publish_message_ids, results_message_ids, winners_user_ids,
 	winners_notified_user_ids, results_published, channel_select_mid, created_at, updated_at`
@@ -379,7 +408,7 @@ const giveawayCols = `id, owner_user_id, name, post_text, post_format, media_tok
 var giveawayColNames = []string{
 	"id", "owner_user_id", "name", "post_text", "post_format", "media_tokens", "button_text",
 	"subscribe_channel_ids", "publish_channel_ids", "results_in_original_post", "results_post_text",
-	"publish_at", "finish_at", "winners_count", "winners_message",
+	"publish_at", "finish_at", "finish_mode", "finish_participants_count", "winners_count", "winners_message",
 	"referral_enabled", "referral_limit", "captcha_mode", "captcha_percent", "promotion_enabled",
 	"draft_step", "status", "publish_message_ids", "results_message_ids", "winners_user_ids",
 	"winners_notified_user_ids", "results_published", "channel_select_mid", "created_at", "updated_at",
@@ -428,7 +457,7 @@ func scanDest(g *Giveaway) []any {
 	return []any{
 		&g.ID, &g.OwnerUserID, &g.Name, &g.PostText, &g.PostFormat, &g.mediaTokensRaw, &g.ButtonText,
 		&g.SubscribeChannelIDs, &g.PublishChannelIDs, &g.ResultsInOriginalPost, &g.ResultsPostText,
-		&g.publishAt, &g.finishAt, &g.WinnersCount, &g.WinnersMessage,
+		&g.publishAt, &g.finishAt, &g.FinishMode, &g.FinishParticipantsCount, &g.WinnersCount, &g.WinnersMessage,
 		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
 		&g.draftStep, &g.Status, &g.publishMsgs, &g.resultsMsgs, &g.WinnersUserIDs,
 		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.CreatedAt, &g.UpdatedAt,

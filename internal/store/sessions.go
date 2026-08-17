@@ -14,6 +14,7 @@ const (
 	SessionCaptchaPct    = "captcha_pct"     // ожидание % капчи (FSM розыгрыша)
 	SessionUTMCreate     = "utm_create"      // создание UTM-ссылки
 	SessionCaptchaVerify = "captcha_verify"  // ожидание ответа капчи (при участии)
+	SessionEditField     = "edit_field"      // редактура поля розыгрыша (scheduled/active)
 )
 
 // UserSession — произвольное состояние юзера с контекстом (payload).

@@ -28,6 +28,7 @@ func (e *Engine) Confirm(ctx context.Context, id int64) error {
 }
 
 // validate проверяет обязательные поля по ТЗ.
+// Итоги: finish_mode='time' требует FinishAt, 'count' требует FinishParticipantsCount.
 func validate(g store.Giveaway) error {
 	if g.PostText == "" {
 		return &ValidationError{Msg: "не заполнен текст поста"}
@@ -44,13 +45,21 @@ func validate(g store.Giveaway) error {
 	if g.PublishAt == nil {
 		return &ValidationError{Msg: "не задана дата публикации"}
 	}
-	if g.FinishAt == nil {
-		return &ValidationError{Msg: "не задана дата подведения итогов"}
-	}
-	if !g.FinishAt.After(*g.PublishAt) {
-		return &ValidationError{Msg: fmt.Sprintf(
-			"дата итогов (%s) должна быть позже даты публикации (%s)",
-			g.FinishAt.UTC().Format("2006-01-02 15:04"), g.PublishAt.UTC().Format("2006-01-02 15:04"))}
+	// Проверка условия завершения в зависимости от режима.
+	if g.FinishMode == "count" {
+		if g.FinishParticipantsCount < 2 {
+			return &ValidationError{Msg: "не задано целевое число участников"}
+		}
+	} else {
+		// Режим по времени (дефолт).
+		if g.FinishAt == nil {
+			return &ValidationError{Msg: "не задана дата подведения итогов"}
+		}
+		if !g.FinishAt.After(*g.PublishAt) {
+			return &ValidationError{Msg: fmt.Sprintf(
+				"дата итогов (%s) должна быть позже даты публикации (%s)",
+				g.FinishAt.UTC().Format("2006-01-02 15:04"), g.PublishAt.UTC().Format("2006-01-02 15:04"))}
+		}
 	}
 	// Защита от случайного ввода прошедшего времени: публикация «в прошлом»
 	// сработала бы мгновенно (статус active), что выглядит как баг для юзера.

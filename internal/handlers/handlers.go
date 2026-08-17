@@ -18,15 +18,16 @@ import (
 
 // Bot — центральный обработчик. Один экземпляр на приложение.
 type Bot struct {
-	api         maxapi.BotAPI
-	db          *store.Store
-	engine      *fsm.Engine
-	subs        *subscription.Checker
-	captcha     *captcha.Service
-	log         *slog.Logger
-	botUsername string             // публичное имя бота (для UTM-диплинков)
-	botUserID   int64              // userID бота (для фильтра своих сообщений при /clear)
-	dedup       *dedup.Deduplicator // опционально; nil — без дедупликации
+	api          maxapi.BotAPI
+	db           *store.Store
+	engine       *fsm.Engine
+	subs         *subscription.Checker
+	captcha      *captcha.Service
+	log          *slog.Logger
+	botUsername  string // публичное имя бота (для UTM-диплинков)
+	counterUpd   func(ctx context.Context, g *store.Giveaway) // обновление счётчика участников в постах (сеттится из main, опционально)
+	lastCounters map[int64]int64                                // giveaway_id → unix-time последнего обновления счётчика (троттлинг)
+	dedup        *dedup.Deduplicator                            // опционально; nil — без дедупликации
 }
 
 // New создаёт обработчика.
@@ -35,12 +36,13 @@ func New(api maxapi.BotAPI, db *store.Store, log *slog.Logger) *Bot {
 		log = slog.Default()
 	}
 	return &Bot{
-		api:    api,
-		db:     db,
-		engine: fsm.New(db, log),
-		subs:   subscription.New(api, db, log),
-		captcha: captcha.New(0),
-		log:    log,
+		api:          api,
+		db:           db,
+		engine:       fsm.New(db, log),
+		subs:         subscription.New(api, db, log),
+		captcha:      captcha.New(0),
+		log:          log,
+		lastCounters: make(map[int64]int64),
 	}
 }
 
@@ -51,11 +53,10 @@ func (b *Bot) SetUsername(name string) {
 	}
 }
 
-// SetBotUserID сохраняет userID самого бота (для /clear — фильтр своих сообщений).
-func (b *Bot) SetBotUserID(id int64) {
-	if id != 0 {
-		b.botUserID = id
-	}
+// SetCounterUpdater подключает функцию обновления счётчика участников
+// в опубликованных постах (вызывается из main со ссылкой на Scheduler).
+func (b *Bot) SetCounterUpdater(f func(ctx context.Context, g *store.Giveaway)) {
+	b.counterUpd = f
 }
 
 // SetDedup подключает дедупликатор апдейтов (защита от повторной обработки
@@ -156,11 +157,6 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		b.sendMainMenu(ctx, uid, "Главное меню:")
 		return
 	}
-	// /clear — очистить чат с ботом (удалить сообщения бота), затем свежее меню.
-	if text == "/clear" {
-		b.clearDialog(ctx, uid)
-		return
-	}
 
 	// Состояние юзера вне FSM (добавление канала и т.п.) — приоритет.
 	session, _ := b.db.GetSession(ctx, uid)
@@ -169,16 +165,16 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		if b.handleAddChannelInput(ctx, uid, msg) {
 			return
 		}
-	case store.SessionCaptchaPct:
-		if b.handleCaptchaPctInput(ctx, uid, text) {
-			return
-		}
 	case store.SessionCaptchaVerify:
 		if b.handleCaptchaVerifyInput(ctx, uid, text) {
 			return
 		}
 	case store.SessionUTMCreate:
 		if b.handleUTMCreateInput(ctx, uid, text) {
+			return
+		}
+	case store.SessionEditField:
+		if b.handleEditFieldInput(ctx, uid, text) {
 			return
 		}
 	}
@@ -216,32 +212,7 @@ func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 
 Команды:
 /menu — главное меню
-/clear — очистить этот чат
 
 Выберите действие 👇`
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
-}
-
-// clearDialog удаляет сообщения бота в диалоге и показывает свежее меню.
-func (b *Bot) clearDialog(ctx context.Context, userID int64) {
-	// Сбрасываем активную сессию — «начать с чистого листа».
-	_ = b.db.ClearSession(ctx, userID)
-
-	// MAX API для GetMessages требует chat_id диалога, не user_id.
-	// Берём сохранённый chat_id из БД (сохраняется при каждом апдейте от юзера).
-	chatID, _ := b.db.GetDialogChatID(ctx, userID)
-	if chatID == 0 {
-		// chat_id ещё не сохранён (юзер ни разу не писал) — не можем очистить.
-		b.log.Warn("clearDialog: dialog_chat_id не найден", "user", userID)
-		b.sendMainMenu(ctx, userID, "🧹 Не удалось определить чат для очистки. Вот свежее меню:")
-		return
-	}
-
-	deleted, err := b.api.DeleteDialogMessages(ctx, chatID, b.botUserID)
-	if err != nil {
-		b.log.Warn("clearDialog", "user", userID, "chat", chatID, "err", err, "deleted", deleted)
-	}
-	b.log.Info("clearDialog", "user", userID, "chat", chatID, "deleted", deleted)
-	// Свежее меню (после очистки — это единственное сообщение бота).
-	b.sendMainMenu(ctx, userID, "🧹 Чат очищен. Главное меню:")
 }

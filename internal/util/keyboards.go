@@ -3,6 +3,7 @@ package util
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 
 	"github.com/max-messenger/max-bot-api-client-go/v2/model"
@@ -18,7 +19,8 @@ const (
 	CBMyChannels       = "my_channels"
 	CBMyParticipations = "my_participations"
 	CBSupport          = "support"
-	CBAnalytics        = "analytics" // UTM-аналитика (главное меню)
+	CBAnalytics        = "analytics"    // UTM-аналитика (главное меню)
+	CBAnalyticsTab     = "an_tab:"      // + channels|giveaways (вкладки аналитики)
 
 	// Фильтры "мои розыгрыши"
 	CBGiveawayFilter = "gw_filter:" // + status
@@ -26,12 +28,17 @@ const (
 	CBGwOpen         = "gw_open:" // + giveaway_id
 	CBGwCancel       = "gw_cancel:"
 	CBGwDelete       = "gw_delete:"
-	CBGwEdit         = "gw_edit:"
+	CBGwEdit         = "gw_edit:"                    // продолжить создание/редактировать
+	CBGwEditField    = "gw_ef:"                      // + field:giveaway_id (меню редактирования поля)
+	CBGwEditSet      = "gw_es:"                      // + key:value:giveaway_id (выбор-опции)
+	CBGwExtraWinner  = "gw_extra_winner:"            // + giveaway_id (доп. победитель)
+	CBGwAnalytics    = "gw_analytics:"               // + giveaway_id (аналитика розыгрыша)
 
 	// Каналы
 	CBChannelAdd       = "ch_add"
 	CBChannelBack      = "ch_back"
 	CBChannelAnalytics = "ch_analytics" // вход в аналитику/UTM канала
+	CBChannelRefresh   = "ch_refresh"   // 🔄 обновить статус админства бота во всех каналах
 
 	// UTM-трекинг
 	CBChannelUTM  = "ch_utm:"  // + channel_id — меню UTM конкретного канала
@@ -47,6 +54,7 @@ const (
 	CBFSMConfirm  = "fsm_confirm"
 	CBFSMReject   = "fsm_reject"
 	CBFSMSaveDraft = "fsm_save" // сохранить в черновик (выйти из FSM, сохранив)
+	CBFSMHint     = "fsm_hint"  // 💡 краткая подсказка по текущему шагу
 
 	// Кнопка "Участвовать" под постом розыгрыша
 	CBParticipate = "part:" // + giveaway_id
@@ -64,21 +72,22 @@ func MainMenuKeyboard() *model.Keyboard {
 	return kb
 }
 
-// NavKeyboard — Назад / Отменить.
-// «Сохранить в черновик» убран — черновик автосохраняется после ввода названия.
+// NavKeyboard — 💡 / Назад / Отменить.
 func NavKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().
+		AddCallBack("💡", CBFSMHint).
 		AddCallBack("← Назад", CBFSMBack).
 		AddCallBack("✖ Отменить", CBFSMCancel)
 	return kb
 }
 
-// NavWithSkipKeyboard — Пропустить / Назад / Отменить.
+// NavWithSkipKeyboard — Пропустить / 💡 / Назад / Отменить.
 func NavWithSkipKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("⏭ Пропустить", CBFSMSkip)
 	kb.AddRow().
+		AddCallBack("💡", CBFSMHint).
 		AddCallBack("← Назад", CBFSMBack).
 		AddCallBack("✖ Отменить", CBFSMCancel)
 	return kb
@@ -101,18 +110,20 @@ func ConfirmKeyboard() *model.Keyboard {
 	return kb
 }
 
-// ParticipateKeyboardBuilder — кнопка «Участвовать» под постом розыгрыша.
+// ParticipateKeyboardBuilder — кнопка «Участвовать (N)» под постом розыгрыша.
 // Использует ButtonLink с deep link (https://max.ru/<bot>/start/part_<id>) —
 // при нажатии MAX ОТКРЫВАЕТ диалог с ботом (callback-кнопка этого не делает).
-// botUsername — публичное имя бота (без @).
-func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername string) *model.Keyboard {
+// botUsername — публичное имя бота (без @). participants — текущее число
+// участников (отображается в кнопке).
+func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername string, participants int) *model.Keyboard {
 	kb := model.NewKeyboard()
 	botName := botUsername
 	if botName == "" {
 		botName = "max_bot"
 	}
 	link := "https://max.ru/" + botName + "/start/part_" + strconv.FormatInt(giveawayID, 10)
-	kb.AddRow().AddLink(buttonText, link)
+	label := fmt.Sprintf("%s (%d)", buttonText, participants)
+	kb.AddRow().AddLink(label, link)
 	return kb
 }
 
@@ -150,7 +161,7 @@ func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []Medi
 	if preview {
 		kb = PreviewKeyboardBuilder(buttonText, giveawayID)
 	} else {
-		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, botUsername)
+		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, botUsername, 0)
 	}
 	attachments = append(attachments, kb.Build())
 	return attachments
@@ -173,6 +184,13 @@ func BackKeyboard() *model.Keyboard {
 func ChannelAddKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("✖ Отмена", CBChannelBack)
+	return kb
+}
+
+// CancelEditKeyboard — отмена редактирования поля, назад в меню розыгрыша.
+func CancelEditKeyboard(giveawayID int64) *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("✖ Отмена", CBGwOpen+strconv.FormatInt(giveawayID, 10))
 	return kb
 }
 

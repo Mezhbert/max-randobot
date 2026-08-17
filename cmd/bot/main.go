@@ -21,6 +21,7 @@ import (
 	"github.com/maxbot/giveawaybot/internal/maxapi"
 	"github.com/maxbot/giveawaybot/internal/scheduler"
 	"github.com/maxbot/giveawaybot/internal/store"
+	"github.com/maxbot/giveawaybot/internal/webapp"
 	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
 
@@ -66,15 +67,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	bot := handlers.New(api, db, slog.Default())
-	bot.SetDedup(dedup.New(dedupTTL(cfg.DedupTTL), 0))
-
 	// Встроенный планировщик: сам раз в 30 секунд публикует наступившие
 	// розыгрыши (scheduled → active) и подводит итоги завершившихся
 	// (active → finished). Раньше это делал внешний crontab, который легко
 	// забывается настроить — из-за чего розыгрыши не публиковались во время.
 	// Встроенный тикер убирает эту зависимость: всё работает в одном процессе.
 	sch := scheduler.New(api, db, slog.Default())
+
+	bot := handlers.New(api, db, slog.Default())
+	bot.SetDedup(dedup.New(dedupTTL(cfg.DedupTTL), 0))
+	bot.SetCounterUpdater(sch.UpdateParticipantCounter)
+
 	schedCtx, schedStop := context.WithCancel(context.Background())
 	defer schedStop()
 	go runScheduler(schedCtx, sch)
@@ -101,8 +104,8 @@ func main() {
 				slog.Info("bot username", "name", info.Username)
 			}
 			if info.UserID != 0 {
-				bot.SetBotUserID(info.UserID)
-				slog.Info("bot user_id", "id", info.UserID)
+				sch.SetBotUserID(info.UserID)
+				slog.Info("bot user_id (для open_app)", "id", info.UserID)
 			}
 		}
 		if err := api.RegisterCommands(ic); err != nil {
@@ -154,6 +157,8 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		api.Metrics().WritePrometheus(w)
 	})
+	// Мини-апп: статика + API. URL прописывается в MasterBot (см. README).
+	mux.Handle("/app/", webapp.Handler(db, slog.Default()))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

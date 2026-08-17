@@ -383,33 +383,40 @@ func TestFSM_FullCreateFlow_Scheduled(t *testing.T) {
 	// 6) Канал публикации — выбираем тогглом, затем «Далее».
 	click("ch_toggle_pub:" + strconv.FormatInt(ch.ID, 10))
 	click(util.CBFSMOption + "next")
+	require.Equal(t, fsm.StepPublishMode, curStep())
+
+	// 7) Публикация — «По времени».
+	click(util.CBFSMOption + "publish_later")
 	require.Equal(t, fsm.StepPublishAt, curStep())
 
-	// 7) Дата публикации — в будущем. Форматируем по МСК (как видит юзер),
-	// чтобы ParseMoscowTime дал корректное UTC-значение в будущем.
+	// 8) Дата публикации — в будущем (формат МСК).
 	pubAt := time.Now().Add(48 * time.Hour)
 	sendText(util.FormatMoscowTime(pubAt))
+	require.Equal(t, fsm.StepFinishMode, curStep())
+
+	// 9) Итоги — «По времени».
+	click(util.CBFSMOption + "finish_time")
 	require.Equal(t, fsm.StepFinishAt, curStep())
 
-	// 8) Дата итогов — ещё дальше.
+	// 10) Дата итогов — ещё дальше.
 	finAt := time.Now().Add(7 * 24 * time.Hour)
 	sendText(util.FormatMoscowTime(finAt))
 	require.Equal(t, fsm.StepWinners, curStep())
 
-	// 9) Победители.
+	// 11) Победители.
 	sendText("3")
 	require.Equal(t, fsm.StepWinnersMsg, curStep())
 
-	// 10) Сообщение победителям — пропустить.
+	// 12) Сообщение победителям — пропустить.
 	click(util.CBFSMSkip)
 	require.Equal(t, fsm.StepResultsLoc, curStep())
 
-	// 11) Итоги — «В исходном посте» → должен перепрыгнуть results_text.
+	// 13) Итоги — «В исходном посте» → перепрыгнуть results_text.
 	click(util.CBFSMOption + "results_original")
 	require.Equal(t, fsm.StepCaptcha, curStep(),
 		"results_original должен перепрыгнуть шаг results_text к captcha")
 
-	// 12) Капча — «Нет».
+	// 14) Капча — «Нет».
 	click(util.CBFSMOption + "captcha_none")
 	require.Equal(t, fsm.StepPreview, curStep())
 
@@ -424,9 +431,88 @@ func TestFSM_FullCreateFlow_Scheduled(t *testing.T) {
 	assert.Len(t, got.PublishChannelIDs, 1)
 	assert.Equal(t, ch.ID, got.PublishChannelIDs[0])
 	assert.True(t, got.ResultsInOriginalPost, "results_in_original_post должен быть TRUE")
+	assert.Equal(t, "time", got.FinishMode, "режим итогов — по времени")
 	// post_text сохранён.
 	assert.Equal(t, "Пост розыгрыша", got.PostText)
 	assert.Equal(t, "Супер-конкурс", got.Name)
+}
+
+// TestFSM_PublishNow_SkipsDateStep — «Опубликовать сразу» пропускает ввод даты
+// и ставит publish_at ≈ now+1min.
+func TestFSM_PublishNow_SkipsDateStep(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const owner = 5005
+	testutil.EnsureUser(t, s, owner, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{
+		OwnerUserID: owner, ChatID: 7003, Title: "Канал", Link: "l", IsPublic: true, IsBotAdmin: true,
+	})
+	require.NoError(t, err)
+
+	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
+	g, err := s.GetDraftGiveaway(ctx, owner)
+	require.NoError(t, err)
+
+	// Заполняем минимум и прыгаем на шаг режима публикации.
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "Fast"))
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "post_text", "Пост"))
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "button_text", "Участвовать"))
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_channel_ids", []int64{ch.ID}))
+	require.NoError(t, s.SetDraftStep(ctx, g.ID, fsm.StepPublishMode))
+
+	b.Handle(ctx, callbackUpdate(owner, util.CBFSMOption+"publish_now"))
+
+	// Шаг publish_at пропущен → сразу finish_mode.
+	gg, err := s.GetDraftGiveaway(ctx, owner)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepFinishMode, gg.DraftStep, "publish_now должен пропустить publish_at")
+
+	// publish_at установлен ≈ now+1min.
+	require.NotNil(t, gg.PublishAt)
+	assert.WithinDuration(t, time.Now().Add(time.Minute), *gg.PublishAt, 2*time.Minute)
+}
+
+// TestFSM_FinishByCount — «По количеству участников» пропускает finish_at,
+// запрашивает число, валидирует.
+func TestFSM_FinishByCount(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const owner = 5006
+	testutil.EnsureUser(t, s, owner, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{
+		OwnerUserID: owner, ChatID: 7004, Title: "Канал", Link: "l", IsPublic: true, IsBotAdmin: true,
+	})
+	require.NoError(t, err)
+
+	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
+	g, err := s.GetDraftGiveaway(ctx, owner)
+	require.NoError(t, err)
+
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "Count"))
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "post_text", "Пост"))
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "button_text", "Участвовать"))
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_channel_ids", []int64{ch.ID}))
+	pub := time.Now().Add(2 * time.Hour)
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_at", pub))
+	require.NoError(t, s.SetDraftStep(ctx, g.ID, fsm.StepFinishMode))
+
+	// «По количеству» — шаг finish_at пропускается, запрашивается число.
+	b.Handle(ctx, callbackUpdate(owner, util.CBFSMOption+"finish_count"))
+	gg, err := s.GetDraftGiveaway(ctx, owner)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepFinishCount, gg.DraftStep)
+	assert.Equal(t, "count", gg.FinishMode)
+
+	// Вводим число.
+	b.Handle(ctx, msgUpdate(owner, "100"))
+	g3, err := s.GetDraftGiveaway(ctx, owner)
+	require.NoError(t, err)
+	assert.Equal(t, 100, g3.FinishParticipantsCount)
+	assert.Equal(t, fsm.StepWinners, g3.DraftStep)
 }
 
 // TestFSM_ResultsSeparate_AsksForResultsText — выбор «отдельным постом»

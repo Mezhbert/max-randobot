@@ -86,10 +86,16 @@ func (b *Bot) showGiveawayDetails(ctx context.Context, uid, id int64) {
 		kb.AddRow().AddCallBack("▶ Продолжить создание", util.CBGwEdit+fmt.Sprintf("%d", g.ID))
 		kb.AddRow().AddCallBack("🗑 Удалить черновик", util.CBGwDelete+fmt.Sprintf("%d", g.ID))
 	case store.StatusScheduled:
+		kb.AddRow().AddCallBack("📊 Аналитика", util.CBGwAnalytics+fmt.Sprintf("%d", g.ID))
 		kb.AddRow().AddCallBack("✏ Редактировать", util.CBGwEdit+fmt.Sprintf("%d", g.ID))
 		kb.AddRow().AddCallBack("🗑 Отменить", util.CBGwCancel+fmt.Sprintf("%d", g.ID))
 	case store.StatusActive:
+		kb.AddRow().AddCallBack("📊 Аналитика", util.CBGwAnalytics+fmt.Sprintf("%d", g.ID))
+		kb.AddRow().AddCallBack("✏ Редактировать", util.CBGwEdit+fmt.Sprintf("%d", g.ID))
 		kb.AddRow().AddCallBack("🗑 Отменить", util.CBGwCancel+fmt.Sprintf("%d", g.ID))
+	case store.StatusFinished:
+		kb.AddRow().AddCallBack("📊 Аналитика", util.CBGwAnalytics+fmt.Sprintf("%d", g.ID))
+		kb.AddRow().AddCallBack("🎲 Доп. победитель", util.CBGwExtraWinner+fmt.Sprintf("%d", g.ID))
 	}
 	kb.AddRow().AddCallBack("← Назад", util.CBGwList)
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
@@ -128,6 +134,9 @@ func (b *Bot) showChannels(ctx context.Context, uid int64) {
 		}
 	}
 	kb.AddRow().AddCallBack("➕ Добавить канал", util.CBChannelAdd)
+	if len(items) > 0 {
+		kb.AddRow().AddCallBack("🔄 Обновить статус", util.CBChannelRefresh)
+	}
 	kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
 }
@@ -187,18 +196,33 @@ func truncate(s string, max int) string {
 	return s[:max-1] + "…"
 }
 
-// showAnalyticsMenu — экран выбора канала для UTM-аналитики.
-// Показывает только каналы, где бот админ (иначе анализировать нечего).
-func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64) {
+// showAnalyticsMenu — главная аналитика: вкладки «Каналы» (UTM) / «Розыгрыши».
+// tab: "" → выбор вкладки; "channels" → список каналов; "giveaways" → список розыгрышей.
+func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string) {
+	switch tab {
+	case "channels":
+		b.showAnalyticsChannels(ctx, uid)
+	case "giveaways":
+		b.showAnalyticsGiveaways(ctx, uid)
+	default:
+		kb := model.NewKeyboard()
+		kb.AddRow().AddCallBack("📢 Каналы (UTM-источники)", util.CBAnalyticsTab+"channels")
+		kb.AddRow().AddCallBack("🎁 Розыгрыши (участники)", util.CBAnalyticsTab+"giveaways")
+		kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "📊 Аналитика\n\nВыберите раздел:", kb)
+	}
+}
+
+// showAnalyticsChannels — список каналов для UTM-аналитики (только где бот админ).
+func (b *Bot) showAnalyticsChannels(ctx context.Context, uid int64) {
 	channels, err := b.db.ListChannels(ctx, uid)
 	if err != nil || len(channels) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"📊 Аналитика\n\nУ вас пока нет каналов.\nДобавьте канал в «Мои каналы» — где бот админ.",
+			"📊 Аналитика → Каналы\n\nУ вас пока нет каналов.\nДобавьте канал в «Мои каналы» — где бот админ.",
 			util.BackKeyboard())
 		return
 	}
 
-	// Фильтруем только каналы где бот админ.
 	var adminChs []store.Channel
 	for _, c := range channels {
 		if c.IsBotAdmin {
@@ -207,7 +231,7 @@ func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64) {
 	}
 	if len(adminChs) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"📊 Аналитика\n\nНет каналов, где бот админ.\nСначала добавьте бота админом в канал.",
+			"📊 Аналитика → Каналы\n\nНет каналов, где бот админ.\nСначала добавьте бота админом в канал.",
 			util.BackKeyboard())
 		return
 	}
@@ -220,8 +244,37 @@ func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64) {
 		}
 		kb.AddRow().AddCallBack("📊 "+title, util.CBChannelUTM+fmt.Sprintf("%d", c.ID))
 	}
+	kb.AddRow().AddCallBack("← Разделы аналитики", util.CBAnalytics)
 	kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"📊 Аналитика источников подписчиков\n\nВыберите канал для просмотра статистики:",
+		"📊 Аналитика → Каналы\n\nВыберите канал для просмотра UTM-статистики:",
+		kb)
+}
+
+// showAnalyticsGiveaways — список розыгрышей для аналитики участников.
+func (b *Bot) showAnalyticsGiveaways(ctx context.Context, uid int64) {
+	items, err := b.db.ListGiveaways(ctx, uid, "")
+	if err != nil || len(items) == 0 {
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"📊 Аналитика → Розыгрыши\n\nУ вас пока нет розыгрышей.",
+			util.BackKeyboard())
+		return
+	}
+
+	kb := model.NewKeyboard()
+	for _, g := range items {
+		if g.Status == store.StatusDraft {
+			continue // черновики без аналитики
+		}
+		title := g.Name
+		if title == "" {
+			title = "(без названия)"
+		}
+		kb.AddRow().AddCallBack(fmt.Sprintf("📊 %s", title), util.CBGwAnalytics+fmt.Sprintf("%d", g.ID))
+	}
+	kb.AddRow().AddCallBack("← Разделы аналитики", util.CBAnalytics)
+	kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		"📊 Аналитика → Розыгрыши\n\nВыберите розыгрыш для просмотра статистики участников:",
 		kb)
 }

@@ -11,7 +11,9 @@ import (
 func TestOrderedStepsContainsAll(t *testing.T) {
 	want := []string{
 		StepName, StepPostText, StepMedia, StepButtonText,
-		StepSubChannels, StepPubChannels, StepPublishAt, StepFinishAt,
+		StepSubChannels, StepPubChannels,
+		StepPublishMode, StepPublishAt,
+		StepFinishMode, StepFinishAt, StepFinishCount,
 		StepWinners, StepWinnersMsg, StepResultsLoc, StepResultsText,
 		StepCaptcha, StepPreview,
 	}
@@ -28,6 +30,12 @@ func TestNextStep(t *testing.T) {
 		StepName:        StepPostText,
 		StepPostText:    StepMedia,
 		StepMedia:       StepButtonText,
+		StepPubChannels: StepPublishMode,
+		StepPublishMode: StepPublishAt,
+		StepPublishAt:   StepFinishMode,
+		StepFinishMode:  StepFinishAt,
+		StepFinishAt:    StepFinishCount,
+		StepFinishCount: StepWinners,
 		StepResultsLoc:  StepResultsText,
 		StepResultsText: StepCaptcha,
 		StepCaptcha:     StepPreview,

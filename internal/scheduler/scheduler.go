@@ -32,6 +32,7 @@ type Scheduler struct {
 	db          *store.Store
 	log         *slog.Logger
 	botUsername string // для построения deep-link кнопки «Участвовать»
+	botUserID   int64  // для open_app-кнопки «Проверить результаты» (contact_id)
 }
 
 // New создаёт Scheduler.
@@ -46,6 +47,13 @@ func New(api maxapi.BotAPI, db *store.Store, log *slog.Logger) *Scheduler {
 func (s *Scheduler) SetBotUsername(name string) {
 	if name != "" {
 		s.botUsername = name
+	}
+}
+
+// SetBotUserID задаёт ID бота (contact_id для open_app-кнопки результатов).
+func (s *Scheduler) SetBotUserID(id int64) {
+	if id != 0 {
+		s.botUserID = id
 	}
 }
 
@@ -95,7 +103,8 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 		return fmt.Errorf("publish: нет каналов публикации")
 	}
 
-	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername).Build()}
+	// Кнопка участия со счётчиком участников (стартует с 0).
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, 0).Build()}
 	var media []model.Attachment
 	for _, m := range g.MediaTokens {
 		switch m.Type {
@@ -127,6 +136,10 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 			s.log.Warn("publish to channel", "channel", ch.ChatID, "err", err)
 			continue
 		}
+		// Закрепляем пост — чтобы кнопка участия была видна в закрепе.
+		if err := s.api.PinChatMessage(ctx, ch.ChatID, mid); err != nil {
+			s.log.Warn("pin post (не критично)", "channel", ch.ChatID, "err", err)
+		}
 		// Сохраняем mid сразу после каждой отправки — чтобы при краше до смены
 		// статуса следующий прогон не переиздал пост в этот канал.
 		if err := s.db.StorePublishMessageID(ctx, g.ID, ch.ChatID, mid); err != nil {
@@ -146,6 +159,35 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 		return revert("ни один канал не принял пост", fmt.Errorf("no channel published"))
 	}
 	return s.db.MarkPublished(ctx, g.ID)
+}
+
+// UpdateParticipantCounter обновляет кнопку «Участвовать (N)» в опубликованных
+// постах — редактирует каждый пост с новым счётчиком. Вызывается из
+// registerParticipant после добавления участника (не чаще раз в 10с —
+// защита от rps при наплыве участников).
+func (s *Scheduler) UpdateParticipantCounter(ctx context.Context, g *store.Giveaway) {
+	count, err := s.db.CountParticipants(ctx, g.ID)
+	if err != nil {
+		return
+	}
+
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, count).Build()}
+	var media []model.Attachment
+	for _, m := range g.MediaTokens {
+		switch m.Type {
+		case "image":
+			media = append(media, model.Attachment{Type: model.AttachImage, Payload: model.Payload{Token: m.Token}})
+		case "video":
+			media = append(media, model.Attachment{Type: model.AttachVideo, Payload: model.Payload{Token: m.Token}})
+		}
+	}
+	attachments := append(media, buttons...)
+
+	for chatID, mid := range g.PublishMessageIDs {
+		if err := s.api.EditChatText(ctx, mid, g.PostText, attachments, model.TextFormat(g.PostFormat)); err != nil {
+			s.log.Debug("update counter in post", "giveaway", g.ID, "chat", chatID, "err", err)
+		}
+	}
 }
 
 // FinishPending подводит итоги для всех active-розыгрышей, у которых наступило finish_at.
@@ -233,26 +275,26 @@ func (s *Scheduler) finishOne(ctx context.Context, id int64) error {
 
 // publishResults публикует итоги: либо редактирует исходный пост, либо (при
 // ошибке/недоступности редактирования — fallback) отправляет отдельным постом.
+// Победители — кликабельные упоминания markdown [Имя](max://user/ID).
+// Вместо кнопки участия — кнопка «🏆 Проверить результаты» (open_app мини-апп).
 // Гарантия: итоги появляются ровно один раз.
 func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winners []int64) error {
-	// Резолвим отображаемые имена победителей через БД.
-	names := make([]string, 0, len(winners))
-	for _, wid := range winners {
-		names = append(names, s.userName(ctx, wid))
-	}
-	resultsText := BuildResultsText(g, names)
-	format := model.TextFormat(g.PostFormat)
+	// Резолвим имена победителей через БД.
+	ws := s.resolveWinners(ctx, winners)
+
+	// Кнопка «Проверить результаты» — открывает мини-апп с деталями.
+	resultsBtn := s.resultsKeyboard(g)
 
 	if g.ResultsInOriginalPost && len(g.PublishMessageIDs) > 0 {
 		// Ветка «в исходном посте»: оригинальный текст сохраняется, итоги дописываются.
-		appendedText := BuildResultsAppended(g, names)
+		appendedText := BuildResultsAppended(g, ws)
 		for chatID, mid := range g.PublishMessageIDs {
-			if err := s.api.EditChatText(ctx, mid, appendedText, nil, format); err != nil {
+			if err := s.api.EditChatText(ctx, mid, appendedText, resultsBtn, model.FormatMarkdown); err != nil {
 				// MAX ограничивает время на редактирование сообщения; для длинного
 				// розыгрыша edit молча падал. Логируем и делаем fallback — отдельный пост.
 				s.log.Warn("edit results into original post — fallback to separate post",
 					"giveaway", g.ID, "chat", chatID, "mid", mid, "err", err)
-				if nmid, ferr := s.api.SendToChat(ctx, chatID, appendedText, nil, format); ferr == nil {
+				if nmid, ferr := s.api.SendToChat(ctx, chatID, appendedText, resultsBtn, model.FormatMarkdown); ferr == nil {
 					_ = s.db.StoreResultsMessageID(ctx, g.ID, chatID, nmid)
 				} else {
 					s.log.Error("results fallback send failed", "giveaway", g.ID, "chat", chatID, "err", ferr)
@@ -262,11 +304,8 @@ func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winne
 		return s.db.SetResultsPublished(ctx, g.ID)
 	}
 
-	// Ветка «отдельным постом» (или нет исходных postов — нештатно, шлём текст итогов).
-	body := g.ResultsPostText
-	if body == "" {
-		body = resultsText
-	}
+	// Ветка «отдельным постом».
+	resultsText := BuildResultsText(g, ws)
 	channels, err := s.db.ChannelsByIDs(ctx, g.OwnerUserID, g.PublishChannelIDs)
 	if err != nil {
 		return fmt.Errorf("load channels: %w", err)
@@ -276,7 +315,7 @@ func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winne
 		if _, ok := g.ResultsMessageIDs[ch.ChatID]; ok {
 			continue
 		}
-		mid, err := s.api.SendToChat(ctx, ch.ChatID, body, nil, format)
+		mid, err := s.api.SendToChat(ctx, ch.ChatID, resultsText, resultsBtn, model.FormatMarkdown)
 		if err != nil {
 			s.log.Warn("results post to channel", "channel", ch.ChatID, "err", err)
 			continue
@@ -286,44 +325,77 @@ func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winne
 	return s.db.SetResultsPublished(ctx, g.ID)
 }
 
-// userName возвращает отображаемое имя пользователя для текста итогов.
-func (s *Scheduler) userName(ctx context.Context, userID int64) string {
-	u, err := s.db.GetUser(ctx, userID)
-	if err != nil {
-		return fmt.Sprintf("[id:%d]", userID)
+// resultsKeyboard — клавиатура с кнопкой «Проверить результаты» (open_app).
+// Если botUserID неизвестен — callback-кнопка (мини-апп не настроен).
+func (s *Scheduler) resultsKeyboard(g *store.Giveaway) []model.Attachment {
+	kb := model.NewKeyboard()
+	if s.botUserID != 0 {
+		btn := model.Button{
+			Type:      model.ButtonOpenApp,
+			Text:      "🏆 Проверить результаты",
+			WebApp:    s.botUsername, // игнорируется сервером при contact_id
+			ContactID: s.botUserID,
+			Payload:   fmt.Sprintf("results_%d", g.ID),
+		}
+		kb.AddRow().AddButton(btn)
+	} else {
+		kb.AddRow().AddCallBack("🏆 Итоги подведены", "results_done:"+fmt.Sprintf("%d", g.ID))
 	}
-	if u.Username != "" {
-		return "@" + u.Username
-	}
-	if u.FirstName != "" {
-		return u.FirstName
-	}
-	return fmt.Sprintf("[id:%d]", userID)
+	return []model.Attachment{kb.Build()}
 }
 
-// BuildResultsText строит текст поста/редакта с итогами. Чистая функция над
-// готовыми именами — вынесена для юнит-тестов без БД/сети.
-func BuildResultsText(g *store.Giveaway, winnerNames []string) string {
+// Winner — победитель с именем и ID (для кликабельного упоминания).
+type Winner struct {
+	Name   string
+	UserID int64
+}
+
+// resolveWinners резолвит ID победителей в имена через БД.
+func (s *Scheduler) resolveWinners(ctx context.Context, ids []int64) []Winner {
+	ws := make([]Winner, 0, len(ids))
+	for _, id := range ids {
+		u, err := s.db.GetUser(ctx, id)
+		if err != nil || u.FirstName == "" {
+			ws = append(ws, Winner{Name: fmt.Sprintf("Участник #%d", id), UserID: id})
+			continue
+		}
+		ws = append(ws, Winner{Name: u.FirstName, UserID: id})
+	}
+	return ws
+}
+
+// mentionLink — кликабельное markdown-упоминание пользователя.
+// MAX: [Имя](max://user/<id>) — тап открывает профиль, юзер получает уведомление.
+func mentionLink(w Winner) string {
+	return fmt.Sprintf("[%s](max://user/%d)", w.Name, w.UserID)
+}
+
+// winnersLine — строка победителей (упоминания через запятую или списком).
+func winnersLine(ws []Winner) string {
+	parts := make([]string, 0, len(ws))
+	for _, w := range ws {
+		parts = append(parts, mentionLink(w))
+	}
 	sep := ", "
-	if len(winnerNames) > 5 {
+	if len(ws) > 5 {
 		sep = "\n• "
 	}
+	return strings.Join(parts, sep)
+}
+
+// BuildResultsText строит текст отдельного поста с итогами (markdown, упоминания).
+func BuildResultsText(g *store.Giveaway, ws []Winner) string {
 	body := g.ResultsPostText
 	if body == "" {
 		body = "🏁 Итоги розыгрыша"
 	}
-	return fmt.Sprintf("%s\n\nПобедители (%d): %s", body, len(winnerNames), strings.Join(winnerNames, sep))
+	return fmt.Sprintf("%s\n\nПобедители (%d): %s", body, len(ws), winnersLine(ws))
 }
 
 // BuildResultsAppended сохраняет оригинальный текст поста розыгрыша и дополняет
-// его блоком итогов. Используется при results_in_original_post=true: исходный
-// пост не заменяется на «🏁 Итоги», а получает итоги в конце.
-func BuildResultsAppended(g *store.Giveaway, winnerNames []string) string {
-	sep := ", "
-	if len(winnerNames) > 5 {
-		sep = "\n• "
-	}
-	suffix := fmt.Sprintf("🏁 Итоги!\nПобедители (%d): %s", len(winnerNames), strings.Join(winnerNames, sep))
+// его блоком итогов с кликабельными победителями (markdown-упоминания).
+func BuildResultsAppended(g *store.Giveaway, ws []Winner) string {
+	suffix := fmt.Sprintf("🏁 Итоги!\nПобедители (%d): %s", len(ws), winnersLine(ws))
 	if g.PostText == "" {
 		return suffix
 	}

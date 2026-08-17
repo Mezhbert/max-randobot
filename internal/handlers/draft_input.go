@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/maxbot/giveawaybot/internal/fsm"
 	"github.com/maxbot/giveawaybot/internal/store"
@@ -24,6 +25,9 @@ func (b *Bot) handleDraftInput(ctx context.Context, userID int64, g store.Giveaw
 }
 
 // advance переходит к следующему шагу и показывает его приглашение.
+// Условные шаги (publish_at/finish_at/finish_count) авто-пропускаются
+// по выбранному режиму: publish_now → без publish_at; finish=time → без
+// finish_count; finish=count → без finish_at.
 func (b *Bot) advance(ctx context.Context, userID int64, giveawayID int64, currentStep string) {
 	g, err := b.db.GetGiveawayAny(ctx, giveawayID)
 	if err != nil {
@@ -40,7 +44,26 @@ func (b *Bot) advance(ctx context.Context, userID int64, giveawayID int64, curre
 		_ = b.db.UpdateGiveawayField(ctx, giveawayID, "channel_select_mid", nil)
 		g.ChannelSelectMID = ""
 	}
+	// Авто-пропуск условных шагов по режиму (цепочкой — вдруг два подряд).
+	for skipConditional(g, next) {
+		n2, err := b.engine.GoNext(ctx, giveawayID, next)
+		if err != nil {
+			break
+		}
+		next = n2
+	}
 	b.showStep(ctx, userID, g, next)
+}
+
+// skipConditional — нужно ли пропустить шаг в зависимости от режима розыгрыша.
+func skipConditional(g store.Giveaway, step string) bool {
+	switch step {
+	case fsm.StepFinishCount:
+		return g.FinishMode != "count" // режим по времени → count не нужен
+	case fsm.StepFinishAt:
+		return g.FinishMode == "count" // режим по количеству → дата не нужна
+	}
+	return false
 }
 
 // advanceSkipping переходит к следующему шагу, но если он совпадает с skip —
@@ -162,6 +185,7 @@ func buildChannelSelectKB(ctx context.Context, b *Bot, userID int64, g store.Giv
 	}
 	kb.AddRow().AddCallBack("Далее →", util.CBFSMOption+"next")
 	kb.AddRow().
+		AddCallBack("💡", util.CBFSMHint).
 		AddCallBack("← Назад", util.CBFSMBack).
 		AddCallBack("✖ Отменить", util.CBFSMCancel)
 
@@ -171,16 +195,53 @@ func buildChannelSelectKB(ctx context.Context, b *Bot, userID int64, g store.Giv
 	return text, kb
 }
 
-// kbForStep возвращает клавиатуру для шага (навигация + опции).
-// «Сохранить в черновик» убран — черновик сохраняется автоматически после ввода названия.
+// kbForStep возвращает клавиатуру для шага (навигация + опции + 💡 подсказка).
+// Для шагов дат добавлена кнопка 📋 — копирует шаблон текущего времени МСК
+// в буфер обмена (type=clipboard), чтобы вставить и поправить.
 func kbForStep(step string) *model.Keyboard {
 	switch step {
+	case fsm.StepPublishAt, fsm.StepFinishAt:
+		kb := model.NewKeyboard()
+		kb.AddRow().AddClipboard("📋 Скопировать формат даты", util.FormatMoscowTime(time.Now().Add(time.Hour)))
+		kb.AddRow().
+			AddCallBack("💡", util.CBFSMHint).
+			AddCallBack("← Назад", util.CBFSMBack).
+			AddCallBack("✖ Отменить", util.CBFSMCancel)
+		return kb
+	case fsm.StepPublishMode:
+		kb := model.NewKeyboard()
+		kb.AddRow().
+			AddCallBack("🚀 Опубликовать сразу", util.CBFSMOption+"publish_now").
+			AddCallBack("🕐 По времени", util.CBFSMOption+"publish_later")
+		kb.AddRow().
+			AddCallBack("💡", util.CBFSMHint).
+			AddCallBack("← Назад", util.CBFSMBack).
+			AddCallBack("✖ Отменить", util.CBFSMCancel)
+		return kb
+	case fsm.StepFinishMode:
+		kb := model.NewKeyboard()
+		kb.AddRow().
+			AddCallBack("⏰ По времени", util.CBFSMOption+"finish_time").
+			AddCallBack("👥 По количеству участников", util.CBFSMOption+"finish_count")
+		kb.AddRow().
+			AddCallBack("💡", util.CBFSMHint).
+			AddCallBack("← Назад", util.CBFSMBack).
+			AddCallBack("✖ Отменить", util.CBFSMCancel)
+		return kb
+	case fsm.StepFinishCount:
+		kb := model.NewKeyboard()
+		kb.AddRow().
+			AddCallBack("💡", util.CBFSMHint).
+			AddCallBack("← Назад", util.CBFSMBack).
+			AddCallBack("✖ Отменить", util.CBFSMCancel)
+		return kb
 	case fsm.StepMedia, fsm.StepWinnersMsg, fsm.StepButtonText, fsm.StepResultsText:
 		return util.NavWithSkipKeyboard()
 	case fsm.StepSubChannels, fsm.StepPubChannels:
 		kb := model.NewKeyboard()
 		kb.AddRow().AddCallBack("Далее →", util.CBFSMOption+"next")
 		kb.AddRow().
+			AddCallBack("💡", util.CBFSMHint).
 			AddCallBack("← Назад", util.CBFSMBack).
 			AddCallBack("✖ Отменить", util.CBFSMCancel)
 		return kb
@@ -190,17 +251,17 @@ func kbForStep(step string) *model.Keyboard {
 			AddCallBack("В исходном посте", util.CBFSMOption+"results_original").
 			AddCallBack("Отдельным постом", util.CBFSMOption+"results_separate")
 		kb.AddRow().
+			AddCallBack("💡", util.CBFSMHint).
 			AddCallBack("← Назад", util.CBFSMBack).
 			AddCallBack("✖ Отменить", util.CBFSMCancel)
 		return kb
 	case fsm.StepCaptcha:
 		kb := model.NewKeyboard()
 		kb.AddRow().
-			AddCallBack("Нет", util.CBFSMOption+"captcha_none").
-			AddCallBack("Для всех", util.CBFSMOption+"captcha_all").
-			AddCallBack("Для процента", util.CBFSMOption+"captcha_percent")
+			AddCallBack("✅ Да", util.CBFSMOption+"captcha_all").
+			AddCallBack("❌ Нет", util.CBFSMOption+"captcha_none")
 		kb.AddRow().
-			AddCallBack("⏭ Пропустить", util.CBFSMSkip).
+			AddCallBack("💡", util.CBFSMHint).
 			AddCallBack("← Назад", util.CBFSMBack).
 			AddCallBack("✖ Отменить", util.CBFSMCancel)
 		return kb

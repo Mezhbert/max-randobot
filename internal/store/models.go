@@ -78,6 +78,8 @@ type Giveaway struct {
 	ResultsPostText        string
 	PublishAt              *time.Time
 	FinishAt               *time.Time
+	FinishMode             string // "time" (по времени) | "count" (по количеству участников)
+	FinishParticipantsCount int   // целевое кол-во участников для finish_mode=count
 	WinnersCount           int
 	WinnersMessage         string
 	ReferralEnabled        bool

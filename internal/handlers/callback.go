@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maxbot/giveawaybot/internal/fsm"
 	"github.com/maxbot/giveawaybot/internal/store"
@@ -31,7 +32,7 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 
 	// 2. Кнопки FSM создания розыгрыша
 	if isFSMPayload(p) {
-		b.handleFSMCallback(ctx, uid, p)
+		b.handleFSMCallback(ctx, uid, p, cb.CallbackID)
 		return
 	}
 
@@ -50,13 +51,15 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	case util.CBMyParticipations:
 		b.showMyParticipations(ctx, uid)
 	case util.CBAnalytics:
-		b.showAnalyticsMenu(ctx, uid)
+		b.showAnalyticsMenu(ctx, uid, "")
 	case util.CBSupport:
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 			"🆘 Поддержка\n\nПо всем вопросам пишите: @your_support_contact\n"+
 				"Или email: support@example.com", util.BackKeyboard())
 	case util.CBChannelAdd:
 		b.startAddChannel(ctx, uid)
+	case util.CBChannelRefresh:
+		b.refreshChannels(ctx, uid)
 	case util.CBChannelBack:
 		_ = b.db.ClearSession(ctx, uid)
 		b.showChannels(ctx, uid)
@@ -68,10 +71,10 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	}
 }
 
-// isFSMPayload определяет кнопки FSM (назад/отмена/пропустить/опции/подтверждение).
+// isFSMPayload определяет кнопки FSM (навигация/опции/подтверждение/подсказка).
 func isFSMPayload(p string) bool {
 	switch p {
-	case util.CBFSMBack, util.CBFSMCancel, util.CBFSMSkip, util.CBFSMConfirm, util.CBFSMReject:
+	case util.CBFSMBack, util.CBFSMCancel, util.CBFSMSkip, util.CBFSMConfirm, util.CBFSMReject, util.CBFSMHint:
 		return true
 	}
 	return strings.HasPrefix(p, util.CBFSMOption)
@@ -87,8 +90,8 @@ func (b *Bot) startCreate(ctx context.Context, uid int64) {
 	b.showStep(ctx, uid, g, g.DraftStep)
 }
 
-// handleFSMCallback обрабатывает кнопки FSM (назад/отмена/пропустить/опции/принять/отклонить).
-func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string) {
+// handleFSMCallback обрабатывает кнопки FSM (навигация/опции/подтверждение/подсказка).
+func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callbackID string) {
 	g, err := b.db.GetDraftGiveaway(ctx, uid)
 	if err != nil {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
@@ -142,6 +145,12 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string) {
 			b.sendMainMenu(ctx, uid, "❌ Создание отменено.")
 		}
 
+	case p == util.CBFSMHint:
+		// Краткая подсказка по текущему шагу (тихая notification).
+		if hint := fsm.HintForStep(g.DraftStep); hint != "" {
+			b.api.AnswerCallback(ctx, callbackID, hint)
+		}
+
 	case strings.HasPrefix(p, util.CBFSMOption):
 		key := strings.TrimPrefix(p, util.CBFSMOption)
 		b.handleOption(ctx, uid, g, key)
@@ -153,8 +162,51 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string) {
 func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key string) {
 	switch key {
 	case "next":
-		// шаги sub/pub channels переходят дальше по «Далее»
+		// Шаги sub/pub channels: валидируем выбранные каналы ПЕРЕД переходом
+		// (ошибка на месте, а не в конце создания).
+		if g.DraftStep == fsm.StepPubChannels {
+			if len(g.PublishChannelIDs) == 0 {
+				_ = b.api.SendText(ctx, uid,
+					"⚠️ Выберите хотя бы один канал публикации (отметьте ✅) — без него пост некуда публиковать.")
+				return
+			}
+			// Проверяем админство бота в выбранных каналах.
+			chs, err := b.db.ChannelsByIDs(ctx, uid, g.PublishChannelIDs)
+			if err == nil {
+				var bad []string
+				for _, c := range chs {
+					if !c.IsBotAdmin {
+						bad = append(bad, c.Title)
+					}
+				}
+				if len(bad) > 0 {
+					_ = b.api.SendText(ctx, uid,
+						"⚠️ Бот не админ в каналах: "+strings.Join(bad, ", ")+
+							". Уберите их или обновите каналы в «Мои каналы → 🔄».")
+					return
+				}
+			}
+		}
 		b.advance(ctx, uid, g.ID, g.DraftStep)
+
+	case "publish_now":
+		// «Опубликовать сразу» — publish_at = сейчас + 1 минута, пропускаем шаг publish_at.
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_at", time.Now().Add(1*time.Minute))
+		b.advanceSkipping(ctx, uid, g.ID, fsm.StepPublishMode, fsm.StepPublishAt)
+
+	case "publish_later":
+		// «По времени» — следующий шаг publish_at (ввод даты).
+		b.advance(ctx, uid, g.ID, g.DraftStep)
+
+	case "finish_time":
+		// «По времени» — следующий шаг finish_at, пропускаем finish_count.
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "time")
+		b.advanceSkipping(ctx, uid, g.ID, fsm.StepFinishMode, fsm.StepFinishCount)
+
+	case "finish_count":
+		// «По количеству участников» — следующий шаг finish_count, пропускаем finish_at.
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "count")
+		b.advanceSkipping(ctx, uid, g.ID, fsm.StepFinishMode, fsm.StepFinishAt)
 
 	case "results_original":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", true)
@@ -171,17 +223,16 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 	case "captcha_all":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaAll)
 		b.advance(ctx, uid, g.ID, g.DraftStep)
-	case "captcha_percent":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaPercent)
-		_ = b.api.SendText(ctx, uid, "Введите процент участников (0-100), которым показывать капчу:")
-		// Дальнейший ввод обрабатывается через session (см. SessionCaptchaPct).
-		_ = b.db.SetSession(ctx, uid, store.SessionCaptchaPct)
 	}
 }
 
 // handleSubPayload — подпункты меню (фильтры, открыть, удалить и т.д.).
 func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 	switch {
+	case strings.HasPrefix(p, util.CBAnalyticsTab):
+		tab := strings.TrimPrefix(p, util.CBAnalyticsTab)
+		b.showAnalyticsMenu(ctx, uid, tab)
+
 	case strings.HasPrefix(p, util.CBGiveawayFilter):
 		status := strings.TrimPrefix(p, util.CBGiveawayFilter)
 		b.showGiveawaysByStatus(ctx, uid, status)
@@ -190,10 +241,50 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwOpen), 10, 64)
 		b.showGiveawayDetails(ctx, uid, id)
 
+	case strings.HasPrefix(p, util.CBGwEditField):
+		// gw_ef:<field>:<giveaway_id> — редактирование конкретного поля.
+		rest := strings.TrimPrefix(p, util.CBGwEditField)
+		parts := strings.Split(rest, ":")
+		if len(parts) == 2 {
+			fieldKey := parts[0]
+			gid, _ := strconv.ParseInt(parts[1], 10, 64)
+			if g, err := b.db.GetGiveaway(ctx, gid, uid); err == nil {
+				b.startEditField(ctx, uid, g, fieldKey)
+			}
+		}
+
+	case strings.HasPrefix(p, util.CBGwEditSet):
+		// gw_es:<key>:<value>:<giveaway_id> — применение выбор-опции.
+		rest := strings.TrimPrefix(p, util.CBGwEditSet)
+		parts := strings.Split(rest, ":")
+		if len(parts) == 3 {
+			gid, _ := strconv.ParseInt(parts[2], 10, 64)
+			b.applyEditSet(ctx, uid, parts[0], parts[1], gid)
+		}
+
+	case strings.HasPrefix(p, util.CBGwExtraWinner):
+		// Доп. победитель в завершённом розыгрыше.
+		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwExtraWinner), 10, 64)
+		b.pickExtraWinner(ctx, uid, id)
+
+	case strings.HasPrefix(p, util.CBGwAnalytics):
+		// Аналитика конкретного розыгрыша.
+		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwAnalytics), 10, 64)
+		b.showGiveawayAnalytics(ctx, uid, id)
+
 	case strings.HasPrefix(p, util.CBGwEdit):
-		// «Продолжить создание» (для черновика) или «Редактировать» (для активного).
+		// «Продолжить создание» (для черновика) или «Редактировать» (scheduled/active — меню полей).
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwEdit), 10, 64)
-		b.resumeGiveaway(ctx, uid, id)
+		g, err := b.db.GetGiveaway(ctx, id, uid)
+		if err != nil {
+			_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+			return
+		}
+		if g.Status == store.StatusDraft {
+			b.resumeGiveaway(ctx, uid, id) // черновик — продолжить FSM с сохранённого шага
+		} else {
+			b.showEditMenu(ctx, uid, id) // scheduled/active — меню редактирования полей
+		}
 
 	case strings.HasPrefix(p, util.CBGwCancel):
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwCancel), 10, 64)

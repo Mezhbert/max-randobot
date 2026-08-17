@@ -41,9 +41,9 @@ type BotAPI interface {
 	IsBotAdminInChat(ctx context.Context, chatID int64) (bool, error)
 	CheckChannelAdmin(ctx context.Context, chatID int64) (model.Chat, bool, error)
 	GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error)
+	PinChatMessage(ctx context.Context, chatID int64, messageID string) error
 	SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error
 	SendFile(ctx context.Context, userID int64, filename string, data []byte) error
-	DeleteDialogMessages(ctx context.Context, chatID, botUserID int64) (int, error)
 	AnswerCallback(ctx context.Context, callbackID, notification string)
 }
 
@@ -302,6 +302,15 @@ func (a *API) GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error)
 	return res, err
 }
 
+// PinChatMessage закрепляет сообщение в канале/чате (нужны права бота на pin).
+// Ошибки пина не фатальны — вызовующий решает как реагировать.
+func (a *API) PinChatMessage(ctx context.Context, chatID int64, messageID string) error {
+	a.rl.wait(ctx)
+	_, err := a.Chats.PinMessage(ctx, chatID, messageID, false)
+	a.metrics.Inc(metrics.MethodGetChatInfo, err) // переиспользуем счётчик чат-методов
+	return err
+}
+
 // RegisterCommands регистрирует меню команд бота в MAX (PATCH /me/commands).
 // После этого при вводе «/» в диалоге появляется список доступных команд вместо
 // «команды не найдены». Список должен совпадать с командами, которые реально
@@ -310,7 +319,6 @@ func (a *API) RegisterCommands(ctx context.Context) error {
 	commands := []model.BotCommand{
 		{Name: "/start", Description: "Запустить бота — описание и меню"},
 		{Name: "/menu", Description: "Показать главное меню"},
-		{Name: "/clear", Description: "Очистить чат с ботом"},
 	}
 	a.rl.wait(ctx)
 	res, err := a.Bots.PatchCommands(ctx, model.BotPatchCommands{Commands: commands})
@@ -354,42 +362,6 @@ func (a *API) SendFile(ctx context.Context, userID int64, filename string, data 
 	_, err = a.Messages.Send(ctx, msg)
 	a.metrics.Inc(metrics.MethodSendWithAttachments, err)
 	return err
-}
-
-// DeleteDialogMessages очищает диалог: удаляет все сообщения пачками по 50.
-// chatID — ID диалога (НЕ user_id!). Получается через GetDialogChatID.
-// Возвращает количество удалённых сообщений.
-func (a *API) DeleteDialogMessages(ctx context.Context, chatID, botUserID int64) (int, error) {
-	const limit int64 = 50
-	deleted := 0
-	for iter := 0; iter < 20; iter++ {
-		list, err := a.Messages.GetMessages(ctx, chatID, 0, 0, limit, nil)
-		if err != nil {
-			return deleted, err
-		}
-		if len(list.Messages) == 0 {
-			break
-		}
-		anyDeleted := false
-		for _, m := range list.Messages {
-			mid := m.Body.Mid
-			if mid == "" {
-				continue
-			}
-			a.rl.wait(ctx)
-			if _, derr := a.Messages.DeleteMessage(ctx, mid); derr != nil {
-				// Логируем Warn — чтобы видеть что MAX разрешает/запрещает.
-				slog.Warn("delete message", "mid", mid, "sender", m.Sender.UserID, "err", derr)
-				continue
-			}
-			deleted++
-			anyDeleted = true
-		}
-		if !anyDeleted {
-			break
-		}
-	}
-	return deleted, nil
 }
 
 // AnswerCallback — подтверждение callback (снять "часики" с кнопки).

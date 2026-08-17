@@ -56,6 +56,13 @@ func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text str
 		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "finish_at", t)
 
+	case StepFinishCount:
+		n, err := strconv.Atoi(strings.TrimSpace(text))
+		if err != nil || n < 2 || n > 1000000 {
+			return errors.New("введите целое число участников (от 2 до 1000000)")
+		}
+		return e.DB.UpdateGiveawayField(ctx, g.ID, "finish_participants_count", n)
+
 	case StepWinners:
 		n, err := strconv.Atoi(strings.TrimSpace(text))
 		if err != nil || n < 1 || n > 100 {
@@ -70,8 +77,8 @@ func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text str
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "results_post_text", text)
 
 	// Шаги с выбором каналов / опциями обрабатываются через callback, не текстом.
-	case StepMedia, StepSubChannels, StepPubChannels, StepResultsLoc,
-		StepCaptcha, StepPreview:
+	case StepMedia, StepSubChannels, StepPubChannels, StepPublishMode, StepFinishMode,
+		StepResultsLoc, StepCaptcha, StepPreview:
 		return errors.New("используйте кнопки под сообщением")
 	}
 	return errors.New("неизвестный шаг")

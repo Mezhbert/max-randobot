@@ -194,16 +194,20 @@ func (m *MockBotAPI) SendImage(ctx context.Context, userID int64, pngData []byte
 	return m.SendTextErr
 }
 
+func (m *MockBotAPI) PinChatMessage(ctx context.Context, chatID int64, messageID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counter++
+	m.Sends = append(m.Sends, SendRecord{Method: "PinChatMessage", ChatID: chatID, Text: messageID})
+	return m.SendTextErr
+}
+
 func (m *MockBotAPI) SendFile(ctx context.Context, userID int64, filename string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.counter++
 	m.Sends = append(m.Sends, SendRecord{Method: "SendFile", UserID: userID, Text: filename})
 	return m.SendTextErr
-}
-
-func (m *MockBotAPI) DeleteDialogMessages(ctx context.Context, chatID, botUserID int64) (int, error) {
-	return 0, nil
 }
 
 // Снимки (thread-safe).
