@@ -39,13 +39,14 @@ func msgUpdate(userID int64, text string) model.Update {
 }
 
 // callbackUpdate — нажатие inline-кнопки с payload.
+// CallbackID формата cbu_<userID>_<seq>: мок извлекает юзера для ассертов edit-ответов.
 func callbackUpdate(userID int64, payload string) model.Update {
 	return model.Update{
 		UpdateType: model.UpdateMessageCallback,
 		UserID:     userID,
 		User:       &model.User{UserID: userID, FirstName: "tester"},
 		Callback: &model.Callback{
-			CallbackID: "cb_" + payload + "_" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			CallbackID: "cbu_" + strconv.FormatInt(userID, 10) + "_" + strconv.FormatInt(time.Now().UnixNano(), 10),
 			Payload:    payload,
 			User:       model.User{UserID: userID, FirstName: "tester"},
 		},
@@ -75,6 +76,17 @@ func newBot(t *testing.T) (*handlers.Bot, *store.Store, *testutil.MockBotAPI, fu
 	d := dedup.New(dedup.DefaultTTL, 0)
 	b.SetDedup(d)
 	return b, s, mock, cleanup
+}
+
+// screensForUser — сколько экранов отрисовано юзеру (send + edit-in-place).
+func screensForUser(m *testutil.MockBotAPI, userID int64) int {
+	n := 0
+	for _, r := range m.SnapshotSends() {
+		if r.UserID == userID && r.Method != "AnswerCallback" {
+			n++
+		}
+	}
+	return n
 }
 
 // sendsToUser — сколько сообщений отправлено конкретному пользователю.
@@ -113,16 +125,16 @@ func TestDedup_DuplicateCallback_OneResponse(t *testing.T) {
 	testutil.EnsureUser(t, s, 1000, "tester")
 
 	// Один и тот же callback_id (тот же физический апдейт) приходит 3 раза.
-	const cbID = "cb_dup_1"
+	const cbID = "cbu_1000_dup1"
 	u := callbackUpdateID(1000, util.CBMainMenu, cbID)
 
-	before := sendsToUser(mock, 1000)
+	before := screensForUser(mock, 1000)
 	for i := 0; i < 3; i++ {
 		b.Handle(ctx, u)
 	}
-	after := sendsToUser(mock, 1000)
+	after := screensForUser(mock, 1000)
 
-	// Должно прибавиться ровно одно сообщение меню.
+	// Должен прибавиться ровно один отрисованный экран (edit или send).
 	assert.Equal(t, before+1, after,
 		"дублированный апдейт должен дать один ответ, а не %d (было %d, стало %d)",
 		after-before, before, after)
@@ -137,11 +149,11 @@ func TestDedup_DifferentCallbacks_AllProcessed(t *testing.T) {
 	testutil.EnsureUser(t, s, 1001, "tester")
 
 	for i := 0; i < 3; i++ {
-		b.Handle(ctx, callbackUpdateID(1001, util.CBMainMenu, "cb_unique_"+strconv.Itoa(i)))
+		b.Handle(ctx, callbackUpdateID(1001, util.CBMainMenu, "cbu_1001_uniq_"+strconv.Itoa(i)))
 	}
 
-	// Три разных апдейта → три ответа.
-	assert.Equal(t, 3, sendsToUser(mock, 1001),
+	// Три разных апдейта → три отрисованных экрана.
+	assert.Equal(t, 3, screensForUser(mock, 1001),
 		"разные апдейты не должны дедуплиться")
 }
 
@@ -570,14 +582,14 @@ func TestFSM_Cancel_KeepsDraft(t *testing.T) {
 	assert.Equal(t, store.StatusDraft, got.Status)
 	assert.NotEmpty(t, got.DraftStep, "после отмены draft_step сохраняется для продолжения")
 
-	// Получил сообщение об отмене.
+	// Экран отмены отрисован (edit или send).
 	found := false
 	for _, r := range mock.SnapshotSends() {
 		if r.UserID == owner && strings.Contains(r.Text, "отменено") {
 			found = true
 		}
 	}
-	assert.True(t, found, "должно быть сообщение об отмене")
+	assert.True(t, found, "должен быть экран отмены")
 }
 
 // TestFSM_ValidationFails_NoSchedule — подтверждение без обязательных полей
@@ -604,14 +616,14 @@ func TestFSM_ValidationFails_NoSchedule(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusDraft, got.Status, "не должен перейти в scheduled без обязательных полей")
 
-	// Пользователь получил сообщение об ошибке валидации.
+	// Ошибка валидации показана edit-in-place в нажатом сообщении (без нового SendText).
 	found := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == owner && strings.Contains(r.Text, "⚠️") {
+		if r.Method == "AnswerCallbackEdit" && strings.Contains(r.Text, "⚠️") {
 			found = true
 		}
 	}
-	assert.True(t, found, "должна быть ошибка валидации")
+	assert.True(t, found, "ошибка валидации должна рендериться edit-in-place")
 }
 
 // TestFSM_Confirm_AlwaysScheduled — подтверждение всегда переводит в scheduled
@@ -702,9 +714,9 @@ func TestBotStarted_SendsMainMenu(t *testing.T) {
 // 5. Sanity: упоминание методов (защита от рефактора, ломающего мок).
 // =====================================================================
 
-// TestMockAPI_CoversAllUsedMethods — компиляция теста гарантирует, что
-// MockBotAPI реализует BotAPI (var _ maxapi.BotAPI в testutil). Дополнительно
-// проверяем, что ключевые методы вызываются через Handle.
+// TestMockAPI_CoversAllUsedMethods — компиляция гарантирует, что MockBotAPI
+// реализует BotAPI. Проверяем ключевые сценарии доставки:
+// команда → новое сообщение; клик по кнопке → edit-in-place (AnswerCallbackEdit).
 func TestMockAPI_CoversAllUsedMethods(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
@@ -712,12 +724,16 @@ func TestMockAPI_CoversAllUsedMethods(t *testing.T) {
 
 	testutil.EnsureUser(t, s, 7000, "tester")
 
-	// /menu → SendTextWithKeyboard.
+	// /menu (команда, без callback) → SendTextWithKeyboard.
 	b.Handle(ctx, msgUpdate(7000, "/menu"))
 	require.Greater(t, sendsByMethod(mock, "SendTextWithKeyboard"), 0)
 
-	// Поддержка → SendTextWithKeyboard.
-	before := sendsByMethod(mock, "SendTextWithKeyboard")
+	// Клик «Поддержка» → edit-in-place ответа (не новое сообщение).
+	beforeEdits := sendsByMethod(mock, "AnswerCallbackEdit")
+	beforeSends := sendsByMethod(mock, "SendTextWithKeyboard")
 	b.Handle(ctx, callbackUpdate(7000, util.CBSupport))
-	assert.Greater(t, sendsByMethod(mock, "SendTextWithKeyboard"), before)
+	assert.Greater(t, sendsByMethod(mock, "AnswerCallbackEdit"), beforeEdits,
+		"клик должен рендериться edit-in-place")
+	assert.Equal(t, beforeSends, sendsByMethod(mock, "SendTextWithKeyboard"),
+		"клик не должен плодить новые сообщения")
 }

@@ -50,8 +50,30 @@ var orderedEditKeys = []string{
 	"captcha",
 }
 
+// showEditMenuSaved — меню редактирования с пометкой о сохранении (одно сообщение).
+func (b *Bot) showEditMenuSaved(ctx context.Context, uid, id int64, note string) {
+	// Пере-используем showEditMenu, добавляя пометку в заголовок через обёртку.
+	g, err := b.db.GetGiveaway(ctx, id, uid)
+	if err != nil {
+		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+		return
+	}
+	kb := model.NewKeyboard()
+	for _, key := range orderedEditKeys {
+		def := editFields[key]
+		if g.Status == store.StatusActive && def.skipActive {
+			continue
+		}
+		kb.AddRow().AddCallBack(def.title, util.CBGwEditField+key+":"+fmt.Sprintf("%d", g.ID))
+	}
+	kb.AddRow().AddCallBack("✅ Готово", util.CBGwOpen+fmt.Sprintf("%d", g.ID))
+	kb.AddRow().AddCallBack("← К списку", util.CBGwList)
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		note+"\n\n✏ Редактирование «"+g.Name+"». Выберите, что ещё изменить:", kb)
+}
+
 // showEditMenu — меню редактирования розыгрыша по полям.
-func (b *Bot) showEditMenu(ctx context.Context, uid, id int64) {
+func (b *Bot) showEditMenu(ctx context.Context, uid, id int64, cbID string) {
 	g, err := b.db.GetGiveaway(ctx, id, uid)
 	if err != nil {
 		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
@@ -74,11 +96,11 @@ func (b *Bot) showEditMenu(ctx context.Context, uid, id int64) {
 	kb.AddRow().AddCallBack("← К списку", util.CBGwList)
 
 	text := fmt.Sprintf("✏ Редактирование «%s»\n\nВыберите, что изменить:", g.Name)
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
+	b.render(ctx, uid, cbID, text, kb)
 }
 
 // startEditField — показывает текущее значение поля и переводит в режим ввода.
-func (b *Bot) startEditField(ctx context.Context, uid int64, g store.Giveaway, key string) {
+func (b *Bot) startEditField(ctx context.Context, uid int64, cbID string, g store.Giveaway, key string) {
 	def, ok := editFields[key]
 	if !ok {
 		return
@@ -91,13 +113,13 @@ func (b *Bot) startEditField(ctx context.Context, uid int64, g store.Giveaway, k
 	// Для выбор-полей (captcha/finishmode/resultsloc) показываем опции кнопками.
 	switch def.kind {
 	case "captcha":
-		b.showCaptchaEditOptions(ctx, uid, g)
+		b.showCaptchaEditOptions(ctx, uid, cbID, g)
 		return
 	case "finishmode":
-		b.showFinishEditOptions(ctx, uid, g)
+		b.showFinishEditOptions(ctx, uid, cbID, g)
 		return
 	case "resultsloc":
-		b.showResultsLocEditOptions(ctx, uid, g)
+		b.showResultsLocEditOptions(ctx, uid, cbID, g)
 		return
 	case "channels":
 		b.showChannelsEditOptions(ctx, uid, g, key)
@@ -178,8 +200,7 @@ func (b *Bot) handleEditFieldInput(ctx context.Context, uid int64, text string) 
 		}
 		_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "finish_participants_count", n)
 		_ = b.db.ClearSession(ctx, uid)
-		_ = b.api.SendText(ctx, uid, "✅ Сохранено.")
-		b.showEditMenu(ctx, uid, g.ID)
+		b.showEditMenuSaved(ctx, uid, g.ID, "✅ Целевое число участников сохранено")
 		return true
 	}
 
@@ -231,14 +252,13 @@ func (b *Bot) handleEditFieldInput(ctx context.Context, uid int64, text string) 
 		return true
 	}
 	_ = b.db.ClearSession(ctx, uid)
-	_ = b.api.SendText(ctx, uid, "✅ Сохранено.")
-	b.showEditMenu(ctx, uid, g.ID)
+	b.showEditMenuSaved(ctx, uid, g.ID, "✅ Сохранено")
 	return true
 }
 
-// --- Выбор-поля: показываем опции кнопками, ввод текстом не нужен ---
+// --- Выбор-поля: показываем опциями, ввод текстом не нужен ---
 
-func (b *Bot) showCaptchaEditOptions(ctx context.Context, uid int64, g store.Giveaway) {
+func (b *Bot) showCaptchaEditOptions(ctx context.Context, uid int64, cbID string, g store.Giveaway) {
 	kb := model.NewKeyboard()
 	kb.AddRow().
 		AddCallBack("✅ Да", util.CBGwEditSet+"captcha:all:"+fmt.Sprintf("%d", g.ID)).
@@ -247,7 +267,7 @@ func (b *Bot) showCaptchaEditOptions(ctx context.Context, uid int64, g store.Giv
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, "🤖 Капча при участии?", kb)
 }
 
-func (b *Bot) showFinishEditOptions(ctx context.Context, uid int64, g store.Giveaway) {
+func (b *Bot) showFinishEditOptions(ctx context.Context, uid int64, cbID string, g store.Giveaway) {
 	kb := model.NewKeyboard()
 	kb.AddRow().
 		AddCallBack("⏰ По времени", util.CBGwEditSet+"finish:time:"+fmt.Sprintf("%d", g.ID)).
@@ -260,7 +280,7 @@ func (b *Bot) showFinishEditOptions(ctx context.Context, uid int64, g store.Give
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, "🏁 Условие завершения (сейчас: "+cur+")?", kb)
 }
 
-func (b *Bot) showResultsLocEditOptions(ctx context.Context, uid int64, g store.Giveaway) {
+func (b *Bot) showResultsLocEditOptions(ctx context.Context, uid int64, cbID string, g store.Giveaway) {
 	kb := model.NewKeyboard()
 	kb.AddRow().
 		AddCallBack("В исходном посте", util.CBGwEditSet+"results_original:1:"+fmt.Sprintf("%d", g.ID)).
@@ -278,7 +298,7 @@ func (b *Bot) showChannelsEditOptions(ctx context.Context, uid int64, g store.Gi
 }
 
 // applyEditSet — применение выбор-опции (captcha/finish/результаты).
-func (b *Bot) applyEditSet(ctx context.Context, uid int64, key, value string, gid int64) {
+func (b *Bot) applyEditSet(ctx context.Context, uid int64, cbID string, key, value string, gid int64) {
 	g, err := b.db.GetGiveaway(ctx, gid, uid)
 	if err != nil {
 		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
@@ -307,14 +327,13 @@ func (b *Bot) applyEditSet(ctx context.Context, uid int64, key, value string, gi
 		bval := value == "1"
 		_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "results_in_original_post", bval)
 	}
-	_ = b.api.SendText(ctx, uid, "✅ Сохранено.")
-	b.showEditMenu(ctx, uid, g.ID)
+	b.showEditMenuSaved(ctx, uid, g.ID, "✅ Сохранено")
 }
 
 // pickExtraWinner — выбор дополнительного победителя в завершённом розыгрыше
 // (если основной не отвечает или оказался ботом). Weighted-выбор среди всех
 // участников, исключая существующих победителей. Публикует доп. итоги в каналы.
-func (b *Bot) pickExtraWinner(ctx context.Context, uid, gid int64) {
+func (b *Bot) pickExtraWinner(ctx context.Context, uid, gid int64, cbID string) {
 	g, err := b.db.GetGiveaway(ctx, gid, uid)
 	if err != nil || g.Status != store.StatusFinished {
 		_ = b.api.SendText(ctx, uid, "Доп. победителя можно выбрать только в завершённом розыгрыше.")

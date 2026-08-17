@@ -15,24 +15,23 @@ import (
 )
 
 // onMessageCallback — обработка нажатий на inline-кнопки.
+// Экраны рисуются edit-in-place (в нажатом сообщении) через b.render —
+// это и снимает часики кнопки, и держит юзера прижатым к ответу (скролл).
 func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	cb := u.GetCallback()
 	uid := cb.User.UserID
 	p := cb.Payload
+	cbID := cb.CallbackID
 
-	// 1. Кнопка "Участвовать" под постом розыгрыша — обрабатываем отдельно,
-	//    т.к. onParticipate сам шлёт осмысленный alert через AnswerCallback.
+	// 1. Кнопка "Участвовать" под постом розыгрыша — обрабатываем отдельно.
 	if strings.HasPrefix(p, util.CBParticipate) {
-		b.onParticipate(ctx, uid, strings.TrimPrefix(p, util.CBParticipate), cb.CallbackID)
+		b.onParticipate(ctx, uid, strings.TrimPrefix(p, util.CBParticipate), cbID)
 		return
 	}
 
-	// Прочие callback'и — снимаем "часики" с кнопки.
-	defer b.api.AnswerCallback(ctx, cb.CallbackID, "")
-
 	// 2. Кнопки FSM создания розыгрыша
 	if isFSMPayload(p) {
-		b.handleFSMCallback(ctx, uid, p, cb.CallbackID)
+		b.handleFSMCallback(ctx, uid, p, cbID)
 		return
 	}
 
@@ -40,34 +39,34 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	switch p {
 	case util.CBMainMenu:
 		_ = b.db.ClearSession(ctx, uid) // сброс любой активной сессии (UTM/captcha/etc)
-		b.sendMainMenu(ctx, uid, "Главное меню:")
+		b.renderMainMenu(ctx, uid, cbID, "Главное меню:")
 	case util.CBCreateGiveaway:
 		_ = b.db.ClearSession(ctx, uid) // гарантия: никаких висящих сессий при создании
-		b.startCreate(ctx, uid)
+		b.startCreate(ctx, uid, cbID)
 	case util.CBMyGiveaways:
-		b.showGiveawayFilters(ctx, uid)
+		b.showGiveawayFilters(ctx, uid, cbID)
 	case util.CBMyChannels:
-		b.showChannels(ctx, uid)
+		b.showChannels(ctx, uid, cbID)
 	case util.CBMyParticipations:
-		b.showMyParticipations(ctx, uid)
+		b.showMyParticipations(ctx, uid, cbID)
 	case util.CBAnalytics:
-		b.showAnalyticsMenu(ctx, uid, "")
+		b.showAnalyticsMenu(ctx, uid, "", cbID)
 	case util.CBSupport:
-		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		b.render(ctx, uid, cbID,
 			"🆘 Поддержка\n\nПо всем вопросам пишите: @your_support_contact\n"+
 				"Или email: support@example.com", util.BackKeyboard())
 	case util.CBChannelAdd:
-		b.startAddChannel(ctx, uid)
+		b.startAddChannel(ctx, uid, cbID)
 	case util.CBChannelRefresh:
-		b.refreshChannels(ctx, uid)
+		b.refreshChannels(ctx, uid, cbID)
 	case util.CBChannelBack:
 		_ = b.db.ClearSession(ctx, uid)
-		b.showChannels(ctx, uid)
+		b.showChannels(ctx, uid, cbID)
 	case util.CBChannelAnalytics:
-		b.showChannelListForAnalytics(ctx, uid)
+		b.showChannelListForAnalytics(ctx, uid, cbID)
 	default:
 		// подпункты (фильтры/открыть/удалить и т.д.)
-		b.handleSubPayload(ctx, uid, p)
+		b.handleSubPayload(ctx, uid, p, cbID)
 	}
 }
 
@@ -80,22 +79,22 @@ func isFSMPayload(p string) bool {
 	return strings.HasPrefix(p, util.CBFSMOption)
 }
 
-// startCreate начинает создание розыгрыша.
-func (b *Bot) startCreate(ctx context.Context, uid int64) {
+// startCreate начинает создание розыгрыша (первый шаг рисуется edit-in-place).
+func (b *Bot) startCreate(ctx context.Context, uid int64, cbID string) {
 	g, err := b.engine.StartDraft(ctx, uid)
 	if err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать создание: "+err.Error())
+		b.render(ctx, uid, cbID, "⚠️ Не удалось начать создание: "+err.Error(), util.MainMenuKeyboard())
 		return
 	}
-	b.showStep(ctx, uid, g, g.DraftStep)
+	b.showStepCB(ctx, uid, cbID, g, g.DraftStep)
 }
 
 // handleFSMCallback обрабатывает кнопки FSM (навигация/опции/подтверждение/подсказка).
+// Все переходы рисуются edit-in-place (в нажатом сообщении) — без скролла.
 func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callbackID string) {
 	g, err := b.db.GetDraftGiveaway(ctx, uid)
 	if err != nil {
-		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"Создание не активно. Начните заново.", util.MainMenuKeyboard())
+		b.render(ctx, uid, callbackID, "Создание не активно. Начните заново.", util.MainMenuKeyboard())
 		return
 	}
 
@@ -104,45 +103,46 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 		_ = b.engine.Abandon(ctx, g.ID)
 		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
 		if g.Name != "" {
-			b.sendMainMenu(ctx, uid, "✖ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+			b.renderMainMenu(ctx, uid, callbackID, "✖ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
 		} else {
 			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
-			b.sendMainMenu(ctx, uid, "✖ Создание отменено.")
+			b.renderMainMenu(ctx, uid, callbackID, "✖ Создание отменено.")
 		}
 
 	case p == util.CBFSMBack:
 		prev, _ := b.engine.GoBack(ctx, g.ID, g.DraftStep)
 		// перечитываем, чтобы актуальные данные
 		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
-		b.showStep(ctx, uid, gg, prev)
+		b.showStepCB(ctx, uid, callbackID, gg, prev)
 
 	case p == util.CBFSMSkip:
 		if err := b.engine.SkipStep(ctx, g); err != nil {
-			b.api.AnswerCallback(ctx, "", err.Error())
 			return
 		}
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		b.advance(ctx, uid, callbackID, g.ID, g.DraftStep)
 
 	case p == util.CBFSMConfirm:
 		if err := b.engine.Confirm(ctx, g.ID); err != nil {
 			var ve *fsm.ValidationError
 			if errors.As(err, &ve) {
-				_ = b.api.SendText(ctx, uid, "⚠️ "+ve.Msg)
+				// Ошибка валидации — прямо в нажатом сообщении (видно без скролла)
+				// с кнопкой назад к предпросмотру.
+				b.render(ctx, uid, callbackID, "⚠️ "+ve.Msg+"\n\nВернитесь и исправьте шаг.", util.ConfirmKeyboard())
 			} else {
-				_ = b.api.SendText(ctx, uid, "⚠️ Ошибка: "+err.Error())
+				b.api.AnswerCallback(ctx, callbackID, "⚠️ Ошибка: "+err.Error())
 			}
 			return
 		}
-		b.sendMainMenu(ctx, uid, "✅ Розыгрыш запланирован! Пост будет опубликован автоматически в назначенное время. Следите в «Мои розыгрыши → Запланированные».")
+		b.renderMainMenu(ctx, uid, callbackID, "✅ Розыгрыш запланирован! Пост будет опубликован автоматически в назначенное время. Следите в «Мои розыгрыши → Запланированные».")
 
 	case p == util.CBFSMReject:
 		_ = b.engine.Abandon(ctx, g.ID)
 		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
 		if g.Name != "" {
-			b.sendMainMenu(ctx, uid, "❌ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+			b.renderMainMenu(ctx, uid, callbackID, "❌ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
 		} else {
 			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
-			b.sendMainMenu(ctx, uid, "❌ Создание отменено.")
+			b.renderMainMenu(ctx, uid, callbackID, "❌ Создание отменено.")
 		}
 
 	case p == util.CBFSMHint:
@@ -153,21 +153,20 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 
 	case strings.HasPrefix(p, util.CBFSMOption):
 		key := strings.TrimPrefix(p, util.CBFSMOption)
-		b.handleOption(ctx, uid, g, key)
+		b.handleOption(ctx, uid, callbackID, g, key)
 	}
 }
 
 // handleOption обрабатывает опционные кнопки шагов (выбор каналов, режимы и т.д.).
-// Рефералы и продвижение убраны из MVP.
-func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key string) {
+// Рефералы и продвижение убраны из MVP. Все переходы edit-in-place.
+func (b *Bot) handleOption(ctx context.Context, uid int64, cbID string, g store.Giveaway, key string) {
 	switch key {
 	case "next":
 		// Шаги sub/pub channels: валидируем выбранные каналы ПЕРЕД переходом
 		// (ошибка на месте, а не в конце создания).
 		if g.DraftStep == fsm.StepPubChannels {
 			if len(g.PublishChannelIDs) == 0 {
-				_ = b.api.SendText(ctx, uid,
-					"⚠️ Выберите хотя бы один канал публикации (отметьте ✅) — без него пост некуда публиковать.")
+				b.api.AnswerCallback(ctx, cbID, "⚠️ Выберите хотя бы один канал публикации (✅)")
 				return
 			}
 			// Проверяем админство бота в выбранных каналах.
@@ -180,66 +179,64 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 					}
 				}
 				if len(bad) > 0 {
-					_ = b.api.SendText(ctx, uid,
-						"⚠️ Бот не админ в каналах: "+strings.Join(bad, ", ")+
-							". Уберите их или обновите каналы в «Мои каналы → 🔄».")
+					b.api.AnswerCallback(ctx, cbID, "⚠️ Бот не админ: "+strings.Join(bad, ", "))
 					return
 				}
 			}
 		}
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		b.advance(ctx, uid, cbID, g.ID, g.DraftStep)
 
 	case "publish_now":
 		// «Опубликовать сразу» — publish_at = сейчас + 1 минута, пропускаем шаг publish_at.
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_at", time.Now().Add(1*time.Minute))
-		b.advanceSkipping(ctx, uid, g.ID, fsm.StepPublishMode, fsm.StepPublishAt)
+		b.advanceSkipping(ctx, uid, cbID, g.ID, fsm.StepPublishMode, fsm.StepPublishAt)
 
 	case "publish_later":
 		// «По времени» — следующий шаг publish_at (ввод даты).
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		b.advance(ctx, uid, cbID, g.ID, g.DraftStep)
 
 	case "finish_time":
 		// «По времени» — следующий шаг finish_at, пропускаем finish_count.
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "time")
-		b.advanceSkipping(ctx, uid, g.ID, fsm.StepFinishMode, fsm.StepFinishCount)
+		b.advanceSkipping(ctx, uid, cbID, g.ID, fsm.StepFinishMode, fsm.StepFinishCount)
 
 	case "finish_count":
 		// «По количеству участников» — следующий шаг finish_count, пропускаем finish_at.
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "count")
-		b.advanceSkipping(ctx, uid, g.ID, fsm.StepFinishMode, fsm.StepFinishAt)
+		b.advanceSkipping(ctx, uid, cbID, g.ID, fsm.StepFinishMode, fsm.StepFinishAt)
 
 	case "results_original":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", true)
 		// «В исходном посте» — текст итогов не нужен, перепрыгиваем шаг results_text.
-		b.advanceSkipping(ctx, uid, g.ID, g.DraftStep, fsm.StepResultsText)
+		b.advanceSkipping(ctx, uid, cbID, g.ID, g.DraftStep, fsm.StepResultsText)
 	case "results_separate":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", false)
 		// «Отдельным постом» — запросить текст итогов (след. шаг results_text).
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		b.advance(ctx, uid, cbID, g.ID, g.DraftStep)
 
 	case "captcha_none":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaNone)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		b.advance(ctx, uid, cbID, g.ID, g.DraftStep)
 	case "captcha_all":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaAll)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		b.advance(ctx, uid, cbID, g.ID, g.DraftStep)
 	}
 }
 
 // handleSubPayload — подпункты меню (фильтры, открыть, удалить и т.д.).
-func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
+func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string, cbID string) {
 	switch {
 	case strings.HasPrefix(p, util.CBAnalyticsTab):
 		tab := strings.TrimPrefix(p, util.CBAnalyticsTab)
-		b.showAnalyticsMenu(ctx, uid, tab)
+		b.showAnalyticsMenu(ctx, uid, tab, cbID)
 
 	case strings.HasPrefix(p, util.CBGiveawayFilter):
 		status := strings.TrimPrefix(p, util.CBGiveawayFilter)
-		b.showGiveawaysByStatus(ctx, uid, status)
+		b.showGiveawaysByStatus(ctx, uid, status, cbID)
 
 	case strings.HasPrefix(p, util.CBGwOpen):
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwOpen), 10, 64)
-		b.showGiveawayDetails(ctx, uid, id)
+		b.showGiveawayDetails(ctx, uid, id, cbID)
 
 	case strings.HasPrefix(p, util.CBGwEditField):
 		// gw_ef:<field>:<giveaway_id> — редактирование конкретного поля.
@@ -249,7 +246,7 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 			fieldKey := parts[0]
 			gid, _ := strconv.ParseInt(parts[1], 10, 64)
 			if g, err := b.db.GetGiveaway(ctx, gid, uid); err == nil {
-				b.startEditField(ctx, uid, g, fieldKey)
+				b.startEditField(ctx, uid, cbID, g, fieldKey)
 			}
 		}
 
@@ -259,18 +256,18 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		parts := strings.Split(rest, ":")
 		if len(parts) == 3 {
 			gid, _ := strconv.ParseInt(parts[2], 10, 64)
-			b.applyEditSet(ctx, uid, parts[0], parts[1], gid)
+			b.applyEditSet(ctx, uid, cbID, parts[0], parts[1], gid)
 		}
 
 	case strings.HasPrefix(p, util.CBGwExtraWinner):
 		// Доп. победитель в завершённом розыгрыше.
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwExtraWinner), 10, 64)
-		b.pickExtraWinner(ctx, uid, id)
+		b.pickExtraWinner(ctx, uid, id, cbID)
 
 	case strings.HasPrefix(p, util.CBGwAnalytics):
 		// Аналитика конкретного розыгрыша.
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwAnalytics), 10, 64)
-		b.showGiveawayAnalytics(ctx, uid, id)
+		b.showGiveawayAnalytics(ctx, uid, id, cbID)
 
 	case strings.HasPrefix(p, util.CBGwEdit):
 		// «Продолжить создание» (для черновика) или «Редактировать» (scheduled/active — меню полей).
@@ -283,7 +280,7 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		if g.Status == store.StatusDraft {
 			b.resumeGiveaway(ctx, uid, id) // черновик — продолжить FSM с сохранённого шага
 		} else {
-			b.showEditMenu(ctx, uid, id) // scheduled/active — меню редактирования полей
+			b.showEditMenu(ctx, uid, id, cbID) // scheduled/active — меню редактирования полей
 		}
 
 	case strings.HasPrefix(p, util.CBGwCancel):
@@ -301,26 +298,26 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		}
 
 	case p == util.CBGwList:
-		b.showGiveawayFilters(ctx, uid)
+		b.showGiveawayFilters(ctx, uid, cbID)
 
 	case strings.HasPrefix(p, "ch_toggle_sub:"), strings.HasPrefix(p, "ch_toggle_pub:"):
 		b.toggleChannelSelection(ctx, uid, p)
 
 	case strings.HasPrefix(p, util.CBChannelUTM):
 		// Выбор канала для генерации UTM-ссылки
-		b.showUTMMenu(ctx, uid, p)
+		b.showUTMMenu(ctx, uid, p, cbID)
 
 	case strings.HasPrefix(p, util.CBUTMCreate):
 		// Начать создание UTM-ссылки на канал
-		b.startCreateUTM(ctx, uid, p)
+		b.startCreateUTM(ctx, uid, p, cbID)
 
 	case strings.HasPrefix(p, util.CBUTMStats):
 		// Показать аналитику UTM по каналу
-		b.showUTMStats(ctx, uid, p)
+		b.showUTMStats(ctx, uid, p, cbID)
 
 	case strings.HasPrefix(p, util.CBUTMExport):
 		// Экспорт CSV аналитики
-		b.exportUTMCSV(ctx, uid, p)
+		b.exportUTMCSV(ctx, uid, p, cbID)
 
 	default:
 		b.sendMainMenu(ctx, uid, "Главное меню:")

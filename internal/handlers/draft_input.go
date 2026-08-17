@@ -21,14 +21,15 @@ func (b *Bot) handleDraftInput(ctx context.Context, userID int64, g store.Giveaw
 		return
 	}
 	// Переход к следующему шагу
-	b.advance(ctx, userID, g.ID, g.DraftStep)
+	b.advance(ctx, userID, "", g.ID, g.DraftStep)
 }
 
 // advance переходит к следующему шагу и показывает его приглашение.
+// cbID ≠ "" → шаг рисуется edit-in-place в нажатом сообщении (без скролла).
 // Условные шаги (publish_at/finish_at/finish_count) авто-пропускаются
 // по выбранному режиму: publish_now → без publish_at; finish=time → без
 // finish_count; finish=count → без finish_at.
-func (b *Bot) advance(ctx context.Context, userID int64, giveawayID int64, currentStep string) {
+func (b *Bot) advance(ctx context.Context, userID int64, cbID string, giveawayID int64, currentStep string) {
 	g, err := b.db.GetGiveawayAny(ctx, giveawayID)
 	if err != nil {
 		_ = b.api.SendText(ctx, userID, "⚠️ Не удалось получить черновик: "+err.Error())
@@ -52,7 +53,11 @@ func (b *Bot) advance(ctx context.Context, userID int64, giveawayID int64, curre
 		}
 		next = n2
 	}
-	b.showStep(ctx, userID, g, next)
+	if cbID != "" {
+		b.showStepCB(ctx, userID, cbID, g, next)
+	} else {
+		b.showStep(ctx, userID, g, next)
+	}
 }
 
 // skipConditional — нужно ли пропустить шаг в зависимости от режима розыгрыша.
@@ -69,7 +74,7 @@ func skipConditional(g store.Giveaway, step string) bool {
 // advanceSkipping переходит к следующему шагу, но если он совпадает с skip —
 // делает ещё один переход. Используется, чтобы перепрыгнуть условный шаг
 // (например, results_text при выборе «итоги в исходном посте»).
-func (b *Bot) advanceSkipping(ctx context.Context, userID int64, giveawayID int64, currentStep, skip string) {
+func (b *Bot) advanceSkipping(ctx context.Context, userID int64, cbID string, giveawayID int64, currentStep, skip string) {
 	g, err := b.db.GetGiveawayAny(ctx, giveawayID)
 	if err != nil {
 		_ = b.api.SendText(ctx, userID, "⚠️ Не удалось получить черновик: "+err.Error())
@@ -85,7 +90,11 @@ func (b *Bot) advanceSkipping(ctx context.Context, userID int64, giveawayID int6
 			next = next2
 		}
 	}
-	b.showStep(ctx, userID, g, next)
+	if cbID != "" {
+		b.showStepCB(ctx, userID, cbID, g, next)
+	} else {
+		b.showStep(ctx, userID, g, next)
+	}
 }
 
 // showStep показывает приглашение конкретного шага.
@@ -126,6 +135,17 @@ func (b *Bot) showStep(ctx context.Context, userID int64, g store.Giveaway, step
 	}
 
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, fsm.PromptForStep(step), kbForStep(step))
+}
+
+// showStepCB — showStep для клика по кнопке: рисует шаг EDIT-IN-PLACE
+// (в нажатом сообщении) — юзер не скроллит, ответ под пальцем.
+// Preview и выбор каналов шлются отдельно (медиа/тогглинг).
+func (b *Bot) showStepCB(ctx context.Context, userID int64, cbID string, g store.Giveaway, step string) {
+	if step == fsm.StepPreview || step == fsm.StepSubChannels || step == fsm.StepPubChannels {
+		b.showStep(ctx, userID, g, step)
+		return
+	}
+	b.render(ctx, userID, cbID, fsm.PromptForStep(step), kbForStep(step))
 }
 
 // showChannelSelectStep — шаг выбора каналов с живыми галочками (тогглинг).

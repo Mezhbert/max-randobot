@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -45,6 +46,7 @@ type BotAPI interface {
 	SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error
 	SendFile(ctx context.Context, userID int64, filename string, data []byte) error
 	AnswerCallback(ctx context.Context, callbackID, notification string)
+	AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard) error
 }
 
 // New создаёт обёртку. maxRPS — целевой лимит (платформа: 30).
@@ -387,6 +389,25 @@ func (a *API) AnswerCallback(ctx context.Context, callbackID, notification strin
 		slog.Debug("AnswerOnCallback", "err", err)
 	}
 	a.metrics.Inc(metrics.MethodAnswerCallback, err)
+}
+
+// AnswerCallbackEdit отвечает на callback ЗАМЕНОЙ нажатого сообщения
+// (CallbackAnswer.Message): новый текст + клавиатура появляются прямо в том
+// сообщении, где юзер нажал кнопку. Это edit-in-place — ответ всегда виден
+// без скролла, и диалог не засоряется новыми сообщениями на каждый клик.
+// Возвращает ошибку (вызывающий делает fallback на отправку нового сообщения).
+func (a *API) AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard) error {
+	if callbackID == "" {
+		return errors.New("empty callback id")
+	}
+	body := model.NewMessageBody{Text: text}
+	if kb != nil {
+		body.Attachments = []model.Attachment{kb.Build()}
+	}
+	a.rl.wait(ctx)
+	_, err := a.Messages.AnswerOnCallback(ctx, callbackID, model.CallbackAnswer{Message: &body})
+	a.metrics.Inc(metrics.MethodAnswerCallback, err)
+	return err
 }
 
 // ---------- хелперы ----------

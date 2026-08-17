@@ -5,6 +5,8 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -184,6 +186,26 @@ func (m *MockBotAPI) AnswerCallback(ctx context.Context, callbackID, notificatio
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Callbacks = append(m.Callbacks, callbackID)
+}
+
+// AnswerCallbackEdit — запись «edit-ответа» на callback (для тестов edit-in-place).
+// userID извлекаем из callback_id в формате "cbu_<userID>_<seq>" (генерит callbackUpdateID),
+// либо берём последний известный юзер — для ассертов по юзеру.
+func (m *MockBotAPI) AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counter++
+	uid := int64(0)
+	if strings.HasPrefix(callbackID, "cbu_") {
+		parts := strings.SplitN(callbackID, "_", 3)
+		if len(parts) == 3 {
+			if v, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				uid = v
+			}
+		}
+	}
+	m.Sends = append(m.Sends, SendRecord{Method: "AnswerCallbackEdit", UserID: uid, Text: text, HasKb: kb != nil})
+	return m.SendTextErr
 }
 
 func (m *MockBotAPI) SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error {

@@ -10,7 +10,7 @@ import (
 )
 
 // showGiveawayFilters — фильтры по типам розыгрышей.
-func (b *Bot) showGiveawayFilters(ctx context.Context, uid int64) {
+func (b *Bot) showGiveawayFilters(ctx context.Context, uid int64, cbID string) {
 	kb := model.NewKeyboard()
 	kb.AddRow().
 		AddCallBack("Текущие", util.CBGiveawayFilter+store.StatusActive).
@@ -24,7 +24,7 @@ func (b *Bot) showGiveawayFilters(ctx context.Context, uid int64) {
 
 // showGiveawaysByStatus — список розыгрышей выбранного типа.
 // Для черновиков (draft) показывает только именованные (сохранённые), без мусора.
-func (b *Bot) showGiveawaysByStatus(ctx context.Context, uid int64, status string) {
+func (b *Bot) showGiveawaysByStatus(ctx context.Context, uid int64, status string, cbID string) {
 	items, err := b.db.ListGiveaways(ctx, uid, status)
 	if err != nil {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "Здесь пока пусто.", util.BackKeyboard())
@@ -55,7 +55,7 @@ func (b *Bot) showGiveawaysByStatus(ctx context.Context, uid int64, status strin
 }
 
 // showGiveawayDetails — карточка розыгрыша с действиями.
-func (b *Bot) showGiveawayDetails(ctx context.Context, uid, id int64) {
+func (b *Bot) showGiveawayDetails(ctx context.Context, uid, id int64, cbID string) {
 	g, err := b.db.GetGiveaway(ctx, id, uid)
 	if err != nil {
 		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
@@ -98,14 +98,14 @@ func (b *Bot) showGiveawayDetails(ctx context.Context, uid, id int64) {
 		kb.AddRow().AddCallBack("🎲 Доп. победитель", util.CBGwExtraWinner+fmt.Sprintf("%d", g.ID))
 	}
 	kb.AddRow().AddCallBack("← Назад", util.CBGwList)
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
+	b.render(ctx, uid, cbID, text, kb)
 }
 
 // showChannels — экран "мои каналы".
 // Каналы добавляются вручную кнопкой «➕ Добавить канал» (ID канала или
 // пересыл сообщения из него; бот должен быть админом). По ТЗ каналы нужно
 // добавлять заранее, чтобы использовать в розыгрышах.
-func (b *Bot) showChannels(ctx context.Context, uid int64) {
+func (b *Bot) showChannels(ctx context.Context, uid int64, cbID string) {
 	items, err := b.db.ListChannels(ctx, uid)
 	if err != nil {
 		_ = b.api.SendText(ctx, uid, "Ошибка загрузки каналов.")
@@ -138,16 +138,16 @@ func (b *Bot) showChannels(ctx context.Context, uid int64) {
 		kb.AddRow().AddCallBack("🔄 Обновить статус", util.CBChannelRefresh)
 	}
 	kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
+	b.render(ctx, uid, cbID, text, kb)
 }
 
 // showChannelListForAnalytics — список каналов для просмотра аналитики (alias).
-func (b *Bot) showChannelListForAnalytics(ctx context.Context, uid int64) {
-	b.showChannels(ctx, uid)
+func (b *Bot) showChannelListForAnalytics(ctx context.Context, uid int64, cbID string) {
+	b.showChannels(ctx, uid, cbID)
 }
 
 // showMyParticipations — экран "мои участия".
-func (b *Bot) showMyParticipations(ctx context.Context, uid int64) {
+func (b *Bot) showMyParticipations(ctx context.Context, uid int64, cbID string) {
 	items, err := b.db.ListMyParticipations(ctx, uid)
 	if err != nil || len(items) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "Вы пока ни в чём не участвуете.", util.BackKeyboard())
@@ -198,12 +198,12 @@ func truncate(s string, max int) string {
 
 // showAnalyticsMenu — главная аналитика: вкладки «Каналы» (UTM) / «Розыгрыши».
 // tab: "" → выбор вкладки; "channels" → список каналов; "giveaways" → список розыгрышей.
-func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string) {
+func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string, cbID string) {
 	switch tab {
 	case "channels":
-		b.showAnalyticsChannels(ctx, uid)
+		b.showAnalyticsChannels(ctx, uid, cbID)
 	case "giveaways":
-		b.showAnalyticsGiveaways(ctx, uid)
+		b.showAnalyticsGiveaways(ctx, uid, cbID)
 	default:
 		kb := model.NewKeyboard()
 		kb.AddRow().AddCallBack("📢 Каналы (UTM-источники)", util.CBAnalyticsTab+"channels")
@@ -214,7 +214,7 @@ func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string) {
 }
 
 // showAnalyticsChannels — список каналов для UTM-аналитики (только где бот админ).
-func (b *Bot) showAnalyticsChannels(ctx context.Context, uid int64) {
+func (b *Bot) showAnalyticsChannels(ctx context.Context, uid int64, cbID string) {
 	channels, err := b.db.ListChannels(ctx, uid)
 	if err != nil || len(channels) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
@@ -252,7 +252,7 @@ func (b *Bot) showAnalyticsChannels(ctx context.Context, uid int64) {
 }
 
 // showAnalyticsGiveaways — список розыгрышей для аналитики участников.
-func (b *Bot) showAnalyticsGiveaways(ctx context.Context, uid int64) {
+func (b *Bot) showAnalyticsGiveaways(ctx context.Context, uid int64, cbID string) {
 	items, err := b.db.ListGiveaways(ctx, uid, "")
 	if err != nil || len(items) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,

@@ -12,7 +12,7 @@ import (
 )
 
 // startAddChannel — переводит юзера в режим добавления канала.
-func (b *Bot) startAddChannel(ctx context.Context, uid int64) {
+func (b *Bot) startAddChannel(ctx context.Context, uid int64, cbID string) {
 	if err := b.db.SetSession(ctx, uid, store.SessionAddingChannel); err != nil {
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка: "+err.Error())
 		return
@@ -29,10 +29,10 @@ func (b *Bot) startAddChannel(ctx context.Context, uid int64) {
 // refreshChannels — 🔄 обновляет статус админства бота во ВСЕХ каналах юзера.
 // Безопасно: обходятся только каналы уже добавленные пользователем (никакого
 // перебора чужих каналов). Потерявшие админство помечаются ⚠️ в списке.
-func (b *Bot) refreshChannels(ctx context.Context, uid int64) {
+func (b *Bot) refreshChannels(ctx context.Context, uid int64, cbID string) {
 	channels, err := b.db.ListChannels(ctx, uid)
 	if err != nil || len(channels) == 0 {
-		b.showChannels(ctx, uid)
+		b.showChannels(ctx, uid, cbID)
 		return
 	}
 
@@ -61,8 +61,28 @@ func (b *Bot) refreshChannels(ctx context.Context, uid int64) {
 	if lost > 0 {
 		msg += fmt.Sprintf("\n⚠️ Потеряно админство: %d — передобавьте бота в эти каналы.", lost)
 	}
-	_ = b.api.SendText(ctx, uid, msg)
-	b.showChannels(ctx, uid)
+	// Отчёт и список — одним сообщением (один клик = один экран).
+	items, _ := b.db.ListChannels(ctx, uid)
+	text := msg
+	kb := model.NewKeyboard()
+	if len(items) > 0 {
+		text += "\n\n"
+		for _, c := range items {
+			admin := "✅"
+			if !c.IsBotAdmin {
+				admin = "⚠️"
+			}
+			title := c.Title
+			if title == "" {
+				title = fmt.Sprintf("канал #%d", c.ChatID)
+			}
+			kb.AddRow().AddCallBack(admin+" "+title, util.CBChannelUTM+fmt.Sprintf("%d", c.ID))
+		}
+		kb.AddRow().AddCallBack("➕ Добавить канал", util.CBChannelAdd)
+		kb.AddRow().AddCallBack("🔄 Обновить статус", util.CBChannelRefresh)
+		kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
+	}
+	b.render(ctx, uid, cbID, text, kb)
 }
 
 // handleAddChannelInput — ввод пользователя в режиме добавления канала.

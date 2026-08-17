@@ -13,7 +13,7 @@ import (
 // showGiveawayAnalytics — аналитика конкретного розыгрыша: участники,
 // динамика по дням, подозрительный трафик. Данные живые (обновляются при
 // каждом открытии — для active розыгрышей отображают текущее состояние).
-func (b *Bot) showGiveawayAnalytics(ctx context.Context, uid, gid int64) {
+func (b *Bot) showGiveawayAnalytics(ctx context.Context, uid, gid int64, cbID string) {
 	g, err := b.db.GetGiveaway(ctx, gid, uid)
 	if err != nil {
 		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
@@ -88,5 +88,5 @@ func (b *Bot) showGiveawayAnalytics(ctx context.Context, uid, gid int64) {
 	kb.AddRow().AddCallBack("🔄 Обновить", util.CBGwAnalytics+fmt.Sprintf("%d", g.ID))
 	kb.AddRow().AddCallBack("← К розыгрышу", util.CBGwOpen+fmt.Sprintf("%d", g.ID))
 
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), kb)
+	b.render(ctx, uid, cbID, sb.String(), kb)
 }

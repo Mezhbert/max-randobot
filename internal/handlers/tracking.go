@@ -85,7 +85,7 @@ func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload str
 }
 
 // showUTMMenu — меню конкретного канала: генерация UTM / аналитика.
-func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
+func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string, cbID string) {
 	idStr := strings.TrimPrefix(p, util.CBChannelUTM)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -122,12 +122,12 @@ func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
 		fmt.Sprintf("Конверсия: %.1f%%\n\n", conv) +
 		"UTM-трекинг источников подписчиков."
 
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, util.ChannelUTMKeyboard(chID))
+	b.render(ctx, uid, cbID, text, util.ChannelUTMKeyboard(chID))
 }
 
 // startCreateUTM — начало создания UTM-ссылки. Юзер вводит только название
 // источника (одно слово/фразу) — остальное бот генерит автоматически.
-func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
+func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string, cbID string) {
 	idStr := strings.TrimPrefix(p, util.CBUTMCreate)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -137,7 +137,7 @@ func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
 		return
 	}
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+	b.render(ctx, uid, cbID,
 		"🔗 Создание трекинг-ссылки\n\n"+
 			"Отправьте название источника — откуда будут приходить подписчики.\n"+
 			"Например: «Telegram», «Реклама у Иванова», «Пост в VK»\n\n"+
@@ -192,7 +192,7 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 }
 
 // showUTMStats — аналитика UTM по каналу.
-func (b *Bot) showUTMStats(ctx context.Context, uid int64, p string) {
+func (b *Bot) showUTMStats(ctx context.Context, uid int64, p string, cbID string) {
 	idStr := strings.TrimPrefix(p, util.CBUTMStats)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -217,11 +217,11 @@ func (b *Bot) showUTMStats(ctx context.Context, uid int64, p string) {
 		fmt.Fprintf(&sb, "• %s / %s\n  клики: %d | подписки: %d | отписки: %d | конверсия: %.0f%%\n",
 			s.Source, s.Campaign, s.Clicks, s.Signups, s.Unsubs, conv)
 	}
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), util.ChannelUTMStatsKeyboard(chID))
+	b.render(ctx, uid, cbID, sb.String(), util.ChannelUTMStatsKeyboard(chID))
 }
 
 // exportUTMCSV — экспорт статистики UTM в CSV-файл (через MAX Upload API).
-func (b *Bot) exportUTMCSV(ctx context.Context, uid int64, p string) {
+func (b *Bot) exportUTMCSV(ctx context.Context, uid int64, p string, cbID string) {
 	idStr := strings.TrimPrefix(p, util.CBUTMExport)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {

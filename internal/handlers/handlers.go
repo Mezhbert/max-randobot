@@ -199,6 +199,22 @@ func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
 }
 
+// render рисует экран в ТОМ ЖЕ сообщении, где юзер нажал кнопку
+// (CallbackAnswer.Message = edit-in-place). Ответ появляется под пальцем —
+// скролл не нужен, диалог не пачкается новым сообщением на каждый клик.
+// Если callbackID пуст (вход командой/текстом) или edit упал (истёк срок
+// редактирования и т.п.) — fallback: обычная отправка нового сообщения.
+func (b *Bot) render(ctx context.Context, uid int64, callbackID, text string, kb *model.Keyboard) {
+	if callbackID != "" {
+		if err := b.api.AnswerCallbackEdit(ctx, callbackID, text, kb); err == nil {
+			return
+		} else {
+			b.log.Debug("callback edit failed, fallback to send", "err", err)
+		}
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
+}
+
 // sendStartScreen — информативное приветствие при /start: что умеет бот + меню.
 func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 	text := `🎁 Бот розыгрышей в MAX
@@ -215,4 +231,9 @@ func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 
 Выберите действие 👇`
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
+}
+
+// renderMainMenu — главное меню edit-in-place (по клику) или отправкой (команда).
+func (b *Bot) renderMainMenu(ctx context.Context, uid int64, cbID, text string) {
+	b.render(ctx, uid, cbID, text, util.MainMenuKeyboard())
 }
