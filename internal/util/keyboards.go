@@ -31,14 +31,25 @@ const (
 	CBGwEdit         = "gw_edit:"                    // продолжить создание/редактировать
 	CBGwEditField    = "gw_ef:"                      // + field:giveaway_id (меню редактирования поля)
 	CBGwEditSet      = "gw_es:"                      // + key:value:giveaway_id (выбор-опции)
+	CBGwEditChTglSub = "gw_ets:"                     // + channel_id:giveaway_id (тоггл канала подписки в редактуре)
+	CBGwEditChTglPub = "gw_etp:"                     // + channel_id:giveaway_id (тоггл канала публикации в редактуре)
+	CBGwMediaDone    = "gw_media_done:"              // + giveaway_id (завершить ввод медиа)
 	CBGwExtraWinner  = "gw_extra_winner:"            // + giveaway_id (доп. победитель)
 	CBGwAnalytics    = "gw_analytics:"               // + giveaway_id (аналитика розыгрыша)
+	CBGwParticipants = "gw_parts:"                   // + giveaway_id (список участников)
+	CBGwKickPart     = "gw_kick:"                    // + giveaway_id:user_id (удалить участника)
+	CBGwCSVParts     = "gw_csv:"                     // + giveaway_id (экспорт участников CSV)
+
+	// UTM-трекинг (общее)
+	CBUTMQuickCreate = "utm_quick" // быстрая трекинг-ссылка без канала
 
 	// Каналы
 	CBChannelAdd       = "ch_add"
 	CBChannelBack      = "ch_back"
 	CBChannelAnalytics = "ch_analytics" // вход в аналитику/UTM канала
 	CBChannelRefresh   = "ch_refresh"   // 🔄 обновить статус админства бота во всех каналах
+	CBChannelToggleSub = "ch_toggle_sub:" // + channel_id — тоггл канала подписки (пикер)
+	CBChannelTogglePub = "ch_toggle_pub:" // + channel_id — тоггл канала публикации (пикер)
 
 	// UTM-трекинг
 	CBChannelUTM  = "ch_utm:"  // + channel_id — меню UTM конкретного канала
@@ -53,8 +64,7 @@ const (
 	CBFSMOption   = "fsm_opt:"
 	CBFSMConfirm  = "fsm_confirm"
 	CBFSMReject   = "fsm_reject"
-	CBFSMSaveDraft = "fsm_save" // сохранить в черновик (выйти из FSM, сохранив)
-	CBFSMHint     = "fsm_hint"  // 💡 краткая подсказка по текущему шагу
+	CBFSMHint     = "fsm_hint" // 💡 краткая подсказка по текущему шагу
 
 	// Кнопка "Участвовать" под постом розыгрыша
 	CBParticipate = "part:" // + giveaway_id
@@ -70,6 +80,62 @@ func MainMenuKeyboard() *model.Keyboard {
 	kb.AddRow().AddCallBack("📊 Аналитика", CBAnalytics)
 	kb.AddRow().AddCallBack("🆘 Поддержка", CBSupport)
 	return kb
+}
+
+// replyMenuButtons — подписи reply-кнопок главного меню (кнопки у поля ввода).
+// Порядок как в MainMenuKeyboard. Payload кнопки = payload соответствующего
+// действия; нажатие шлёт message с data-attachment (см. maxapi.ParseDataPayload).
+var replyMenuButtons = []string{
+	"🎁 Создать розыгрыш",
+	"📋 Мои розыгрыши",
+	"📢 Мои каналы",
+	"🎟 Мои участия",
+	"📊 Аналитика",
+	"🆘 Поддержка",
+}
+
+// MainMenuReplyRows — матрица кнопок reply-keyboard для главного меню.
+func MainMenuReplyRows() [][]*model.Button {
+	rows := make([][]*model.Button, 0, len(replyMenuButtons))
+	for _, text := range replyMenuButtons {
+		rows = append(rows, []*model.Button{{
+			Text:    text,
+			Type:    model.ButtonMessage,
+			Payload: replyPayloadFor(text),
+		}})
+	}
+	return rows
+}
+
+// replyPayloadFor — payload reply-кнопки по её подписи (совпадает с payload
+// инлайн-кнопки главного меню). Fallback на "menu" для неизвестного текста.
+func replyPayloadFor(text string) string {
+	switch text {
+	case "🎁 Создать розыгрыш":
+		return CBCreateGiveaway
+	case "📋 Мои розыгрыши":
+		return CBMyGiveaways
+	case "📢 Мои каналы":
+		return CBMyChannels
+	case "🎟 Мои участия":
+		return CBMyParticipations
+	case "📊 Аналитика":
+		return CBAnalytics
+	case "🆘 Поддержка":
+		return CBSupport
+	}
+	return CBMainMenu
+}
+
+// ReplyPayloadByText — payload действия по подписи reply-кнопки ("", если не
+// кнопка меню). Используется как fallback, когда data-attachment не пришёл.
+func ReplyPayloadByText(text string) string {
+	for _, t := range replyMenuButtons {
+		if t == text {
+			return replyPayloadFor(t)
+		}
+	}
+	return ""
 }
 
 // NavKeyboard — 💡 / Назад / Отменить.
@@ -191,6 +257,26 @@ func ChannelAddKeyboard() *model.Keyboard {
 func CancelEditKeyboard(giveawayID int64) *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("✖ Отмена", CBGwOpen+strconv.FormatInt(giveawayID, 10))
+	return kb
+}
+
+// MediaEditDoneKeyboard — «Готово» при вводе медиа в редактуре.
+func MediaEditDoneKeyboard(giveawayID int64) *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("✅ Готово", CBGwMediaDone+strconv.FormatInt(giveawayID, 10))
+	return kb
+}
+
+// AnalyticsKeyboard — навигация на экране аналитики розыгрыша.
+func AnalyticsKeyboard(giveawayID int64) *model.Keyboard {
+	id := strconv.FormatInt(giveawayID, 10)
+	kb := model.NewKeyboard()
+	kb.AddRow().
+		AddCallBack("👥 Участники", CBGwParticipants+id).
+		AddCallBack("🔄 Обновить", CBGwAnalytics+id)
+	kb.AddRow().
+		AddCallBack("📎 CSV участников", CBGwCSVParts+id).
+		AddCallBack("← К розыгрышу", CBGwOpen+id)
 	return kb
 }
 

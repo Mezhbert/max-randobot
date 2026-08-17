@@ -10,11 +10,11 @@ import (
 // Состояния юзера вне FSM розыгрыша (см. user_sessions в БД).
 const (
 	SessionNone          = ""                // нет активного состояния
-	SessionAddingChannel = "adding_channel"  // ожидание ID канала / пересылки
-	SessionCaptchaPct    = "captcha_pct"     // ожидание % капчи (FSM розыгрыша)
+	SessionAddingChannel = "adding_channel"  // ожидание ссылки/ID канала / пересылки
 	SessionUTMCreate     = "utm_create"      // создание UTM-ссылки
 	SessionCaptchaVerify = "captcha_verify"  // ожидание ответа капчи (при участии)
 	SessionEditField     = "edit_field"      // редактура поля розыгрыша (scheduled/active)
+	SessionEditMedia     = "edit_media"      // ввод новых медиа в редактуре
 )
 
 // UserSession — произвольное состояние юзера с контекстом (payload).

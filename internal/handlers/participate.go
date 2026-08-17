@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/maxbot/giveawaybot/internal/util"
+	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
 
 // onParticipate — обработка нажатия "Участвовать" под постом розыгрыша.
@@ -81,9 +82,27 @@ func (b *Bot) needCaptcha(g store.Giveaway) bool {
 	return g.CaptchaMode == store.CaptchaAll
 }
 
-// startCaptchaChallenge генерирует капчу, отправляет картинку и переводит
-// пользователя в режим ожидания ответа (SessionCaptchaVerify).
+// startCaptchaChallenge — капча при участии.
+// Основной путь: мини-апп (open_app-кнопка «🤖 Подтвердить» в тихой карточке —
+// диалог открыт deep-link'ом). Если ID бота неизвестен (мини-апп не настроен) —
+// fallback: картинка с цифрами прямо в чате (SessionCaptchaVerify).
 func (b *Bot) startCaptchaChallenge(ctx context.Context, userID, giveawayID int64) {
+	if b.botUserID != 0 {
+		// Тихая карточка с open_app-кнопкой: payload captcha_<id> открывает
+		// страницу капчи мини-аппа (start_param).
+		kb := model.NewKeyboard()
+		kb.AddRow().AddButton(model.Button{
+			Type:      model.ButtonOpenApp,
+			Text:      "🤖 Подтвердить участие",
+			ContactID: b.botUserID,
+			Payload:   fmt.Sprintf("captcha_%d", giveawayID),
+		})
+		kb.AddRow().AddCallBack("✖ Не хочу участвовать", util.CBMainMenu)
+		_, _ = b.api.SendTextWithKeyboard(ctx, userID,
+			"🤖 Для участия нужно подтвердить, что вы не бот.\nНажмите кнопку ниже 👇", kb)
+		return
+	}
+	// Fallback: картинка-капча в чате.
 	pngData, err := b.captcha.Generate(userID)
 	if err != nil {
 		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка генерации капчи. Попробуйте ещё раз.")
@@ -133,7 +152,7 @@ func (b *Bot) handleCaptchaVerifyInput(ctx context.Context, userID int64, answer
 }
 
 // registerParticipant финализирует участие: добавляет в БД, логирует подписки,
-// шлёт поздравление + alert.
+// шлёт ОДНУ тихую карточку (без push — диалог уже открыт самой ссылкой) + alert.
 func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giveaway, callbackID string) {
 	p, err := b.db.AddParticipant(ctx, store.Participant{
 		GiveawayID:    g.ID,
@@ -146,7 +165,7 @@ func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giv
 		if callbackID != "" {
 			b.api.AnswerCallback(ctx, callbackID, "✅ Вы уже участвуете!")
 		}
-		_ = b.api.SendText(ctx, userID, "Вы уже участвуете в этом розыгрыше! 🎉")
+		_ = b.api.SendTextQuiet(ctx, userID, "Вы уже участвуете в этом розыгрыше! 🎉")
 		return
 	}
 
@@ -162,7 +181,9 @@ func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giv
 	if callbackID != "" {
 		b.api.AnswerCallback(ctx, callbackID, "🎉 Вы участвуете!")
 	}
-	_ = b.api.SendText(ctx, userID,
+	// Одна тихая карточка: участник уже в БД (бот может писать), диалог открыт
+	// deep-link'ом — уведомление не нужно.
+	_ = b.api.SendTextQuiet(ctx, userID,
 		fmt.Sprintf("🎉 Вы участвуете в розыгрыше «%s»! Удачи!", g.Name))
 }
 

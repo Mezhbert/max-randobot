@@ -196,8 +196,8 @@ func truncate(s string, max int) string {
 	return s[:max-1] + "…"
 }
 
-// showAnalyticsMenu — главная аналитика: вкладки «Каналы» (UTM) / «Розыгрыши».
-// tab: "" → выбор вкладки; "channels" → список каналов; "giveaways" → список розыгрышей.
+// showAnalyticsMenu — главная аналитика: трекинг-ссылки, розыгрыши, каналы.
+// tab: "" → выбор раздела; "channels" → список каналов; "giveaways" → список розыгрышей.
 func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string) {
 	switch tab {
 	case "channels":
@@ -206,10 +206,15 @@ func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string) {
 		b.showAnalyticsGiveaways(ctx, uid)
 	default:
 		kb := model.NewKeyboard()
+		kb.AddRow().AddCallBack("🔗 Создать трекинг-ссылку", util.CBUTMQuickCreate)
+		kb.AddRow().AddCallBack("🎁 Розыгрыши", util.CBAnalyticsTab+"giveaways")
 		kb.AddRow().AddCallBack("📢 Каналы (UTM-источники)", util.CBAnalyticsTab+"channels")
-		kb.AddRow().AddCallBack("🎁 Розыгрыши (участники)", util.CBAnalyticsTab+"giveaways")
 		kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
-		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "📊 Аналитика\n\nВыберите раздел:", kb)
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"📊 Аналитика\n\n"+
+				"• Трекинг-ссылка — быстрая UTM-ссылка без привязки к каналу\n"+
+				"• Розыгрыши — статистика участников по конкретному розыгрышу\n"+
+				"• Каналы — UTM-аналитика по каналам, где бот админ", kb)
 	}
 }
 

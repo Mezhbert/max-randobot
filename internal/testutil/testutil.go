@@ -100,6 +100,7 @@ type MockBotAPI struct {
 	EditErr         func(mid string) error             // по умолчанию nil
 	SendTextErr     error                              // ошибка SendText* (по умолчанию nil)
 	IsSubscriberMap map[int64]map[int64]bool           // chatID -> userID -> subscribed
+	IsBotAdminMap   map[int64]bool                     // chatID -> is admin (нет записи -> true)
 }
 
 // NewMock создаёт MockBotAPI с дефолтными успешными ответами.
@@ -118,6 +119,20 @@ func (m *MockBotAPI) SendText(ctx context.Context, userID int64, text string) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Sends = append(m.Sends, SendRecord{Method: "SendText", UserID: userID, Text: text})
+	return m.SendTextErr
+}
+
+func (m *MockBotAPI) SendTextQuiet(ctx context.Context, userID int64, text string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Sends = append(m.Sends, SendRecord{Method: "SendTextQuiet", UserID: userID, Text: text})
+	return m.SendTextErr
+}
+
+func (m *MockBotAPI) SendTextReplyKeyboard(ctx context.Context, userID int64, text string, rows [][]*model.Button) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Sends = append(m.Sends, SendRecord{Method: "SendTextReplyKeyboard", UserID: userID, Text: text})
 	return m.SendTextErr
 }
 
@@ -169,6 +184,11 @@ func (m *MockBotAPI) IsSubscriber(ctx context.Context, chatID, userID int64) (bo
 }
 
 func (m *MockBotAPI) IsBotAdminInChat(ctx context.Context, chatID int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if v, ok := m.IsBotAdminMap[chatID]; ok {
+		return v, nil
+	}
 	return true, nil
 }
 
@@ -178,6 +198,10 @@ func (m *MockBotAPI) CheckChannelAdmin(ctx context.Context, chatID int64) (model
 
 func (m *MockBotAPI) GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error) {
 	return model.Chat{ChatID: chatID, Title: fmt.Sprintf("канал #%d", chatID)}, nil
+}
+
+func (m *MockBotAPI) GetChatByLink(ctx context.Context, link string) (model.Chat, error) {
+	return model.Chat{ChatID: 424242, Title: "канал по ссылке", Link: link}, nil
 }
 
 func (m *MockBotAPI) AnswerCallback(ctx context.Context, callbackID, notification string) {

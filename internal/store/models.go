@@ -39,14 +39,13 @@ type MediaToken struct {
 
 // User — пользователь MAX.
 type User struct {
-	UserID        int64
-	FirstName     string
-	Username      string
-	IsBot         bool
-	FlagInBase    bool
-	DialogChatID  int64 // chat_id диалога bot↔user (для GetMessages при /clear)
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	UserID     int64
+	FirstName  string
+	Username   string
+	IsBot      bool
+	FlagInBase bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Channel — канал создателя ("мои каналы").

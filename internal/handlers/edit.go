@@ -15,35 +15,38 @@ import (
 )
 
 // Редактура scheduled/active розыгрышей по полям (без перепрохождения FSM).
-// Каждое поле хранится в БД отдельно — правится точечно.
+// Каждое поле хранится в БД отдельно — правится точечно. После правки полей,
+// влияющих на опубликованный пост (текст/медиа/кнопка), посты live-обновляются.
 
-// editFields — редактируемые поля: ключ payload → заголовок + колонка.
-// Для active-розыгрышей publish_at недоступен (пост уже вышел).
+// editFieldDef — редактируемое поле: заголовок + колонка БД + тип ввода.
 type editFieldDef struct {
-	title    string // заголовок кнопки
-	col      string // колонка БД
-	kind     string // text | date | number | channels | captcha | finishmode
-	skipActive bool // недоступно для active (например время публикации)
+	title      string // заголовок кнопки
+	col        string // колонка БД
+	kind       string // text | date | number | channels | media | captcha | finishmode | resultsloc
+	skipActive bool   // недоступно для active (например время публикации)
+	refresh    bool   // после правки обновить опубликованные посты (live-edit)
 }
 
 var editFields = map[string]editFieldDef{
-	"name":         {title: "🏷 Название", col: "name", kind: "text"},
-	"post_text":    {title: "📝 Текст поста", col: "post_text", kind: "text"},
-	"button_text":  {title: "🔘 Текст кнопки", col: "button_text", kind: "text"},
-	"publish_at":   {title: "📅 Время публикации", col: "publish_at", kind: "date", skipActive: true},
-	"finish":       {title: "🏁 Условие итогов", col: "finish_mode", kind: "finishmode"},
-	"winners":      {title: "🏆 Кол-во победителей", col: "winners_count", kind: "number"},
-	"winners_msg":  {title: "✉️ Сообщение победителям", col: "winners_message", kind: "text"},
-	"results_loc":  {title: "📍 Где итоги", col: "results_in_original_post", kind: "resultsloc"},
-	"results_text": {title: "📄 Текст итогов", col: "results_post_text", kind: "text"},
-	"captcha":      {title: "🤖 Капча", col: "captcha_mode", kind: "captcha"},
-	"sub_channels": {title: "📢 Каналы подписки", col: "subscribe_channel_ids", kind: "channels"},
+	"name":          {title: "🏷 Название", col: "name", kind: "text"},
+	"post_text":     {title: "📝 Текст поста", col: "post_text", kind: "text", refresh: true},
+	"media":         {title: "🖼 Медиа", col: "media_tokens", kind: "media", refresh: true},
+	"button_text":   {title: "🔘 Текст кнопки", col: "button_text", kind: "text", refresh: true},
+	"sub_channels":  {title: "📢 Каналы подписки", col: "subscribe_channel_ids", kind: "channels"},
+	"pub_channels":  {title: "📣 Каналы публикации", col: "publish_channel_ids", kind: "channels", skipActive: true},
+	"publish_at":    {title: "📅 Время публикации", col: "publish_at", kind: "date", skipActive: true},
+	"finish":        {title: "🏁 Условие итогов", col: "finish_mode", kind: "finishmode"},
+	"winners":       {title: "🏆 Кол-во победителей", col: "winners_count", kind: "number"},
+	"winners_msg":   {title: "✉️ Сообщение победителям", col: "winners_message", kind: "text"},
+	"results_loc":   {title: "📍 Где итоги", col: "results_in_original_post", kind: "resultsloc"},
+	"results_text":  {title: "📄 Текст итогов", col: "results_post_text", kind: "text"},
+	"captcha":       {title: "🤖 Капча", col: "captcha_mode", kind: "captcha"},
 }
 
 // orderedEditKeys — стабильный порядок кнопок меню редактирования.
 var orderedEditKeys = []string{
-	"name", "post_text", "button_text",
-	"sub_channels",
+	"name", "post_text", "media", "button_text",
+	"sub_channels", "pub_channels",
 	"publish_at", "finish",
 	"winners", "winners_msg",
 	"results_loc", "results_text",
@@ -102,13 +105,16 @@ func (b *Bot) startEditField(ctx context.Context, uid int64, g store.Giveaway, k
 	case "channels":
 		b.showChannelsEditOptions(ctx, uid, g, key)
 		return
+	case "media":
+		b.startEditMedia(ctx, uid, g)
+		return
 	}
 
 	// Текст/дата/число — показываем текущее значение и ждём ввод.
 	cur := b.fieldCurrentValue(g, key)
 	_ = b.db.SetSessionPayload(ctx, uid, store.SessionEditField, map[string]any{
 		"giveaway_id": float64(g.ID),
-		"field":        key,
+		"field":       key,
 	})
 	prompt := fmt.Sprintf("%s\n\nТекущее значение:\n%s\n\nОтправьте новое значение:", def.title, cur)
 	if def.kind == "date" {
@@ -129,6 +135,11 @@ func (b *Bot) fieldCurrentValue(g store.Giveaway, key string) string {
 		return truncate(g.PostText, 300)
 	case "button_text":
 		return g.ButtonText
+	case "media":
+		if len(g.MediaTokens) == 0 {
+			return "— (нет медиа)"
+		}
+		return fmt.Sprintf("%d вложений", len(g.MediaTokens))
 	case "publish_at":
 		if g.PublishAt != nil {
 			return util.FormatMoscowTime(*g.PublishAt)
@@ -232,6 +243,9 @@ func (b *Bot) handleEditFieldInput(ctx context.Context, uid int64, text string) 
 	}
 	_ = b.db.ClearSession(ctx, uid)
 	_ = b.api.SendText(ctx, uid, "✅ Сохранено.")
+	if def.refresh {
+		b.refreshPublishedPosts(ctx, g.ID)
+	}
 	b.showEditMenu(ctx, uid, g.ID)
 	return true
 }
@@ -269,15 +283,146 @@ func (b *Bot) showResultsLocEditOptions(ctx context.Context, uid int64, g store.
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, "📍 Где публиковать итоги?", kb)
 }
 
+// showChannelsEditOptions — редактирование каналов (подписки/публикации)
+// тем же пикером с галочками, что и при создании (edit-in-place по mid).
 func (b *Bot) showChannelsEditOptions(ctx context.Context, uid int64, g store.Giveaway, key string) {
-	// Каналы подписки редактируем через отдельный экран с галочками (заготовка —
-	// полный тоггл-экран это этап отдельной итерации, пока предупреждаем).
-	_ = b.api.SendText(ctx, uid,
-		"📢 Редактирование каналов подписки пока выполняется при создании розыгрыша.\n"+
-			"Скоро добавим отдельный экран выбора.")
+	isPub := key == "pub_channels"
+	// Пусто — берём сохранённый mid пикера (edit-in-place) или шлём новое.
+	prefix := util.CBGwEditChTglSub
+	title := "📢 Каналы для подписки"
+	if isPub {
+		prefix = util.CBGwEditChTglPub
+		title = "📣 Каналы публикации"
+	}
+
+	channels, _ := b.db.ListChannels(ctx, uid)
+	selected := g.SubscribeChannelIDs
+	if isPub {
+		selected = g.PublishChannelIDs
+	}
+
+	kb := model.NewKeyboard()
+	for _, c := range channels {
+		mark := "⬜ "
+		for _, sid := range selected {
+			if sid == c.ID {
+				mark = "✅ "
+				break
+			}
+		}
+		ctitle := c.Title
+		if ctitle == "" {
+			ctitle = fmt.Sprintf("канал #%d", c.ChatID)
+		}
+		if !c.IsBotAdmin {
+			ctitle += " ⚠️"
+		}
+		kb.AddRow().AddCallBack(mark+ctitle, fmt.Sprintf("%s%d:%d", prefix, c.ID, g.ID))
+	}
+	kb.AddRow().AddCallBack("✅ Готово", util.CBGwEdit+fmt.Sprintf("%d", g.ID))
+	kb.AddRow().AddCallBack("← К списку полей", util.CBGwEditField+key+":"+fmt.Sprintf("%d", g.ID))
+
+	text := title + " розыгрыша «" + g.Name + "».\n\n" +
+		"Нажимайте на каналы, чтобы отметить/снять. ⚠️ — бот НЕ админ (нельзя использовать).\n" +
+		"Готово — «✅ Готово»."
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
 }
 
-// applyEditSet — применение выбор-опции (captcha/finish/результаты).
+// startEditMedia — редактирование медиа: кнопки «заменить» (отправить заново)
+// и «очистить».
+func (b *Bot) startEditMedia(ctx context.Context, uid int64, g store.Giveaway) {
+	cur := "нет"
+	if len(g.MediaTokens) > 0 {
+		cur = fmt.Sprintf("%d вложений", len(g.MediaTokens))
+	}
+	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("🖼 Отправить новые медиа", util.CBGwEditSet+"media:replace:"+fmt.Sprintf("%d", g.ID))
+	kb.AddRow().AddCallBack("🗑 Убрать все медиа", util.CBGwEditSet+"media:clear:"+fmt.Sprintf("%d", g.ID))
+	kb.AddRow().AddCallBack("← К списку полей", util.CBGwEditField+"media:"+fmt.Sprintf("%d", g.ID))
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		fmt.Sprintf("🖼 Медиа (сейчас: %s).\n\n«Отправить новые» — пришлите фото/видео заново (старые заменятся).", cur), kb)
+}
+
+// startEditMediaInput — переводит в режим ввода медиа (SessionEditField c
+// field=media_input): следующие сообщения с фото/видео заменят текущий набор.
+func (b *Bot) startEditMediaInput(ctx context.Context, uid int64, g store.Giveaway) {
+	_ = b.db.SetSessionPayload(ctx, uid, store.SessionEditMedia, map[string]any{
+		"giveaway_id": float64(g.ID),
+	})
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		"🖼 Пришлите фото и/или видео для поста (по одному сообщению каждное).\n"+
+			"Когда закончите — нажмите «✅ Готово».",
+		util.MediaEditDoneKeyboard(g.ID))
+}
+
+// handleEditMediaInput — приём медиа в режиме редактуры. Возвращает true если
+// сообщение обработано.
+func (b *Bot) handleEditMediaInput(ctx context.Context, uid int64, msg model.MessageUpdate) bool {
+	sess, err := b.db.GetSessionPayload(ctx, uid)
+	if err != nil || sess.State != store.SessionEditMedia {
+		return false
+	}
+	gidF, _ := sess.Payload["giveaway_id"].(float64)
+	g, err := b.db.GetGiveaway(ctx, int64(gidF), uid)
+	if err != nil {
+		_ = b.db.ClearSession(ctx, uid)
+		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+		return true
+	}
+
+	var tokens []store.MediaToken
+	for _, at := range msg.Body.Attachments {
+		switch at.Type {
+		case model.AttachImage:
+			if at.Payload.Token != "" {
+				tokens = append(tokens, store.MediaToken{Token: at.Payload.Token, Type: "image"})
+			}
+		case model.AttachVideo:
+			if at.Payload.Token != "" {
+				tokens = append(tokens, store.MediaToken{Token: at.Payload.Token, Type: "video"})
+			}
+		}
+	}
+	if len(tokens) == 0 {
+		_ = b.api.SendText(ctx, uid, "Не увидел фото/видео во вложениях. Пришлите медиа или «✅ Готово».")
+		return true
+	}
+	all := append(append([]store.MediaToken{}, g.MediaTokens...), tokens...)
+	if err := b.db.UpdateGiveawayFieldAny(ctx, g.ID, "media_tokens", all); err != nil {
+		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения: "+err.Error())
+		return true
+	}
+	_ = b.api.SendText(ctx, uid, fmt.Sprintf("✅ Медиа добавлено (%d всего). Ещё или «✅ Готово».", len(all)))
+	return true
+}
+
+// finishEditMedia — завершение ввода медиа: live-обновление постов и меню.
+func (b *Bot) finishEditMedia(ctx context.Context, uid, gid int64) {
+	_ = b.db.ClearSession(ctx, uid)
+	g, err := b.db.GetGiveaway(ctx, gid, uid)
+	if err != nil {
+		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+		return
+	}
+	_ = b.api.SendText(ctx, uid, "✅ Медиа сохранено.")
+	b.refreshPublishedPosts(ctx, g.ID)
+	b.showEditMenu(ctx, uid, g.ID)
+}
+
+// refreshPublishedPosts — live-обновление опубликованных постов розыгрыша
+// (текст/медиа/кнопка) после правки. Для scheduled — no-op (постов ещё нет).
+func (b *Bot) refreshPublishedPosts(ctx context.Context, gid int64) {
+	if b.counterUpd == nil {
+		return
+	}
+	g, err := b.db.GetGiveawayAny(ctx, gid)
+	if err != nil || g.Status != store.StatusActive || len(g.PublishMessageIDs) == 0 {
+		return
+	}
+	go b.counterUpd(context.Background(), &g) // переиспользуем механизм счётчика
+}
+
+// applyEditSet — применение выбор-опции (captcha/finish/результаты/медиа).
 func (b *Bot) applyEditSet(ctx context.Context, uid int64, key, value string, gid int64) {
 	g, err := b.db.GetGiveaway(ctx, gid, uid)
 	if err != nil {
@@ -306,14 +451,91 @@ func (b *Bot) applyEditSet(ctx context.Context, uid int64, key, value string, gi
 	case "results_original":
 		bval := value == "1"
 		_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "results_in_original_post", bval)
+	case "media":
+		switch value {
+		case "clear":
+			_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "media_tokens", []store.MediaToken{})
+			_ = b.api.SendText(ctx, uid, "✅ Медиа убраны.")
+			b.refreshPublishedPosts(ctx, g.ID)
+			b.showEditMenu(ctx, uid, g.ID)
+			return
+		case "replace":
+			// Очищаем и переводим в режим приёма медиа.
+			_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "media_tokens", []store.MediaToken{})
+			b.startEditMediaInput(ctx, uid, g)
+			return
+		}
 	}
 	_ = b.api.SendText(ctx, uid, "✅ Сохранено.")
 	b.showEditMenu(ctx, uid, g.ID)
 }
 
+// toggleEditChannel — тоггл канала в редактуре (sub/pub) с перерисовкой пикера.
+func (b *Bot) toggleEditChannel(ctx context.Context, uid int64, p string) {
+	isSub := strings.HasPrefix(p, util.CBGwEditChTglSub)
+	rest := strings.TrimPrefix(strings.TrimPrefix(p, util.CBGwEditChTglSub), util.CBGwEditChTglPub)
+	parts := strings.Split(rest, ":")
+	if len(parts) != 2 {
+		return
+	}
+	chID, _ := strconv.ParseInt(parts[0], 10, 64)
+	gid, _ := strconv.ParseInt(parts[1], 10, 64)
+
+	g, err := b.db.GetGiveaway(ctx, gid, uid)
+	if err != nil || (g.Status != store.StatusScheduled && g.Status != store.StatusActive) {
+		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+		return
+	}
+
+	field := "subscribe_channel_ids"
+	current := g.SubscribeChannelIDs
+	key := "sub_channels"
+	if !isSub {
+		field = "publish_channel_ids"
+		current = g.PublishChannelIDs
+		key = "pub_channels"
+	}
+
+	found := false
+	var updated []int64
+	for _, id := range current {
+		if id == chID {
+			found = true
+			continue
+		}
+		updated = append(updated, id)
+	}
+	if !found {
+		// Выбор: не-админ канал нельзя выбрать (и обязательно ≥1 канал публикации).
+		if ch, err := b.db.GetChannel(ctx, chID, uid); err == nil && !ch.IsBotAdmin {
+			_ = b.api.SendText(ctx, uid, "⚠️ Бот не админ в этом канале — выбрать нельзя.")
+			return
+		}
+		updated = append(updated, chID)
+	}
+	if !isSub && len(updated) == 0 {
+		_ = b.api.SendText(ctx, uid, "⚠️ Нужен хотя бы один канал публикации.")
+		return
+	}
+
+	if err := b.db.UpdateGiveawayFieldAny(ctx, g.ID, field, updated); err != nil {
+		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка обновления: "+err.Error())
+		return
+	}
+	// Перерисовываем пикер с актуальным выбором.
+	gg, _ := b.db.GetGiveaway(ctx, gid, uid)
+	b.showChannelsEditOptions(ctx, uid, gg, key)
+}
+
+// escapeMarkdown экранирует скобки в markdown-упоминании.
+func escapeMarkdown(s string) string {
+	r := strings.NewReplacer("[", "\\[", "]", "\\]", "(", "\\(", ")", "\\)")
+	return r.Replace(s)
+}
+
 // pickExtraWinner — выбор дополнительного победителя в завершённом розыгрыше
 // (если основной не отвечает или оказался ботом). Weighted-выбор среди всех
-// участников, исключая существующих победителей. Публикует доп. итоги в каналы.
+// участников, исключая текущих победителей. Публикует доп. итоги в каналы.
 func (b *Bot) pickExtraWinner(ctx context.Context, uid, gid int64) {
 	g, err := b.db.GetGiveaway(ctx, gid, uid)
 	if err != nil || g.Status != store.StatusFinished {
@@ -361,7 +583,7 @@ func (b *Bot) pickExtraWinner(ctx context.Context, uid, gid int64) {
 	if u.FirstName != "" {
 		name = u.FirstName
 	}
-	mention := fmt.Sprintf("[%s](max://user/%d)", name, extra[0])
+	mention := fmt.Sprintf("[%s](max://user/%d)", escapeMarkdown(name), extra[0])
 	_ = b.api.SendText(ctx, uid, fmt.Sprintf("🎲 Доп. победитель: %s", mention))
 
 	// Уведомляем победителя в ЛС (если задано сообщение).

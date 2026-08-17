@@ -125,6 +125,21 @@ func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, util.ChannelUTMKeyboard(chID))
 }
 
+// startQuickUTM — быстрая трекинг-ссылка БЕЗ привязки к каналу (из меню
+// «Аналитика»). Юзер вводит только название источника — ссылка готова.
+func (b *Bot) startQuickUTM(ctx context.Context, uid int64) {
+	if err := b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{"channel_id": float64(0)}); err != nil {
+		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+		return
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		"🔗 Создание трекинг-ссылки\n\n"+
+			"Отправьте название источника — откуда будут приходить подписчики.\n"+
+			"Например: «Telegram», «Реклама у Иванова», «Пост в VK»\n\n"+
+			"Бот сгенерирует уникальную ссылку с трекингом автоматически.",
+		util.CancelKeyboard())
+}
+
 // startCreateUTM — начало создания UTM-ссылки. Юзер вводит только название
 // источника (одно слово/фразу) — остальное бот генерит автоматически.
 func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
@@ -155,7 +170,7 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 	chIDf, ok := sess.Payload["channel_id"]
 	if !ok {
 		_ = b.db.ClearSession(ctx, uid)
-		_ = b.api.SendText(ctx, uid, "Канал утерян, начните заново.")
+		_ = b.api.SendText(ctx, uid, "Сессия утеряна, начните заново.")
 		return true
 	}
 	chIDf2, _ := chIDf.(float64)
@@ -181,6 +196,17 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 		botName = "ВАШ_БОТ"
 	}
 	link := fmt.Sprintf("https://max.ru/%s/start/%s%s", botName, utmPayloadPrefix, code)
+
+	// Быстрая ссылка (без канала) — свой ответ и своя клавиатура.
+	if chID == 0 {
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\n"+
+				"Источник: %s\n\n"+
+				"Размещайте где угодно — клики и подписки будут учтены "+
+				"в «Аналитика → Каналы».", link, source),
+			util.BackKeyboard())
+		return true
+	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\n"+
 			"Источник: %s\n\n"+

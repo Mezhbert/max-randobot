@@ -1,6 +1,9 @@
 package store
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // AddParticipant — добавляет участника. idempotent по (giveaway_id, user_id).
 func (s *Store) AddParticipant(ctx context.Context, p Participant) (Participant, error) {
@@ -96,6 +99,53 @@ func (s *Store) ListParticipantsForDraw(ctx context.Context, giveawayID int64) (
 // явное имя под сценарий finish).
 func (s *Store) CountParticipantsForDraw(ctx context.Context, giveawayID int64) (int, error) {
 	return s.CountParticipants(ctx, giveawayID)
+}
+
+// ParticipantRow — строка списка участников (для аналитики/удаления накруток).
+type ParticipantRow struct {
+	UserID    int64
+	FirstName string
+	Username  string
+	IsBot     bool
+	JoinedAt  time.Time
+}
+
+// ListParticipants — участники розыгрыша с данными юзера (для экрана участников).
+func (s *Store) ListParticipants(ctx context.Context, giveawayID int64) ([]ParticipantRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT p.user_id, COALESCE(u.first_name, ''), COALESCE(u.username, ''), COALESCE(u.is_bot, false), p.joined_at
+		FROM participants p
+		JOIN users u ON u.user_id = p.user_id
+		WHERE p.giveaway_id = $1
+		ORDER BY p.joined_at
+	`, giveawayID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []ParticipantRow
+	for rows.Next() {
+		var r ParticipantRow
+		if err := rows.Scan(&r.UserID, &r.FirstName, &r.Username, &r.IsBot, &r.JoinedAt); err != nil {
+			return nil, err
+		}
+		res = append(res, r)
+	}
+	return res, rows.Err()
+}
+
+// DeleteParticipant удаляет участника из розыгрыша (анти-накрутка: боты,
+// подозрительные).
+func (s *Store) DeleteParticipant(ctx context.Context, giveawayID, userID int64) error {
+	ct, err := s.pool.Exec(ctx,
+		`DELETE FROM participants WHERE giveaway_id=$1 AND user_id=$2`, giveawayID, userID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // AddSubscriptionLog — запись о подписке участника на канал.

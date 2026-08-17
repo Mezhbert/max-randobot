@@ -6,8 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +26,17 @@ type API struct {
 	*maxbot.Api
 	rl      *rateLimiter
 	metrics *metrics.Counters
+
+	// Для сырых REST-вызовов (методы без обёртки в SDK v2.2.4):
+	// getChatByLink и отправка reply-keyboard.
+	token  string
+	baseURL string
+	http   httpClient
+}
+
+// httpClient — минимальный интерфейс (совместим с *http.Client).
+type httpClient interface {
+	Do(req *http.Request) (*http.Response, error)
 }
 
 // BotAPI — интерфейс, покрывающий методы, используемые логикой бота
@@ -33,7 +49,11 @@ type API struct {
 // cmd/bot и используют специфичные SDK-типы.
 type BotAPI interface {
 	SendText(ctx context.Context, userID int64, text string) error
+	// SendTextQuiet — без push-уведомления (карточка в открытом диалоге).
+	SendTextQuiet(ctx context.Context, userID int64, text string) error
 	SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) (string, error)
+	// SendTextReplyKeyboard — текст + reply-keyboard (кнопки у поля ввода).
+	SendTextReplyKeyboard(ctx context.Context, userID int64, text string, rows [][]*model.Button) error
 	SendWithAttachments(ctx context.Context, userID int64, text string, attachments []model.Attachment, format model.TextFormat) error
 	SendToChat(ctx context.Context, chatID int64, text string, attachments []model.Attachment, format model.TextFormat) (string, error)
 	EditChatText(ctx context.Context, messageID, text string, attachments []model.Attachment, format model.TextFormat) error
@@ -41,6 +61,9 @@ type BotAPI interface {
 	IsBotAdminInChat(ctx context.Context, chatID int64) (bool, error)
 	CheckChannelAdmin(ctx context.Context, chatID int64) (model.Chat, bool, error)
 	GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error)
+	// GetChatByLink — инфо о канале по публичной ссылке/@username (сырой REST:
+	// в SDK v2.2.4 обёртки нет).
+	GetChatByLink(ctx context.Context, link string) (model.Chat, error)
 	PinChatMessage(ctx context.Context, chatID int64, messageID string) error
 	SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error
 	SendFile(ctx context.Context, userID int64, filename string, data []byte) error
@@ -60,7 +83,14 @@ func New(token string, maxRPS int, httpClient *http.Client) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &API{Api: base, rl: newRateLimiter(maxRPS), metrics: metrics.New()}, nil
+	return &API{
+		Api:     base,
+		rl:      newRateLimiter(maxRPS),
+		metrics: metrics.New(),
+		token:   token,
+		baseURL: "https://platform-api2.max.ru",
+		http:    httpClient,
+	}, nil
 }
 
 // Metrics возвращает счётчики вызовов MAX API (для endpoint /metrics).
@@ -98,6 +128,40 @@ func ParseStartedUserID(body []byte) int64 {
 	return probe.User.UserID
 }
 
+// ParseDataPayload достаёт payload reply-кнопки из raw JSON тела webhook для
+// update_type=message_created. Нажатие reply-кнопки (SendMessageButton) шлёт
+// сообщение от юзера с attachment type="data", payload.data = payload кнопки.
+// Либа НЕ парсит поле data (в model.Payload его нет) — читаем сами.
+// Возвращает (0, "") если это не message_created или data-attachment нет.
+func ParseDataPayload(body []byte) (userID int64, payload string) {
+	var probe struct {
+		UpdateType string `json:"update_type"`
+		UserID     int64  `json:"user_id"`
+		Message    struct {
+			Body struct {
+				Attachments []struct {
+					Type    string `json:"type"`
+					Payload struct {
+						Data string `json:"data"`
+					} `json:"payload"`
+				} `json:"attachments"`
+			} `json:"body"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return 0, ""
+	}
+	if probe.UpdateType != string(model.UpdateMessageCreated) {
+		return 0, ""
+	}
+	for _, at := range probe.Message.Body.Attachments {
+		if at.Type == string(model.AttachData) && at.Payload.Data != "" {
+			return probe.UserID, at.Payload.Data
+		}
+	}
+	return 0, ""
+}
+
 // SubscribeWebhook регистрирует ровно один webhook в MAX и вызывается при
 // старте бота. Это идемпотентная операция в строгом смысле: перед подпиской
 // на новый URL бот отписывается от ВСЕХ ранее зарегистрированных URL.
@@ -118,6 +182,10 @@ func (a *API) SubscribeWebhook(ctx context.Context, url, secret string) error {
 		// Трекинг подписок/отписок на каналы, где бот админ:
 		string(model.UpdateUserAdded),
 		string(model.UpdateUserRemoved),
+		// Бота добавили/убрали админом в канале — мгновенное обновление флага
+		// is_bot_admin (не ждём ручного «🔄 Обновить»).
+		string(model.UpdateBotAdded),
+		string(model.UpdateBotRemoved),
 	}
 
 	// 1) Чистим все ранее зарегистрированные подписки, чтобы не плодить дублей.
@@ -160,6 +228,46 @@ func (a *API) SendText(ctx context.Context, userID int64, text string) error {
 		slog.Warn("SendText", "err", err, "user", userID)
 	}
 	a.metrics.Inc(metrics.MethodSendText, err)
+	return err
+}
+
+// SendTextQuiet — отправка текста БЕЗ push-уведомления (notify=false).
+// Используется для «тихих» карточек в уже открытом диалоге (напр. после
+// нажатия «Участвовать» — диалог открыт самой ссылкой, уведомление лишнее).
+func (a *API) SendTextQuiet(ctx context.Context, userID int64, text string) error {
+	a.rl.wait(ctx)
+	_, err := a.Messages.Send(ctx, maxbot.NewMessage().SetUser(userID).SetText(text).WithoutNotify())
+	if err != nil {
+		slog.Warn("SendTextQuiet", "err", err, "user", userID)
+	}
+	a.metrics.Inc(metrics.MethodSendText, err)
+	return err
+}
+
+// SendTextReplyKeyboard — текст + reply-keyboard (кнопки у поля ввода).
+// rows — матрица кнопок; каждая кнопка {text, type:"message", payload} —
+// нажатие шлёт сообщение от юзера с data-attachment (payload приходит в
+// webhook, парсируется ParseDataPayload).
+// Отправляется сырым REST (POST /messages?user_id=): SDK-билдер Message
+// не позволяет приложить произвольный attachment (reply_keyboard).
+func (a *API) SendTextReplyKeyboard(ctx context.Context, userID int64, text string, rows [][]*model.Button) error {
+	a.rl.wait(ctx)
+	notify := false // тихо: диалог уже открыт (меню показывается по нажатию)
+	body := model.NewMessageBody{
+		Text: text,
+		Notify:      &notify,
+		Attachments: []model.Attachment{{
+			Type:    model.AttachReplyKeyboard,
+			Payload: model.Payload{Buttons: rows},
+		}},
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	var res model.SendMessageResult
+	err = a.rawREST(ctx, http.MethodPost, "/messages?user_id="+strconv.FormatInt(userID, 10), payload, &res)
+	a.metrics.Inc(metrics.MethodSendTextReply, err)
 	return err
 }
 
@@ -300,6 +408,50 @@ func (a *API) GetChatInfo(ctx context.Context, chatID int64) (model.Chat, error)
 	res, err := a.Chats.GetChat(ctx, chatID)
 	a.metrics.Inc(metrics.MethodGetChatInfo, err)
 	return res, err
+}
+
+// GetChatByLink — инфо о канале по публичной ссылке или @username
+// (GET /chats/{chatLink}). Обёртки в SDK v2.2.4 нет — сырой REST-вызов
+// тем же http-клиентом (с CA Минцифры) и тем же токеном.
+func (a *API) GetChatByLink(ctx context.Context, link string) (model.Chat, error) {
+	link = strings.TrimPrefix(strings.TrimSpace(link), "https://max.ru/")
+	link = strings.TrimPrefix(link, "https://t.me/")
+	if link == "" {
+		return model.Chat{}, fmt.Errorf("пустая ссылка")
+	}
+	a.rl.wait(ctx)
+
+	var chat model.Chat
+	err := a.rawREST(ctx, http.MethodGet, "/chats/"+url.PathEscape(link), nil, &chat)
+	a.metrics.Inc(metrics.MethodGetChatByLink, err)
+	return chat, err
+}
+
+// rawREST выполняет запрос к platform-api2.max.ru в обход SDK.
+// Используется только для методов, отсутствующих в SDK-обёртке.
+func (a *API) rawREST(ctx context.Context, method, path string, body []byte, out any) error {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, a.baseURL+path, rd)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", a.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("max api %s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(b)))
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // PinChatMessage закрепляет сообщение в канале/чате (нужны права бота на pin).

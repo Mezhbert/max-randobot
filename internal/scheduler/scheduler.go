@@ -366,8 +366,16 @@ func (s *Scheduler) resolveWinners(ctx context.Context, ids []int64) []Winner {
 
 // mentionLink — кликабельное markdown-упоминание пользователя.
 // MAX: [Имя](max://user/<id>) — тап открывает профиль, юзер получает уведомление.
+// Имя экранируется: скобки/квадратные скобки в имени ломали markdown-ссылку и
+// «съедали» весь список победителей.
 func mentionLink(w Winner) string {
-	return fmt.Sprintf("[%s](max://user/%d)", w.Name, w.UserID)
+	return fmt.Sprintf("[%s](max://user/%d)", escapeMarkdownName(w.Name), w.UserID)
+}
+
+// escapeMarkdownName экранирует markdown-разметку в имени победителя.
+func escapeMarkdownName(s string) string {
+	r := strings.NewReplacer("[", "\\[", "]", "\\]", "(", "\\(", ")", "\\)")
+	return r.Replace(s)
 }
 
 // winnersLine — строка победителей (упоминания через запятую или списком).

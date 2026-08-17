@@ -77,6 +77,7 @@ func main() {
 	bot := handlers.New(api, db, slog.Default())
 	bot.SetDedup(dedup.New(dedupTTL(cfg.DedupTTL), 0))
 	bot.SetCounterUpdater(sch.UpdateParticipantCounter)
+	bot.SetHelpURL(cfg.WebhookURL + "/app/help.html")
 
 	schedCtx, schedStop := context.WithCancel(context.Background())
 	defer schedStop()
@@ -104,6 +105,7 @@ func main() {
 				slog.Info("bot username", "name", info.Username)
 			}
 			if info.UserID != 0 {
+				bot.SetBotUserID(info.UserID)
 				sch.SetBotUserID(info.UserID)
 				slog.Info("bot user_id (для open_app)", "id", info.UserID)
 			}
@@ -141,6 +143,12 @@ func main() {
 			go bot.OnDeepLinkStart(context.Background(), body, payload)
 		}
 
+		// Нажатие reply-кнопки (кнопки у поля ввода): message_created с
+		// data-attachment, payload = действие меню. Либа поле data не парсит.
+		if uid, payload := maxapi.ParseDataPayload(body); payload != "" {
+			go bot.OnReplyKeyboardAction(context.Background(), uid, payload)
+		}
+
 		webhookHandler.ServeHTTP(w, r)
 		slog.Debug("webhook", "took", time.Since(start))
 	})
@@ -157,8 +165,13 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		api.Metrics().WritePrometheus(w)
 	})
-	// Мини-апп: статика + API. URL прописывается в MasterBot (см. README).
-	mux.Handle("/app/", webapp.Handler(db, slog.Default()))
+	// Мини-апп: статика + API (итоги, капча). URL прописывается в MasterBot.
+	mux.Handle("/app/", webapp.Handler(webapp.Deps{
+		DB:                  db,
+		Captcha:             bot.CaptchaService(),
+		BotToken:            cfg.BotToken,
+		RegisterParticipant: bot.RegisterParticipantFromApp,
+	}, slog.Default()))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

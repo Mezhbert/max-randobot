@@ -75,6 +75,19 @@ func (s *Store) SetChannelAdminFlag(ctx context.Context, id int64, isAdmin bool)
 	return err
 }
 
+// DeleteChannel удаляет канал из «моих каналов» юзера (бот потерял админство).
+func (s *Store) DeleteChannel(ctx context.Context, id, ownerUserID int64) error {
+	ct, err := s.pool.Exec(ctx,
+		`DELETE FROM channels WHERE id=$1 AND owner_user_id=$2`, id, ownerUserID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // MarkChannelRemovedByChat — бота кикнули из канала: снимаем флаг админства
 // по chat_id (среди всех владельцев, т.к. chat_id глобален).
 func (s *Store) MarkChannelRemovedByChat(ctx context.Context, chatID int64) error {

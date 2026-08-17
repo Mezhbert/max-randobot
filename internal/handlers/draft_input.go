@@ -24,66 +24,28 @@ func (b *Bot) handleDraftInput(ctx context.Context, userID int64, g store.Giveaw
 	b.advance(ctx, userID, g.ID, g.DraftStep)
 }
 
-// advance переходит к следующему шагу и показывает его приглашение.
-// Условные шаги (publish_at/finish_at/finish_count) авто-пропускаются
-// по выбранному режиму: publish_now → без publish_at; finish=time → без
-// finish_count; finish=count → без finish_at.
+// advance переходит к следующему АКТУАЛЬНОМУ шагу и показывает его приглашение.
+// Условные шаги (publish_at/finish_at/finish_count/results_text) перескакивает
+// сам движок (fsm.GoNext + fsm.StepSkipped) — по текущему режиму розыгрыша.
 func (b *Bot) advance(ctx context.Context, userID int64, giveawayID int64, currentStep string) {
 	g, err := b.db.GetGiveawayAny(ctx, giveawayID)
 	if err != nil {
 		_ = b.api.SendText(ctx, userID, "⚠️ Не удалось получить черновик: "+err.Error())
 		return
 	}
-	next, err := b.engine.GoNext(ctx, giveawayID, currentStep)
+	next, err := b.engine.GoNext(ctx, giveawayID, currentStep, g)
 	if err != nil {
 		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка перехода: "+err.Error())
+		return
+	}
+	if next == currentStep {
+		// Конец цепочки не наступает здесь (preview терминальный), защита.
 		return
 	}
 	// При уходе со шага выбора каналов — сбрасываем mid (сообщение больше не редактируем).
 	if (currentStep == fsm.StepSubChannels || currentStep == fsm.StepPubChannels) && next != currentStep {
 		_ = b.db.UpdateGiveawayField(ctx, giveawayID, "channel_select_mid", nil)
 		g.ChannelSelectMID = ""
-	}
-	// Авто-пропуск условных шагов по режиму (цепочкой — вдруг два подряд).
-	for skipConditional(g, next) {
-		n2, err := b.engine.GoNext(ctx, giveawayID, next)
-		if err != nil {
-			break
-		}
-		next = n2
-	}
-	b.showStep(ctx, userID, g, next)
-}
-
-// skipConditional — нужно ли пропустить шаг в зависимости от режима розыгрыша.
-func skipConditional(g store.Giveaway, step string) bool {
-	switch step {
-	case fsm.StepFinishCount:
-		return g.FinishMode != "count" // режим по времени → count не нужен
-	case fsm.StepFinishAt:
-		return g.FinishMode == "count" // режим по количеству → дата не нужна
-	}
-	return false
-}
-
-// advanceSkipping переходит к следующему шагу, но если он совпадает с skip —
-// делает ещё один переход. Используется, чтобы перепрыгнуть условный шаг
-// (например, results_text при выборе «итоги в исходном посте»).
-func (b *Bot) advanceSkipping(ctx context.Context, userID int64, giveawayID int64, currentStep, skip string) {
-	g, err := b.db.GetGiveawayAny(ctx, giveawayID)
-	if err != nil {
-		_ = b.api.SendText(ctx, userID, "⚠️ Не удалось получить черновик: "+err.Error())
-		return
-	}
-	next, err := b.engine.GoNext(ctx, giveawayID, currentStep)
-	if err != nil {
-		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка перехода: "+err.Error())
-		return
-	}
-	if next == skip {
-		if next2, err := b.engine.GoNext(ctx, giveawayID, next); err == nil {
-			next = next2
-		}
 	}
 	b.showStep(ctx, userID, g, next)
 }
@@ -132,6 +94,18 @@ func (b *Bot) showStep(ctx context.Context, userID int64, g store.Giveaway, step
 // При первом показе — отправляет новое сообщение и запоминает mid; при повторных
 // (тоггл) — редактирует то же сообщение через EditChatText (edit-in-place).
 func (b *Bot) showChannelSelectStep(ctx context.Context, userID int64, g store.Giveaway, step string) {
+	// Ранний чек для каналов публикации: без хотя бы одного канала с админкой
+	// бота шаг бессмыслен (валидация «в конце» — плохо, см. заметки итерации).
+	if step == fsm.StepPubChannels {
+		if !b.hasAdminChannels(ctx, userID) {
+			_ = b.api.SendText(ctx, userID,
+				"⚠️ Нет каналов, где бот — админ. Сначала добавьте канал в «Мои каналы» 👇\n\n"+
+					"Как: добавьте бота админом в канал и перешлите оттуда любое сообщение.")
+			b.showChannels(ctx, userID)
+			return
+		}
+	}
+
 	text, kb := buildChannelSelectKB(ctx, b, userID, g, step)
 
 	// Если уже есть запомненный mid — редактируем (edit-in-place).
@@ -151,14 +125,28 @@ func (b *Bot) showChannelSelectStep(ctx context.Context, userID int64, g store.G
 	}
 }
 
+// hasAdminChannels — есть ли у юзера хоть один канал, где бот админ.
+func (b *Bot) hasAdminChannels(ctx context.Context, uid int64) bool {
+	channels, err := b.db.ListChannels(ctx, uid)
+	if err != nil {
+		return false
+	}
+	for _, c := range channels {
+		if c.IsBotAdmin {
+			return true
+		}
+	}
+	return false
+}
+
 // buildChannelSelectKB строит текст + клавиатуру для шага выбора каналов.
 func buildChannelSelectKB(ctx context.Context, b *Bot, userID int64, g store.Giveaway, step string) (string, *model.Keyboard) {
 	channels, _ := b.db.ListChannels(ctx, userID)
-	prefix := "ch_toggle_sub:"
+	prefix := util.CBChannelToggleSub
 	selected := g.SubscribeChannelIDs
 	title := "📢 Каналы для подписки"
 	if step == fsm.StepPubChannels {
-		prefix = "ch_toggle_pub:"
+		prefix = util.CBChannelTogglePub
 		selected = g.PublishChannelIDs
 		title = "📣 Каналы публикации"
 	}

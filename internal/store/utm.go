@@ -18,13 +18,14 @@ type UTMLink struct {
 	Enabled     bool
 }
 
-// CreateUTMLink — генерация UTM-ссылки для отслеживания источника подписок на канал.
+// CreateUTMLink — генерация UTM-ссылки для отслеживания источника подписок.
+// channelID=0 → NULL (быстрая трекинг-ссылка без привязки к каналу).
 // Возвращает ID созданной/обновлённой записи. code — БЕЗ префикса "utm_".
 func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64, source, medium, campaign, postRef, code string) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO utm_links (owner_user_id, channel_id, source, medium, campaign, post_ref, code)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7)
 		ON CONFLICT (code) DO UPDATE
 		  SET source = EXCLUDED.source,
 		      medium = EXCLUDED.medium,

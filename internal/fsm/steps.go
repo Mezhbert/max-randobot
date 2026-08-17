@@ -1,23 +1,11 @@
-// Package fsm — конечный автомат цепочки создания розыгрыша (шаги 1-13 по ТЗ).
-//
-// Шаги:
-//   step_post_text    (1)   текст поста            [обязательный]
-//   step_media        (2)   медиа (фото/видео)      [опциональный, можно пропустить]
-//   step_name         (3)   название конкурса        [обязательный]
-//   step_button_text  (4)   текст кнопки "участвовать" [обязательный, дефолт "участвовать"]
-//   step_sub_channels (5)   каналы для подписки      [обязательный; можно без каналов]
-//   step_pub_channels (6)   каналы публикации        [обязательный]
-//   step_publish_at   (7)   дата публикации          [обязательный, ДД.ММ.ГГГГ ЧЧ:ММ, МСК]
-//   step_finish_at    (8)   дата итогов              [обязательный, ДД.ММ.ГГГГ ЧЧ:ММ, МСК]
-//   step_winners      (9)   кол-во победителей (1-100) [обязательный]
-//   step_winners_msg  (10)  сообщение победителям    [опциональный]
-//   step_results_loc  (10.5) где публиковать итоги   [обязательный]
-//   step_results_text (10.6) текст итогов отдельного поста [опц., только при «отдельным постом»]
-//   step_referral     (11)  реферальная система      [опциональный]
-//   step_captcha      (12)  капча                    [опциональный]
-//   step_promotion    (13)  продвижение              [опциональный]
-//   step_preview              предпросмотр + Принять/Отклонить
+// Package fsm — конечный автомат цепочки создания розыгрыша.
 package fsm
+
+import (
+	"time"
+
+	"github.com/maxbot/giveawaybot/internal/store"
+)
 
 // Идентификаторы шагов FSM.
 const (
@@ -36,9 +24,7 @@ const (
 	StepWinnersMsg  = "winners_msg"
 	StepResultsLoc  = "results_loc"
 	StepResultsText = "results_text"
-	StepReferral    = "referral"
 	StepCaptcha     = "captcha"
-	StepPromotion   = "promotion"
 	StepPreview     = "preview"
 )
 
@@ -67,13 +53,27 @@ var orderedSteps = []string{
 // FirstStep — первый шаг цепочки.
 const FirstStep = StepName
 
-// SkipStepAfter — шаги, которые ПРОПУСКАЮТСЯ в зависимости от выбора режима:
-// publish_now → пропустить publish_at; finish_time → пропустить finish_count;
-// finish_count → пропустить finish_at. Используется advanceSkipping.
-var conditionalSteps = map[string]bool{
-	StepPublishAt:   true, // пропускается при «Опубликовать сразу»
-	StepFinishCount: true, // пропускается при «По времени»
-	StepFinishAt:    true, // пропускается при «По количеству»
+// StepSkipped — нужно ли ПРОПУСТИТЬ шаг в зависимости от режима розыгрыша:
+//   - publish_at — пропускается при «Опубликовать сразу» (publish_at уже выставлен
+//     на now+1m, отличить от ручного ввода нельзя — считаем «задан ранее минуты назад»);
+//   - finish_count — пропускается при режиме «по времени»;
+//   - finish_at — пропускается при режиме «по количеству»;
+//   - results_text — пропускается при «итоги в исходном посте».
+//
+// Используется и при движении вперёд, и при «Назад» — чтобы навигация не
+// попадала на неактуальные шаги.
+func StepSkipped(g store.Giveaway, step string) bool {
+	switch step {
+	case StepPublishAt:
+		return g.PublishAt != nil && time.Until(*g.PublishAt) < time.Minute
+	case StepFinishCount:
+		return g.FinishMode != "count"
+	case StepFinishAt:
+		return g.FinishMode == "count"
+	case StepResultsText:
+		return g.ResultsInOriginalPost
+	}
+	return false
 }
 
 // optionalSteps — шаги, которые можно пропустить (кнопка "Пропустить").
@@ -107,3 +107,16 @@ func PrevStep(step string) string {
 	}
 	return ""
 }
+
+// StepNumber — номер шага в порядке orderedSteps (1-based; 0 — неизвестный).
+func StepNumber(step string) int {
+	for i, s := range orderedSteps {
+		if s == step {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// TotalSteps — всего шагов в цепочке.
+func TotalSteps() int { return len(orderedSteps) }

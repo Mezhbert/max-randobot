@@ -29,7 +29,8 @@ type pending struct {
 // Service — генератор/верификатор капчи. Потокобезопасен.
 type Service struct {
 	mu      sync.Mutex
-	pending map[int64]pending // userID → ожидающая капча
+	pending map[int64]pending // userID → ожидающая капча (чат-флоу)
+	keyPending map[string]pending // строковый ключ → ожидающая капча (мини-апп)
 	ttl     time.Duration
 }
 
@@ -38,7 +39,11 @@ func New(ttl time.Duration) *Service {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &Service{pending: make(map[int64]pending), ttl: ttl}
+	return &Service{
+		pending:    make(map[int64]pending),
+		keyPending: make(map[string]pending),
+		ttl:        ttl,
+	}
 }
 
 // Generate создаёт новую капчу для пользователя, возвращает PNG-байты картинки.
@@ -60,6 +65,48 @@ func (s *Service) Generate(userID int64) ([]byte, error) {
 	s.mu.Unlock()
 
 	return pngBuf.Bytes(), nil
+}
+
+// GenerateForKey — вариант для мини-аппа: ключ = digest(init_data)+giveaway,
+//(answer возвращается наружу только в Service). Возвращает PNG и ключ.
+func (s *Service) GenerateForKey(key string) ([]byte, error) {
+	digits := captcha.RandomDigits(digitsLen)
+	answer := digitsString(digits)
+
+	pngBuf := bytes.NewBuffer(nil)
+	if _, err := captcha.NewImage("", digits, 240, 80).WriteTo(pngBuf); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.keyPending[key] = pending{
+		answer:   answer,
+		expireAt: time.Now().Add(s.ttl).UnixNano(),
+	}
+	s.mu.Unlock()
+
+	return pngBuf.Bytes(), nil
+}
+
+// VerifyForKey проверяет ответ по строковому ключу (мини-апп). Одна попытка.
+func (s *Service) VerifyForKey(key, answer string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	p, ok := s.keyPending[key]
+	delete(s.keyPending, key) // всегда удаляем — одна попытка
+	if !ok || time.Now().UnixNano() > p.expireAt {
+		return false
+	}
+	return p.answer == answer
+}
+
+// HasForKey — есть ли живая капча по ключу.
+func (s *Service) HasForKey(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.keyPending[key]
+	return ok && time.Now().UnixNano() <= p.expireAt
 }
 
 // Verify проверяет ответ пользователя. Возвращает true при совпадении.

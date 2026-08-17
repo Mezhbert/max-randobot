@@ -37,6 +37,12 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	}
 
 	// 3. Главное меню и навигация
+	b.handleMenuAction(ctx, uid, p)
+}
+
+// handleMenuAction — единый роутер действий главного меню/навигации.
+// Вызывается и из callback-кнопок (inline), и из reply-кнопок (у поля ввода).
+func (b *Bot) handleMenuAction(ctx context.Context, uid int64, p string) {
 	switch p {
 	case util.CBMainMenu:
 		_ = b.db.ClearSession(ctx, uid) // сброс любой активной сессии (UTM/captcha/etc)
@@ -53,9 +59,14 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 	case util.CBAnalytics:
 		b.showAnalyticsMenu(ctx, uid, "")
 	case util.CBSupport:
+		kb := model.NewKeyboard()
+		if b.helpURL != "" {
+			kb.AddRow().AddLink("📚 Полная справка", b.helpURL)
+		}
+		kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"🆘 Поддержка\n\nПо всем вопросам пишите: @your_support_contact\n"+
-				"Или email: support@example.com", util.BackKeyboard())
+			"🆘 Поддержка\n\n📚 Полное руководство — кнопка ниже (главы: создание, каналы, редактура, аналитика, FAQ).\n\n"+
+				"По другим вопросам: @your_support_contact", kb)
 	case util.CBChannelAdd:
 		b.startAddChannel(ctx, uid)
 	case util.CBChannelRefresh:
@@ -65,6 +76,8 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 		b.showChannels(ctx, uid)
 	case util.CBChannelAnalytics:
 		b.showChannelListForAnalytics(ctx, uid)
+	case util.CBUTMQuickCreate:
+		b.startQuickUTM(ctx, uid)
 	default:
 		// подпункты (фильтры/открыть/удалить и т.д.)
 		b.handleSubPayload(ctx, uid, p)
@@ -111,7 +124,7 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 		}
 
 	case p == util.CBFSMBack:
-		prev, _ := b.engine.GoBack(ctx, g.ID, g.DraftStep)
+		prev, _ := b.engine.GoBack(ctx, g.ID, g.DraftStep, g)
 		// перечитываем, чтобы актуальные данные
 		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
 		b.showStep(ctx, uid, gg, prev)
@@ -190,28 +203,33 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 		b.advance(ctx, uid, g.ID, g.DraftStep)
 
 	case "publish_now":
-		// «Опубликовать сразу» — publish_at = сейчас + 1 минута, пропускаем шаг publish_at.
+		// «Опубликовать сразу» — publish_at = сейчас + 1 минута; движок сам
+		// пропустит шаг publish_at (см. fsm.StepSkipped).
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_at", time.Now().Add(1*time.Minute))
-		b.advanceSkipping(ctx, uid, g.ID, fsm.StepPublishMode, fsm.StepPublishAt)
+		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
+		b.advance(ctx, uid, g.ID, gg.DraftStep)
 
 	case "publish_later":
 		// «По времени» — следующий шаг publish_at (ввод даты).
 		b.advance(ctx, uid, g.ID, g.DraftStep)
 
 	case "finish_time":
-		// «По времени» — следующий шаг finish_at, пропускаем finish_count.
+		// «По времени» — движок пропустит finish_count по finish_mode.
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "time")
-		b.advanceSkipping(ctx, uid, g.ID, fsm.StepFinishMode, fsm.StepFinishCount)
+		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
+		b.advance(ctx, uid, g.ID, gg.DraftStep)
 
 	case "finish_count":
-		// «По количеству участников» — следующий шаг finish_count, пропускаем finish_at.
+		// «По количеству участников» — движок пропустит finish_at.
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "count")
-		b.advanceSkipping(ctx, uid, g.ID, fsm.StepFinishMode, fsm.StepFinishAt)
+		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
+		b.advance(ctx, uid, g.ID, gg.DraftStep)
 
 	case "results_original":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", true)
-		// «В исходном посте» — текст итогов не нужен, перепрыгиваем шаг results_text.
-		b.advanceSkipping(ctx, uid, g.ID, g.DraftStep, fsm.StepResultsText)
+		// «В исходном посте» — текст итогов не нужен, движок пропустит шаг.
+		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
+		b.advance(ctx, uid, g.ID, gg.DraftStep)
 	case "results_separate":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", false)
 		// «Отдельным постом» — запросить текст итогов (след. шаг results_text).
@@ -262,6 +280,14 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 			b.applyEditSet(ctx, uid, parts[0], parts[1], gid)
 		}
 
+	case strings.HasPrefix(p, util.CBGwEditChTglSub), strings.HasPrefix(p, util.CBGwEditChTglPub):
+		// gw_ets:/gw_etp:<channel_id>:<giveaway_id> — тоггл канала в редактуре.
+		b.toggleEditChannel(ctx, uid, p)
+
+	case strings.HasPrefix(p, util.CBGwMediaDone):
+		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwMediaDone), 10, 64)
+		b.finishEditMedia(ctx, uid, id)
+
 	case strings.HasPrefix(p, util.CBGwExtraWinner):
 		// Доп. победитель в завершённом розыгрыше.
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwExtraWinner), 10, 64)
@@ -271,6 +297,26 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		// Аналитика конкретного розыгрыша.
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwAnalytics), 10, 64)
 		b.showGiveawayAnalytics(ctx, uid, id)
+
+	case strings.HasPrefix(p, util.CBGwParticipants):
+		// Список участников розыгрыша.
+		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwParticipants), 10, 64)
+		b.showGiveawayParticipants(ctx, uid, id)
+
+	case strings.HasPrefix(p, util.CBGwKickPart):
+		// gw_kick:<giveaway_id>:<user_id> — удаление участника (анти-накрутка).
+		rest := strings.TrimPrefix(p, util.CBGwKickPart)
+		parts := strings.SplitN(rest, ":", 2)
+		if len(parts) == 2 {
+			gid, _ := strconv.ParseInt(parts[0], 10, 64)
+			uid2, _ := strconv.ParseInt(parts[1], 10, 64)
+			b.kickParticipant(ctx, uid, gid, uid2)
+		}
+
+	case strings.HasPrefix(p, util.CBGwCSVParts):
+		// CSV-выгрузка участников.
+		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwCSVParts), 10, 64)
+		b.exportParticipantsCSV(ctx, uid, id)
 
 	case strings.HasPrefix(p, util.CBGwEdit):
 		// «Продолжить создание» (для черновика) или «Редактировать» (scheduled/active — меню полей).
@@ -303,7 +349,7 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 	case p == util.CBGwList:
 		b.showGiveawayFilters(ctx, uid)
 
-	case strings.HasPrefix(p, "ch_toggle_sub:"), strings.HasPrefix(p, "ch_toggle_pub:"):
+	case strings.HasPrefix(p, util.CBChannelToggleSub), strings.HasPrefix(p, util.CBChannelTogglePub):
 		b.toggleChannelSelection(ctx, uid, p)
 
 	case strings.HasPrefix(p, util.CBChannelUTM):

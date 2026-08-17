@@ -20,15 +20,19 @@ func (b *Bot) startAddChannel(ctx context.Context, uid int64) {
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		"➕ Добавление канала.\n\n"+
 			"Бот должен быть администратором в канале. Отправьте:\n"+
+			"• ссылку на канал (например @channel или https://max.ru/channel), или\n"+
 			"• ID канала (число), или\n"+
 			"• перешлите любое сообщение из этого канала.\n\n"+
-			"Узнать ID канала: добавьте бота админом и перешлите сообщение.",
+			"Не вы админ? Попросите админа добавить бота, затем перешлите сообщение из канала.",
 		util.ChannelAddKeyboard())
 }
 
 // refreshChannels — 🔄 обновляет статус админства бота во ВСЕХ каналах юзера.
 // Безопасно: обходятся только каналы уже добавленные пользователем (никакого
-// перебора чужих каналов). Потерявшие админство помечаются ⚠️ в списке.
+// перебора чужих каналов — утечка админства в чужих каналах невозможна).
+// Каналы, где бот больше НЕ админ, удаляются из списка: юзер не имеет к ним
+// доступа (сценарий: другой админ убрал бота — розыгрыши там невозможны).
+// Передобавление — классически, пересылкой поста.
 func (b *Bot) refreshChannels(ctx context.Context, uid int64) {
 	channels, err := b.db.ListChannels(ctx, uid)
 	if err != nil || len(channels) == 0 {
@@ -36,30 +40,32 @@ func (b *Bot) refreshChannels(ctx context.Context, uid int64) {
 		return
 	}
 
-	updated, lost := 0, 0
+	updated, removed := 0, 0
 	for _, c := range channels {
 		isAdmin, err := b.api.IsBotAdminInChat(ctx, c.ChatID)
 		if err != nil {
 			// Ошибка проверки (бот удалён из канала и т.п.) — считаем не админом.
 			isAdmin = false
 		}
-		if isAdmin != c.IsBotAdmin {
-			if err := b.db.SetChannelAdminFlag(ctx, c.ID, isAdmin); err == nil {
-				if isAdmin {
-					updated++
-				} else {
-					lost++
-				}
+		switch {
+		case isAdmin && !c.IsBotAdmin:
+			if err := b.db.SetChannelAdminFlag(ctx, c.ID, true); err == nil {
+				updated++
+			}
+		case !isAdmin:
+			// Бот потерял админство — канал больше не юзабелен, удаляем.
+			if err := b.db.DeleteChannel(ctx, c.ID, uid); err == nil {
+				removed++
 			}
 		}
 	}
 
-	msg := fmt.Sprintf("🔄 Обновлено каналов: %d.", len(channels))
+	msg := "🔄 Каналы обновлены."
 	if updated > 0 {
-		msg += fmt.Sprintf("\n✅ Админство возвращено: %d.", updated)
+		msg += fmt.Sprintf("\n✅ Админство вернулось: %d.", updated)
 	}
-	if lost > 0 {
-		msg += fmt.Sprintf("\n⚠️ Потеряно админство: %d — передобавьте бота в эти каналы.", lost)
+	if removed > 0 {
+		msg += fmt.Sprintf("\n🗑 Удалено (бот больше не админ): %d.\nПередобавить — пересылкой поста из канала.", removed)
 	}
 	_ = b.api.SendText(ctx, uid, msg)
 	b.showChannels(ctx, uid)
@@ -74,14 +80,25 @@ func (b *Bot) handleAddChannelInput(ctx context.Context, uid int64, msg model.Me
 	if msg.Link != nil && msg.Link.ChatID != 0 {
 		chatID = msg.Link.ChatID
 	} else {
-		// 2) Числовой ID.
 		text := strings.TrimSpace(msg.Body.Text)
-		n, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			_ = b.api.SendText(ctx, uid, "⚠️ Не похоже на ID канала. Отправьте число или перешлите сообщение из канала.")
-			return true
+		// 2) Ссылка на канал (@username / https://...) — резолвим через
+		// getChatByLink (обёртки в SDK нет — сырой REST).
+		if isChannelLink(text) {
+			chat, err := b.api.GetChatByLink(ctx, text)
+			if err != nil {
+				_ = b.api.SendText(ctx, uid, "⚠️ Канал по ссылке не найден. Проверьте ссылку (канал должен быть публичным).")
+				return true
+			}
+			chatID = chat.ChatID
+		} else {
+			// 3) Числовой ID.
+			n, err := strconv.ParseInt(text, 10, 64)
+			if err != nil {
+				_ = b.api.SendText(ctx, uid, "⚠️ Не похоже на канал. Отправьте ссылку, ID канала или перешлите сообщение из него.")
+				return true
+			}
+			chatID = n
 		}
-		chatID = n
 	}
 
 	// Проверяем админство и получаем инфу о чате.
@@ -122,15 +139,29 @@ func (b *Bot) handleAddChannelInput(ctx context.Context, uid int64, msg model.Me
 	return true
 }
 
+// isChannelLink — похоже ли на публичную ссылку канала (@name, t.me/, max.ru/).
+func isChannelLink(s string) bool {
+	if strings.HasPrefix(s, "@") && len(s) > 1 {
+		return true
+	}
+	for _, p := range []string{"https://", "http://", "max.ru/", "t.me/"} {
+		if strings.HasPrefix(s, p) {
+			return strings.Contains(s, "/") // точно ссылка, не просто число
+		}
+	}
+	return false
+}
+
 // toggleChannelSelection — тогглинг канала в выборе на шагах FSM sub/pub channels.
+// Блокирует выбор не-админ каналов (алерт) — использовать их в розыгрыше нельзя.
 func (b *Bot) toggleChannelSelection(ctx context.Context, uid int64, p string) {
 	// p = "ch_toggle_sub:<channelInternalID>" или "...pub:..."
-	isSub := strings.HasPrefix(p, "ch_toggle_sub:")
+	isSub := strings.HasPrefix(p, util.CBChannelToggleSub)
 	field := "subscribe_channel_ids"
 	if !isSub {
 		field = "publish_channel_ids"
 	}
-	idStr := strings.TrimPrefix(strings.TrimPrefix(p, "ch_toggle_sub:"), "ch_toggle_pub:")
+	idStr := strings.TrimPrefix(strings.TrimPrefix(p, util.CBChannelToggleSub), util.CBChannelTogglePub)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		return
@@ -147,8 +178,8 @@ func (b *Bot) toggleChannelSelection(ctx context.Context, uid int64, p string) {
 	if !isSub {
 		current = g.PublishChannelIDs
 	}
-	var updated []int64
 	found := false
+	var updated []int64
 	for _, id := range current {
 		if id == chID {
 			found = true
@@ -157,6 +188,15 @@ func (b *Bot) toggleChannelSelection(ctx context.Context, uid int64, p string) {
 		updated = append(updated, id)
 	}
 	if !found {
+		// Выбор канала: проверяем админство бота — не-админ нельзя выбрать.
+		if ch, err := b.db.GetChannel(ctx, chID, uid); err == nil && !ch.IsBotAdmin {
+			title := ch.Title
+			if title == "" {
+				title = fmt.Sprintf("канал #%d", ch.ChatID)
+			}
+			_ = b.api.SendText(ctx, uid, "⚠️ Бот не админ в «"+title+"» — канал нельзя выбрать. Обновите список: «Мои каналы → 🔄».")
+			return
+		}
 		updated = append(updated, chID)
 	}
 

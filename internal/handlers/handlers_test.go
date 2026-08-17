@@ -712,11 +712,11 @@ func TestMockAPI_CoversAllUsedMethods(t *testing.T) {
 
 	testutil.EnsureUser(t, s, 7000, "tester")
 
-	// /menu → SendTextWithKeyboard.
+	// /menu → SendTextReplyKeyboard (кнопки у поля ввода).
 	b.Handle(ctx, msgUpdate(7000, "/menu"))
-	require.Greater(t, sendsByMethod(mock, "SendTextWithKeyboard"), 0)
+	require.Greater(t, sendsByMethod(mock, "SendTextReplyKeyboard"), 0)
 
-	// Поддержка → SendTextWithKeyboard.
+	// Поддержка → SendTextWithKeyboard (инлайн внутри разделов).
 	before := sendsByMethod(mock, "SendTextWithKeyboard")
 	b.Handle(ctx, callbackUpdate(7000, util.CBSupport))
 	assert.Greater(t, sendsByMethod(mock, "SendTextWithKeyboard"), before)

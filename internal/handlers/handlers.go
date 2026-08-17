@@ -25,6 +25,8 @@ type Bot struct {
 	captcha      *captcha.Service
 	log          *slog.Logger
 	botUsername  string // публичное имя бота (для UTM-диплинков)
+	botUserID    int64  // ID бота (contact_id для open_app-кнопок: капча/итоги)
+	helpURL      string // публичный URL справки (/app/help.html) для link-кнопки
 	counterUpd   func(ctx context.Context, g *store.Giveaway) // обновление счётчика участников в постах (сеттится из main, опционально)
 	lastCounters map[int64]int64                                // giveaway_id → unix-time последнего обновления счётчика (троттлинг)
 	dedup        *dedup.Deduplicator                            // опционально; nil — без дедупликации
@@ -51,6 +53,37 @@ func (b *Bot) SetUsername(name string) {
 	if name != "" {
 		b.botUsername = strings.TrimPrefix(name, "@")
 	}
+}
+
+// SetBotUserID задаёт ID бота — contact_id для open_app-кнопок (капча, итоги).
+func (b *Bot) SetBotUserID(id int64) {
+	if id != 0 {
+		b.botUserID = id
+	}
+}
+
+// SetHelpURL задаёт публичный URL справки (WEBHOOK_URL + /app/help.html).
+func (b *Bot) SetHelpURL(url string) {
+	if url != "" {
+		b.helpURL = url
+	}
+}
+
+// CaptchaService отдаёт сервис капчи (для webapp-эндпоинтов).
+func (b *Bot) CaptchaService() *captcha.Service { return b.captcha }
+
+// RegisterParticipantFromApp — регистрация участника после успешной капчи
+// в мини-аппе (колбэк для webapp.Handler). Идемпотентна.
+func (b *Bot) RegisterParticipantFromApp(giveawayID, userID int64) {
+	g, err := b.db.GetGiveawayAny(context.Background(), giveawayID)
+	if err != nil || g.Status != store.StatusActive {
+		return
+	}
+	// Уже участвует? (идемпотентность)
+	if n, _ := b.db.CountParticipant(context.Background(), giveawayID, userID); n > 0 {
+		return
+	}
+	b.registerParticipant(context.Background(), userID, g, "")
 }
 
 // SetCounterUpdater подключает функцию обновления счётчика участников
@@ -91,10 +124,6 @@ func (b *Bot) Handle(ctx context.Context, u model.Update) {
 			Username:  usr.Username,
 			IsBot:     usr.IsBot,
 		})
-		// Запоминаем chat_id диалога (нужен для /clear — MAX API требует chat_id, не user_id).
-		if u.ChatID != 0 {
-			_ = b.db.SetDialogChatID(ctx, u.UserID, u.ChatID)
-		}
 	}
 
 	switch u.UpdateType {
@@ -113,6 +142,15 @@ func (b *Bot) Handle(ctx context.Context, u model.Update) {
 		b.onUserAdded(ctx, u)
 	case model.UpdateUserRemoved:
 		b.onUserRemoved(ctx, u)
+	case model.UpdateBotAdded, model.UpdateBotRemoved:
+		// Бота добавили/убрали админом в канале — сразу обновляем флаг у всех
+		// владельцев этого канала (канал может быть добавлен нескольким юзерам).
+		if u.ChatID != 0 {
+			isAdmin := u.UpdateType == model.UpdateBotAdded
+			if err := b.db.SetChannelAdminByChat(ctx, u.ChatID, isAdmin); err != nil {
+				b.log.Debug("bot_added/removed: update channel flag", "chat", u.ChatID, "err", err)
+			}
+		}
 	case model.UpdateMessageEdited, model.UpdateMessageRemoved:
 		// пока не используется
 	default:
@@ -177,6 +215,10 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		if b.handleEditFieldInput(ctx, uid, text) {
 			return
 		}
+	case store.SessionEditMedia:
+		if b.handleEditMediaInput(ctx, uid, msg) {
+			return
+		}
 	}
 
 	// Если идёт создание розыгрыша — отдать ввод в FSM
@@ -190,13 +232,40 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		return
 	}
 
+	// Fallback: подпись reply-кнопки как текст (когда data-attachment не пришёл).
+	if payload := util.ReplyPayloadByText(text); payload != "" {
+		b.handleMenuAction(ctx, uid, payload)
+		return
+	}
+
 	// Иначе — эхо-подсказка
 	_ = b.api.SendText(ctx, uid, "Используйте кнопки меню. Для вызова меню отправьте /menu")
 }
 
-// sendMainMenu отправляет главное меню пользователю.
+// OnReplyKeyboardAction — нажатие reply-кнопки (кнопки у поля ввода).
+// payload приходит из data-attachment сообщения (см. maxapi.ParseDataPayload).
+func (b *Bot) OnReplyKeyboardAction(ctx context.Context, uid int64, payload string) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.log.Error("panic in OnReplyKeyboardAction", "err", r)
+		}
+	}()
+	if uid == 0 || payload == "" {
+		return
+	}
+	// Дедупликация: то же сообщение придёт и через SDK-хендлер — там будет
+	// message_created без текста, эхо-подсказка не сработает (пустой текст не
+	// матчится ни на одну сессию/команду — безопасно).
+	b.handleMenuAction(ctx, uid, payload)
+}
+
+// sendMainMenu отправляет главное меню пользователю: сначала пытается
+// reply-keyboard (кнопки у поля ввода), при ошибке — inline-клавиатура.
 func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
-	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
+	if err := b.api.SendTextReplyKeyboard(ctx, userID, text, util.MainMenuReplyRows()); err != nil {
+		b.log.Debug("reply keyboard failed, fallback to inline", "err", err, "user", userID)
+		_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
+	}
 }
 
 // sendStartScreen — информативное приветствие при /start: что умеет бот + меню.
