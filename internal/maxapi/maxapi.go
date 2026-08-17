@@ -47,6 +47,7 @@ type BotAPI interface {
 	SendFile(ctx context.Context, userID int64, filename string, data []byte) error
 	AnswerCallback(ctx context.Context, callbackID, notification string)
 	AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard) error
+	SendWithReplyMenu(ctx context.Context, userID int64, text string, inline *model.Keyboard, replyLabels []string) (string, error)
 }
 
 // New создаёт обёртку. maxRPS — целевой лимит (платформа: 30).
@@ -389,6 +390,49 @@ func (a *API) AnswerCallback(ctx context.Context, callbackID, notification strin
 		slog.Debug("AnswerOnCallback", "err", err)
 	}
 	a.metrics.Inc(metrics.MethodAnswerCallback, err)
+}
+
+// ReplyKeyboardAttachment строит attachment reply-клавиатуры (кнопки под
+// полем ввода) в формате ReplyKeyboardAttachmentRequest:
+// {"type":"reply_keyboard","payload":{"buttons":[[{"type":"message","text":..}]]}}.
+// Каждая кнопка (type=message) при нажатии отправляет свой текст от юзера.
+func ReplyKeyboardAttachment(labels []string) model.Attachment {
+	rows := make([][]*model.Button, 0, len(labels))
+	for _, l := range labels {
+		rows = append(rows, []*model.Button{{Type: model.ButtonMessage, Text: l}})
+	}
+	return model.Attachment{
+		Type:    model.AttachReplyKeyboard,
+		Payload: model.Payload{Buttons: rows},
+	}
+}
+
+// SendWithAttachmentsBody — низкоуровневая отправка с ПРОИЗВОЛЬНЫМИ attachments
+// (включая reply_keyboard): AnswerOnCallback не подходит для инициирующей
+// отправки, а SDK-Message не даёт доступ к attachments. Обход: шлём через
+// Send обычный текст с inline, затем EditMessage этим же телом c нужными
+// attachments — EditMessage принимает NewMessageBody напрямую.
+// Формально: send → edit тем же телом + reply-клавиатура (одна лишняя операция).
+func (a *API) SendWithReplyMenu(ctx context.Context, userID int64, text string, inline *model.Keyboard, replyLabels []string) (string, error) {
+	mid, err := a.SendTextWithKeyboard(ctx, userID, text, inline)
+	if err != nil || mid == "" {
+		return mid, err
+	}
+	// Edit: inline + reply-клавиатура одновременно (attachments[] — до 10 в MAX).
+	body := model.NewMessageBody{Text: text}
+	atts := []model.Attachment{}
+	if inline != nil {
+		atts = append(atts, inline.Build())
+	}
+	if len(replyLabels) > 0 {
+		atts = append(atts, ReplyKeyboardAttachment(replyLabels))
+	}
+	body.Attachments = atts
+	a.rl.wait(ctx)
+	if _, eerr := a.Messages.EditMessage(ctx, mid, body); eerr != nil {
+		slog.Debug("reply-menu edit", "err", eerr, "mid", mid)
+	}
+	return mid, nil
 }
 
 // AnswerCallbackEdit отвечает на callback ЗАМЕНОЙ нажатого сообщения

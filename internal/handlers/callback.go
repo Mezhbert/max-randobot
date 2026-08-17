@@ -146,9 +146,11 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 		}
 
 	case p == util.CBFSMHint:
-		// Краткая подсказка по текущему шагу (тихая notification).
+		// Подсказка edit-in-place: добавляем её над промптом шага и перерисовываем
+		// сообщение (notification-попапы клиент MAX не показывает).
 		if hint := fsm.HintForStep(g.DraftStep); hint != "" {
-			b.api.AnswerCallback(ctx, callbackID, hint)
+			text := "💡 " + hint + "\n\n" + fsm.PromptForStep(g.DraftStep)
+			b.render(ctx, uid, callbackID, text, kbForStep(g.DraftStep))
 		}
 
 	case strings.HasPrefix(p, util.CBFSMOption):

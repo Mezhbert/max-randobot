@@ -178,15 +178,42 @@ func (e *Engine) Abandon(ctx context.Context, id int64) error {
 }
 
 // GoBack откатывает на предыдущий шаг.
+// GoBack откатывает на предыдущий АКТУАЛЬНЫЙ шаг: пропущенные по режиму
+// условные шаги (publish_at/finish_at/finish_count) перескакиваются назад,
+// чтобы «Назад» с winners не упирал в невидимый finish_count.
 func (e *Engine) GoBack(ctx context.Context, id int64, currentStep string) (string, error) {
 	prev := PrevStep(currentStep)
 	if prev == "" {
-		return currentStep, nil
+		return currentStep, nil // первый шаг — некуда откатываться
+	}
+	// Reverse-skip: пока prev — условный пропущенный шаг, идём ещё назад.
+	for i := 0; i < len(orderedSteps); i++ {
+		if g, err := e.DB.GetGiveawayAny(ctx, id); err == nil && skipBack(g, prev) {
+			p2 := PrevStep(prev)
+			if p2 == "" {
+				break
+			}
+			prev = p2
+			continue
+		}
+		break
 	}
 	if err := e.DB.SetDraftStep(ctx, id, prev); err != nil {
 		return currentStep, err
 	}
 	return prev, nil
+}
+
+// skipBack — нужно ли перескочить ЭТОТ шаг при движении назад (симметрия
+// skipConditional: шаг, который был бы пропущен вперёд, пропускаем и назад).
+func skipBack(g store.Giveaway, step string) bool {
+	switch step {
+	case StepFinishCount:
+		return g.FinishMode != "count"
+	case StepFinishAt:
+		return g.FinishMode == "count"
+	}
+	return false
 }
 
 // GoNext подтверждает шаг и переходит к следующему.

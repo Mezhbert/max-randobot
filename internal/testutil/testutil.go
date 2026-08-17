@@ -264,3 +264,15 @@ func (m *MockBotAPI) EditCount() int {
 
 // Compile-time assertion: MockBotAPI реализует maxapi.BotAPI.
 var _ maxapi.BotAPI = (*MockBotAPI)(nil)
+
+// SendWithReplyMenu — мок: отправка + edit с reply-клавиатурой.
+func (m *MockBotAPI) SendWithReplyMenu(ctx context.Context, userID int64, text string, inline *model.Keyboard, replyLabels []string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counter++
+	m.Sends = append(m.Sends, SendRecord{Method: "SendWithReplyMenu", UserID: userID, Text: text, HasKb: inline != nil})
+	if m.SendTextErr != nil {
+		return "", m.SendTextErr
+	}
+	return fmt.Sprintf("mid.reply.%d", m.counter), nil
+}

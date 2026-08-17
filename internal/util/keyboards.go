@@ -72,6 +72,12 @@ func MainMenuKeyboard() *model.Keyboard {
 	return kb
 }
 
+// ReplyMenuLabels — подписи reply-кнопок (под полем ввода). Каждая при нажатии
+// отправляет свой текст как сообщение юзера — ловится в onMessageCreated.
+func ReplyMenuLabels() []string {
+	return []string{"🎁 Создать", "📋 Мои розыгрыши", "📢 Мои каналы", "📊 Аналитика"}
+}
+
 // NavKeyboard — 💡 / Назад / Отменить.
 func NavKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()

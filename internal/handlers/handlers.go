@@ -147,14 +147,44 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 	msg := u.GetMessage()
 	text := strings.TrimSpace(msg.Body.Text)
 
-	// /start — информативное приветствие с описанием бота + меню.
+	// Reply-кнопки (под полем ввода) приходят как текст — маппим на действия.
+	// Активное создание НЕ прерываем (юзер может тыкнуть случайно).
+	switch text {
+	case "🎁 Создать":
+		_ = b.db.ClearSession(ctx, uid)
+		b.startCreate(ctx, uid, "")
+		return
+	case "📋 Мои розыгрыши":
+		b.showGiveawayFilters(ctx, uid, "")
+		return
+	case "📢 Мои каналы":
+		b.showChannels(ctx, uid, "")
+		return
+	case "📊 Аналитика":
+		b.showAnalyticsMenu(ctx, uid, "", "")
+		return
+	}
+
+	// /start — информативное приветствие + меню. Прерывает активное создание
+	// (черновик сохраняется — продолжить можно из «Мои розыгрыши»).
 	if text == "/start" || strings.HasPrefix(text, "/start ") {
+		_ = b.db.ClearSession(ctx, uid)
+		b.pauseDraft(ctx, uid)
 		b.sendStartScreen(ctx, uid)
 		return
 	}
-	// /menu — только меню, без описания.
+	// /menu — только меню. Тоже прерывает создание (сохранением).
 	if text == "/menu" {
+		_ = b.db.ClearSession(ctx, uid)
+		b.pauseDraft(ctx, uid)
 		b.sendMainMenu(ctx, uid, "Главное меню:")
+		return
+	}
+	// /stop — явная остановка создания (синоним выхода через меню).
+	if text == "/stop" {
+		_ = b.db.ClearSession(ctx, uid)
+		b.pauseDraft(ctx, uid)
+		b.sendMainMenu(ctx, uid, "⏸ Создание приостановлено. Черновик — в «Мои розыгрыши → В процессе создания».")
 		return
 	}
 
@@ -215,7 +245,7 @@ func (b *Bot) render(ctx context.Context, uid int64, callbackID, text string, kb
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
 }
 
-// sendStartScreen — информативное приветствие при /start: что умеет бот + меню.
+// sendStartScreen — информативное приветствие при /start + меню (+ reply-кнопки).
 func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 	text := `🎁 Бот розыгрышей в MAX
 
@@ -228,12 +258,34 @@ func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 
 Команды:
 /menu — главное меню
+/stop — прервать создание
 
 Выберите действие 👇`
-	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
+	_, _ = b.api.SendWithReplyMenu(ctx, userID, text, util.MainMenuKeyboard(), util.ReplyMenuLabels())
 }
 
 // renderMainMenu — главное меню edit-in-place (по клику) или отправкой (команда).
+// Оба пути добавляют reply-клавиатуру (кнопки под полем ввода).
 func (b *Bot) renderMainMenu(ctx context.Context, uid int64, cbID, text string) {
-	b.render(ctx, uid, cbID, text, util.MainMenuKeyboard())
+	if cbID != "" {
+		// Edit с inline + reply одновременно — через AnswerOnCallback.Message.
+		if err := b.api.AnswerCallbackEdit(ctx, cbID, text, util.MainMenuKeyboard()); err == nil {
+			return
+		}
+	}
+	_, _ = b.api.SendWithReplyMenu(ctx, uid, text, util.MainMenuKeyboard(), util.ReplyMenuLabels())
+}
+
+// pauseDraft приостанавливает активное создание: draft_step сбрасывается
+// (текст больше не уходит в FSM), черновик СОХРАНЯЕТСЯ с именем (если введено)
+// для продолжения через «Мои розыгрыши». Безымянные — удаляются (мусор).
+func (b *Bot) pauseDraft(ctx context.Context, uid int64) {
+	g, err := b.db.GetDraftGiveaway(ctx, uid)
+	if err != nil || g.ID == 0 || g.DraftStep == "" {
+		return // создания нет
+	}
+	_ = b.engine.Abandon(ctx, g.ID)
+	if g.Name == "" {
+		_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
+	}
 }
