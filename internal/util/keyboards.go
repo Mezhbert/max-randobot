@@ -64,7 +64,8 @@ const (
 	CBFSMOption   = "fsm_opt:"
 	CBFSMConfirm  = "fsm_confirm"
 	CBFSMReject   = "fsm_reject"
-	CBFSMHint     = "fsm_hint" // 💡 краткая подсказка по текущему шагу
+	CBFSMHint     = "fsm_hint"     // 💡 подсказка по текущему шагу (сообщением)
+	CBFSMContinue = "fsm_continue" // ▶ продолжить после подсказки (возврат к шагу)
 
 	// Кнопка "Участвовать" под постом розыгрыша
 	CBParticipate = "part:" // + giveaway_id
@@ -144,6 +145,25 @@ func NavKeyboard() *model.Keyboard {
 	kb.AddRow().
 		AddCallBack("💡", CBFSMHint).
 		AddCallBack("← Назад", CBFSMBack).
+		AddCallBack("✖ Отменить", CBFSMCancel)
+	return kb
+}
+
+// FirstStepKeyboard — первый шаг создания: 💡 + Отменить (Назад идти некуда).
+func FirstStepKeyboard() *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().
+		AddCallBack("💡", CBFSMHint).
+		AddCallBack("✖ Отменить", CBFSMCancel)
+	return kb
+}
+
+// HintKeyboard — под сообщением-подсказкой: продолжить с того места, где
+// нажали лампочку, или отменить создание.
+func HintKeyboard() *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().
+		AddCallBack("▶ Продолжить", CBFSMContinue).
 		AddCallBack("✖ Отменить", CBFSMCancel)
 	return kb
 }

@@ -87,7 +87,7 @@ func (b *Bot) handleMenuAction(ctx context.Context, uid int64, p string) {
 // isFSMPayload определяет кнопки FSM (навигация/опции/подтверждение/подсказка).
 func isFSMPayload(p string) bool {
 	switch p {
-	case util.CBFSMBack, util.CBFSMCancel, util.CBFSMSkip, util.CBFSMConfirm, util.CBFSMReject, util.CBFSMHint:
+	case util.CBFSMBack, util.CBFSMCancel, util.CBFSMSkip, util.CBFSMConfirm, util.CBFSMReject, util.CBFSMHint, util.CBFSMContinue:
 		return true
 	}
 	return strings.HasPrefix(p, util.CBFSMOption)
@@ -117,7 +117,7 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 		_ = b.engine.Abandon(ctx, g.ID)
 		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
 		if g.Name != "" {
-			b.sendMainMenu(ctx, uid, "✖ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+			b.sendMainMenu(ctx, uid, "✖ Создание отменено. Черновик сохранён в «Мои розыгрыши → Черновики».")
 		} else {
 			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
 			b.sendMainMenu(ctx, uid, "✖ Создание отменено.")
@@ -152,17 +152,22 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 		_ = b.engine.Abandon(ctx, g.ID)
 		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
 		if g.Name != "" {
-			b.sendMainMenu(ctx, uid, "❌ Создание отменено. Черновик сохранён в «Мои розыгрыши → В процессе создания».")
+			b.sendMainMenu(ctx, uid, "❌ Создание отменено. Черновик сохранён в «Мои розыгрыши → Черновики».")
 		} else {
 			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
 			b.sendMainMenu(ctx, uid, "❌ Создание отменено.")
 		}
 
 	case p == util.CBFSMHint:
-		// Краткая подсказка по текущему шагу (тихая notification).
+		// Подсказка по текущему шагу — СООБЩЕНИЕМ (алертов в MAX нет):
+		// под ним «Продолжить» (возврат к шагу) и «Отменить».
 		if hint := fsm.HintForStep(g.DraftStep); hint != "" {
-			b.api.AnswerCallback(ctx, callbackID, hint)
+			_, _ = b.api.SendTextWithKeyboard(ctx, uid, "💡 "+hint, util.HintKeyboard())
 		}
+
+	case p == util.CBFSMContinue:
+		// Возврат к шагу, на котором нажали лампочку (draft_step не менялся).
+		b.showStep(ctx, uid, g, g.DraftStep)
 
 	case strings.HasPrefix(p, util.CBFSMOption):
 		key := strings.TrimPrefix(p, util.CBFSMOption)

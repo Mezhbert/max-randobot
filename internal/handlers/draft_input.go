@@ -255,6 +255,9 @@ func kbForStep(step string) *model.Keyboard {
 		return kb
 	case fsm.StepPreview:
 		return util.ConfirmKeyboard()
+	case fsm.StepName:
+		// Первый шаг — Назад идти некуда: только 💡 и Отменить.
+		return util.FirstStepKeyboard()
 	}
 	return util.NavKeyboard()
 }

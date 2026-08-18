@@ -16,7 +16,7 @@ func (b *Bot) showGiveawayFilters(ctx context.Context, uid int64) {
 		AddCallBack("Текущие", util.CBGiveawayFilter+store.StatusActive).
 		AddCallBack("Запланированные", util.CBGiveawayFilter+store.StatusScheduled)
 	kb.AddRow().
-		AddCallBack("В процессе создания", util.CBGiveawayFilter+store.StatusDraft).
+		AddCallBack("Черновики", util.CBGiveawayFilter+store.StatusDraft).
 		AddCallBack("Завершённые", util.CBGiveawayFilter+store.StatusFinished)
 	kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, "📋 Мои розыгрыши. Выберите тип:", kb)

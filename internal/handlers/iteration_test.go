@@ -380,3 +380,69 @@ func TestResults_AppendedEscape(t *testing.T) {
 	assert.Contains(t, txt, "max://user/9")
 	assert.Contains(t, txt, "\\(b\\)")
 }
+
+// ---------- Лампочка: хинт сообщением + Продолжить ----------
+
+// TestFSM_HintMessageFlow — лампочка шлёт хинт сообщением (алертов в MAX нет),
+// «Продолжить» возвращает на текущий шаг, draft_step не менялся.
+func TestFSM_HintMessageFlow(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6701
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
+	b.Handle(ctx, msgUpdate(uid, "Имя"))
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, fsm.StepPostText, gg.DraftStep)
+
+	// Лампочка — сообщение с подсказкой и кнопками Продолжить/Отменить.
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	click(util.CBFSMHint)
+
+	hintSent := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.HasPrefix(r.Text, "💡") {
+			hintSent = true
+		}
+	}
+	assert.True(t, hintSent, "подсказка должна приходить сообщением (💡 ...)")
+
+	// «Продолжить» — возврат к шагу post_text.
+	click(util.CBFSMContinue)
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepPostText, gg.DraftStep, "после Продолжить — тот же шаг")
+
+	// Ввод обрабатывается дальше (шаг живой).
+	b.Handle(ctx, msgUpdate(uid, "Текст поста"))
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepMedia, gg.DraftStep)
+}
+
+// TestFSM_FirstStepNoBack — на первом шаге нет «Назад» (клавиатура 💡+Отмена),
+// и fsm_back с него никуда не уводит.
+func TestFSM_FirstStepNoBack(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6702
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
+	g, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, fsm.StepName, g.DraftStep)
+
+	// Клавиатура первого шага не содержит Назад.
+	assert.NotContains(t, util.FirstStepKeyboard().Build().Payload.Buttons[0][1].Text, "Назад")
+
+	// Даже если прислать fsm_back — остаёмся на name.
+	b.Handle(ctx, callbackUpdate(uid, util.CBFSMBack))
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepName, gg.DraftStep)
+}

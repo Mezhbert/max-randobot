@@ -248,18 +248,18 @@ func (a *API) SendTextQuiet(ctx context.Context, userID int64, text string) erro
 // rows — матрица кнопок; каждая кнопка {text, type:"message", payload} —
 // нажатие шлёт сообщение от юзера с data-attachment (payload приходит в
 // webhook, парсируется ParseDataPayload).
-// Отправляется сырым REST (POST /messages?user_id=): SDK-билдер Message
-// не позволяет приложить произвольный attachment (reply_keyboard).
+//
+// ВАЖНО (асимметрия MAX API, проверено живым запросом): у inline-клавиатуры
+// кнопки лежат в payload.buttons, а у reply_keyboard — НА ВЕРХНЕМ УРОВНЕ
+// attachment: {"type":"reply_keyboard","buttons":[[...]]}. SDK-модель так не
+// умеет — отправляем сырым REST (POST /messages) собственным типом.
 func (a *API) SendTextReplyKeyboard(ctx context.Context, userID int64, text string, rows [][]*model.Button) error {
 	a.rl.wait(ctx)
 	notify := false // тихо: диалог уже открыт (меню показывается по нажатию)
-	body := model.NewMessageBody{
-		Text: text,
+	body := replyKeyboardBody{
+		Text:        text,
 		Notify:      &notify,
-		Attachments: []model.Attachment{{
-			Type:    model.AttachReplyKeyboard,
-			Payload: model.Payload{Buttons: rows},
-		}},
+		Attachments: []replyKeyboardAttachment{{Type: string(model.AttachReplyKeyboard), Buttons: rows}},
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -269,6 +269,20 @@ func (a *API) SendTextReplyKeyboard(ctx context.Context, userID int64, text stri
 	err = a.rawREST(ctx, http.MethodPost, "/messages?user_id="+strconv.FormatInt(userID, 10), payload, &res)
 	a.metrics.Inc(metrics.MethodSendTextReply, err)
 	return err
+}
+
+// replyKeyboardBody — тело POST /messages с reply-keyboard. Кнопки attachment
+// лежат на верхнем уровне (не в payload) — см. комментарий выше.
+type replyKeyboardBody struct {
+	Text        string                   `json:"text,omitempty"`
+	Notify      *bool                    `json:"notify,omitempty"`
+	Attachments []replyKeyboardAttachment `json:"attachments"`
+}
+
+// replyKeyboardAttachment — attachment типа reply_keyboard.
+type replyKeyboardAttachment struct {
+	Type    string            `json:"type"`
+	Buttons [][]*model.Button `json:"buttons"` // required: верхний уровень, не payload
 }
 
 // SendTextWithKeyboard — текст + inline-клавиатура пользователю.
