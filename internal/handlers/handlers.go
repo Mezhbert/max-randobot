@@ -72,20 +72,6 @@ func (b *Bot) SetHelpURL(url string) {
 // CaptchaService отдаёт сервис капчи (для webapp-эндпоинтов).
 func (b *Bot) CaptchaService() *captcha.Service { return b.captcha }
 
-// RegisterParticipantFromApp — регистрация участника после успешной капчи
-// в мини-аппе (колбэк для webapp.Handler). Идемпотентна.
-func (b *Bot) RegisterParticipantFromApp(giveawayID, userID int64) {
-	g, err := b.db.GetGiveawayAny(context.Background(), giveawayID)
-	if err != nil || g.Status != store.StatusActive {
-		return
-	}
-	// Уже участвует? (идемпотентность)
-	if n, _ := b.db.CountParticipant(context.Background(), giveawayID, userID); n > 0 {
-		return
-	}
-	b.registerParticipant(context.Background(), userID, g, "")
-}
-
 // SetCounterUpdater подключает функцию обновления счётчика участников
 // в опубликованных постах (вызывается из main со ссылкой на Scheduler).
 func (b *Bot) SetCounterUpdater(f func(ctx context.Context, g *store.Giveaway)) {

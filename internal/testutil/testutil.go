@@ -122,13 +122,6 @@ func (m *MockBotAPI) SendText(ctx context.Context, userID int64, text string) er
 	return m.SendTextErr
 }
 
-func (m *MockBotAPI) SendTextQuiet(ctx context.Context, userID int64, text string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.Sends = append(m.Sends, SendRecord{Method: "SendTextQuiet", UserID: userID, Text: text})
-	return m.SendTextErr
-}
-
 func (m *MockBotAPI) SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -74,7 +74,7 @@ func (b *Bot) showStep(ctx context.Context, userID int64, g store.Giveaway, step
 			mediaSimple = append(mediaSimple, util.MediaTokenSimple{Type: mt.Type, Token: mt.Token})
 		}
 		// 1) Полный предпросмотр поста (как будет в канале).
-		attachments := util.GiveawayAttachments(buttonText, g.ID, mediaSimple, true, b.botUsername)
+		attachments := util.GiveawayAttachments(buttonText, g.ID, mediaSimple, true, b.botUsername, b.botUserID)
 		_ = b.api.SendWithAttachments(ctx, userID, g.PostText, attachments, model.TextFormat(g.PostFormat))
 
 		// 2) Если итоги отдельным постом — тоже предпросмотрим.

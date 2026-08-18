@@ -344,14 +344,14 @@ func (b *Bot) startEditMedia(ctx context.Context, uid int64, g store.Giveaway) {
 		fmt.Sprintf("🖼 Медиа (сейчас: %s).\n\n«Отправить новые» — пришлите фото/видео заново (старые заменятся).", cur), kb)
 }
 
-// startEditMediaInput — переводит в режим ввода медиа (SessionEditField c
-// field=media_input): следующие сообщения с фото/видео заменят текущий набор.
+// startEditMediaInput — переводит в режим ввода медиа (SessionEditMedia):
+// следующие сообщения с фото/видео добавляются к набору, «✅ Готово» завершает.
 func (b *Bot) startEditMediaInput(ctx context.Context, uid int64, g store.Giveaway) {
 	_ = b.db.SetSessionPayload(ctx, uid, store.SessionEditMedia, map[string]any{
 		"giveaway_id": float64(g.ID),
 	})
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"🖼 Пришлите фото и/или видео для поста (по одному сообщению каждное).\n"+
+		"🖼 Пришлите фото и/или видео для поста (по одному в сообщении).\n"+
 			"Когда закончите — нажмите «✅ Готово».",
 		util.MediaEditDoneKeyboard(g.ID))
 }
@@ -385,7 +385,8 @@ func (b *Bot) handleEditMediaInput(ctx context.Context, uid int64, msg model.Mes
 		}
 	}
 	if len(tokens) == 0 {
-		_ = b.api.SendText(ctx, uid, "Не увидел фото/видео во вложениях. Пришлите медиа или «✅ Готово».")
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "Не увидел фото/видео во вложениях. Пришлите медиа или нажмите «✅ Готово».",
+			util.MediaEditDoneKeyboard(g.ID))
 		return true
 	}
 	all := append(append([]store.MediaToken{}, g.MediaTokens...), tokens...)
@@ -393,7 +394,10 @@ func (b *Bot) handleEditMediaInput(ctx context.Context, uid int64, msg model.Mes
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения: "+err.Error())
 		return true
 	}
-	_ = b.api.SendText(ctx, uid, fmt.Sprintf("✅ Медиа добавлено (%d всего). Ещё или «✅ Готово».", len(all)))
+	// Подтверждение с кнопкой «Готово» на каждом шаге приёма — флоу не сбивается.
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		fmt.Sprintf("✅ Медиа добавлено (%d всего). Ещё или «✅ Готово».",
+			len(all)), util.MediaEditDoneKeyboard(g.ID))
 	return true
 }
 

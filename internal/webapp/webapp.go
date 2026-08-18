@@ -15,30 +15,36 @@ import (
 
 	maxbot "github.com/max-messenger/max-bot-api-client-go/v2"
 	"github.com/maxbot/giveawaybot/internal/captcha"
+	"github.com/maxbot/giveawaybot/internal/handlers"
 	"github.com/maxbot/giveawaybot/internal/store"
 )
 
 //go:embed app/*
 var staticFS embed.FS
 
-// Deps — зависимости мини-аппа.
+// Deps — зависимости мини-аппа. Передаётся указателем: BotUsername уточняется
+// после старта (GetMyInfo) и мутирует в main.
 type Deps struct {
-	DB        *store.Store
-	Captcha   *captcha.Service
-	BotToken  string // для ValidateInitData (пусто — валидация отключена)
-	// RegisterParticipant вызывается после успешной капчи в мини-аппе:
-	// добавляет участника в БД (owner-логика в handlers, тут только колбэк).
-	RegisterParticipant func(giveawayID, userID int64)
+	DB       *store.Store
+	Captcha  *captcha.Service
+	BotToken string // для ValidateInitData (пусто — валидация отключена)
+
+	// BotUsername — публичное имя бота для deep-link'ов (opt-in уведомлений).
+	BotUsername string
+
+	// Participate — участие из мини-аппа (полный пайплайн: статус → подписки →
+	// регистрация, без сообщений от бота). Реализация в handlers.
+	Participate func(giveawayID, userID int64) handlers.ParticipateResult
 }
 
 // Handler возвращает HTTP-хендлеры мини-аппа:
-//   GET /app/                  → редирект на results.html
-//   GET /app/results.html      → страница результатов
-//   GET /app/captcha.html      → страница капчи
+//   GET /app/                  → редирект на index.html (главная бота)
+//   GET /app/participate.html  → страница участия (open_app-кнопка на посте)
 //   GET /app/api/giveaway/{id} → JSON с данными розыгрыша
+//   POST /app/api/participate  → регистрация участия (init_data-авторизация)
 //   GET /app/api/captcha/start → PNG-капча (по init_data+giveaway_id)
 //   POST /app/api/captcha/verify → проверка ответа + регистрация участника
-func Handler(d Deps, log *slog.Logger) http.Handler {
+func Handler(d *Deps, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	// Статика.
@@ -103,12 +109,16 @@ func Handler(d Deps, log *slog.Logger) http.Handler {
 			WinnersCount int      `json:"winners_count"`
 			Winners      []winner `json:"winners"`
 			FinishedAt   string   `json:"finished_at,omitempty"`
+			Captcha      bool     `json:"captcha"`       // нужна ли капча при участии
+			Bot          string   `json:"bot,omitempty"` // username бота (deep-link opt-in)
 		}{
 			Name:         g.Name,
 			Status:       g.Status,
 			Participants: participants,
 			WinnersCount: g.WinnersCount,
 			Winners:      winners,
+			Captcha:      g.CaptchaMode == "all",
+			Bot:          d.BotUsername,
 		}
 		if g.Status == "finished" && !g.UpdatedAt.IsZero() {
 			resp.FinishedAt = g.UpdatedAt.In(time.FixedZone("MSK", 3*3600)).Format("02.01.2006 15:04 МСК")
@@ -117,9 +127,40 @@ func Handler(d Deps, log *slog.Logger) http.Handler {
 		writeJSON(w, resp)
 	})
 
+	// API: участие из мини-аппа (кнопка «Участвовать» на посте — open_app).
+	// Авторизация по init_data; полная проверка подписок; без сообщений от бота.
+	mux.HandleFunc("/app/api/participate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := validateInitDataUser(*d, r)
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			GiveawayID int64 `json:"giveaway_id"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.GiveawayID <= 0 {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		if d.Participate == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		res := d.Participate(req.GiveawayID, userID)
+		writeJSON(w, map[string]any{
+			"ok":         res.Ok,
+			"error":      res.Err,
+			"notifiable": res.Notifiable,
+		})
+	})
+
 	// API: капча — старт (PNG по init_data + giveaway_id).
 	mux.HandleFunc("/app/api/captcha/start", func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := validateInitDataUser(d, r)
+		userID, ok := validateInitDataUser(*d, r)
 		if !ok {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -150,7 +191,7 @@ func Handler(d Deps, log *slog.Logger) http.Handler {
 			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		userID, ok := validateInitDataUser(d, r)
+		userID, ok := validateInitDataUser(*d, r)
 		if !ok {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -172,11 +213,18 @@ func Handler(d Deps, log *slog.Logger) http.Handler {
 			writeJSON(w, map[string]any{"ok": false, "error": "Неверно. Обновите картинку и попробуйте снова"})
 			return
 		}
-		// Капча пройдена — регистрируем участника (колбэк в handlers).
-		if d.RegisterParticipant != nil {
-			d.RegisterParticipant(req.GiveawayID, userID)
+		// Капча пройдена — регистрируем участника через полный пайплайн
+		// (подписки + идемпотентность, без сообщений от бота).
+		var res handlers.ParticipateResult
+		if d.Participate != nil {
+			res = d.Participate(req.GiveawayID, userID)
 		}
-		writeJSON(w, map[string]any{"ok": true, "name": g.Name})
+		writeJSON(w, map[string]any{
+			"ok":         res.Ok,
+			"error":      res.Err,
+			"name":       g.Name,
+			"notifiable": res.Notifiable,
+		})
 	})
 
 	return mux

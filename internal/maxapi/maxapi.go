@@ -48,8 +48,6 @@ type httpClient interface {
 // cmd/bot и используют специфичные SDK-типы.
 type BotAPI interface {
 	SendText(ctx context.Context, userID int64, text string) error
-	// SendTextQuiet — без push-уведомления (карточка в открытом диалоге).
-	SendTextQuiet(ctx context.Context, userID int64, text string) error
 	SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) (string, error)
 	SendWithAttachments(ctx context.Context, userID int64, text string, attachments []model.Attachment, format model.TextFormat) error
 	SendToChat(ctx context.Context, chatID int64, text string, attachments []model.Attachment, format model.TextFormat) (string, error)
@@ -221,24 +219,15 @@ func (a *API) SubscribeWebhook(ctx context.Context, url, secret string) error {
 }
 
 // SendText — отправка текста пользователю (диалог).
+//
+// NOTE: notify=false (тихие сообщения) больше НЕ используем: мобильный клиент
+// MAX не автоскроллит чат к тихим сообщениям — юзер «не видел» ответы бота.
+// Все отправки обычные (с уведомлением) — скролл работает предсказуемо.
 func (a *API) SendText(ctx context.Context, userID int64, text string) error {
 	a.rl.wait(ctx)
 	_, err := a.Messages.Send(ctx, maxbot.NewMessage().SetUser(userID).SetText(text))
 	if err != nil {
 		slog.Warn("SendText", "err", err, "user", userID)
-	}
-	a.metrics.Inc(metrics.MethodSendText, err)
-	return err
-}
-
-// SendTextQuiet — отправка текста БЕЗ push-уведомления (notify=false).
-// Используется для «тихих» карточек в уже открытом диалоге (напр. после
-// нажатия «Участвовать» — диалог открыт самой ссылкой, уведомление лишнее).
-func (a *API) SendTextQuiet(ctx context.Context, userID int64, text string) error {
-	a.rl.wait(ctx)
-	_, err := a.Messages.Send(ctx, maxbot.NewMessage().SetUser(userID).SetText(text).WithoutNotify())
-	if err != nil {
-		slog.Warn("SendTextQuiet", "err", err, "user", userID)
 	}
 	a.metrics.Inc(metrics.MethodSendText, err)
 	return err

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -79,6 +80,14 @@ func main() {
 	bot.SetCounterUpdater(sch.UpdateParticipantCounter)
 	bot.SetHelpURL(cfg.WebhookURL + "/app/help.html")
 
+	// Deps мини-аппа (указатель — BotUsername вписывается после GetMyInfo).
+	webappDeps := &webapp.Deps{
+		DB:         db,
+		Captcha:    bot.CaptchaService(),
+		BotToken:   cfg.BotToken,
+		Participate: bot.ParticipateFromApp,
+	}
+
 	schedCtx, schedStop := context.WithCancel(context.Background())
 	defer schedStop()
 	go runScheduler(schedCtx, sch)
@@ -102,6 +111,7 @@ func main() {
 			if info.Username != "" {
 				bot.SetUsername(info.Username)
 				sch.SetBotUsername(info.Username)
+				webappDeps.BotUsername = strings.TrimPrefix(info.Username, "@") // deep-link opt-in на странице участия
 				slog.Info("bot username", "name", info.Username)
 			}
 			if info.UserID != 0 {
@@ -159,13 +169,8 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		api.Metrics().WritePrometheus(w)
 	})
-	// Мини-апп: статика + API (итоги, капча). URL прописывается в MasterBot.
-	mux.Handle("/app/", webapp.Handler(webapp.Deps{
-		DB:                  db,
-		Captcha:             bot.CaptchaService(),
-		BotToken:            cfg.BotToken,
-		RegisterParticipant: bot.RegisterParticipantFromApp,
-	}, slog.Default()))
+	// Мини-апп: статика + API (главная, участие, капча, итоги).
+	mux.Handle("/app/", webapp.Handler(webappDeps, slog.Default()))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

@@ -264,9 +264,10 @@ func TestEdit_PubChannelsAndFinish(t *testing.T) {
 
 // ---------- Участие ----------
 
-// TestParticipate_QuietConfirmation — после регистрации ОДНА тихая карточка
-// (SendTextQuiet), не обычный SendText.
-func TestParticipate_QuietConfirmation(t *testing.T) {
+// TestParticipate_FromApp_NoBotMessages — участие через мини-апп
+// (ParticipateFromApp): регистрация без ЕДИНОГО сообщения от бота
+// (подтверждение рисует страница), notifiable=true если диалог начат.
+func TestParticipate_FromApp_NoBotMessages(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -274,22 +275,40 @@ func TestParticipate_QuietConfirmation(t *testing.T) {
 	g, ch := setupActiveGiveawayWithChannel(t, s, 6401)
 	mock.IsSubscriberMap = map[int64]map[int64]bool{ch.ChatID: {6401: true}}
 
-	b.Handle(ctx, msgUpdate(6401, "/start part_"+strconv.FormatInt(g.ID, 10)))
-	// onBotStarted шлёт стартовый экран; участие — через deep-link payload.
-	body := []byte(`{"update_type":"bot_started","user":{"user_id":6401}}`)
-	b.OnDeepLinkStart(ctx, body, "part_"+strconv.FormatInt(g.ID, 10))
+	before := len(mock.SnapshotSends())
+	res := b.ParticipateFromApp(g.ID, 6401)
 
+	assert.True(t, res.Ok, "участие через мини-апп должно регистрировать, err=%s", res.Err)
+	assert.True(t, res.Notifiable, "юзер с начатым диалогом — notifiable")
 	n, err := s.CountParticipants(ctx, g.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, n, "участник должен зарегистрироваться")
+	assert.Equal(t, 1, n)
 
-	quiets := 0
-	for _, r := range mock.SnapshotSends() {
-		if r.Method == "SendTextQuiet" && r.UserID == 6401 {
-			quiets++
-		}
-	}
-	assert.Equal(t, 1, quiets, "подтверждение — ровно одна тихая карточка")
+	after := len(mock.SnapshotSends())
+	assert.Equal(t, before, after, "мини-апп-путь не должен слать сообщений от бота")
+
+	// Идемпотентность: повторный заход — тоже Ok, без дублей.
+	res = b.ParticipateFromApp(g.ID, 6401)
+	assert.True(t, res.Ok)
+	n, err = s.CountParticipants(ctx, g.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+}
+
+// TestParticipate_FromApp_NotSubscribed — отказ с причиной, без регистрации.
+func TestParticipate_FromApp_NotSubscribed(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	g, _ := setupActiveGiveawayWithChannel(t, s, 6402)
+	res := b.ParticipateFromApp(g.ID, 6402)
+
+	assert.False(t, res.Ok)
+	assert.Contains(t, res.Err, "подпишитесь")
+	n, err := s.CountParticipants(ctx, g.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "без подписки участник не регистрируется")
 }
 
 // TestParticipants_KickAndCSV — удаление участника (анти-накрутка) и CSV.

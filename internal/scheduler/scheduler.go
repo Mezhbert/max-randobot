@@ -103,8 +103,10 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 		return fmt.Errorf("publish: нет каналов публикации")
 	}
 
-	// Кнопка участия со счётчиком участников (стартует с 0).
-	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, 0).Build()}
+	// Кнопка участия со счётчиком участников (стартует с 0). Если мини-апп
+	// настроен (botUserID) — open_app: участие внутри мини-аппа, без перехода
+	// в чат бота; иначе deep-link fallback.
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, 0, s.botUserID).Build()}
 	var media []model.Attachment
 	for _, m := range g.MediaTokens {
 		switch m.Type {
@@ -171,7 +173,7 @@ func (s *Scheduler) UpdateParticipantCounter(ctx context.Context, g *store.Givea
 		return
 	}
 
-	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, count).Build()}
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, count, s.botUserID).Build()}
 	var media []model.Attachment
 	for _, m := range g.MediaTokens {
 		switch m.Type {

@@ -177,18 +177,32 @@ func ConfirmKeyboard() *model.Keyboard {
 }
 
 // ParticipateKeyboardBuilder — кнопка «Участвовать (N)» под постом розыгрыша.
-// Использует ButtonLink с deep link (https://max.ru/<bot>/start/part_<id>) —
-// при нажатии MAX ОТКРЫВАЕТ диалог с ботом (callback-кнопка этого не делает).
-// botUsername — публичное имя бота (без @). participants — текущее число
-// участников (отображается в кнопке).
-func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername string, participants int) *model.Keyboard {
+//
+// Основной путь (botUserID != 0): open_app-кнопка — участие происходит В
+// МИНИ-АППЕ (страница participate.html, payload part_<id>): не перекидывает
+// юзера в чат бота, капча и подтверждение там же.
+//
+// Fallback (мини-апп не настроен): ButtonLink с deep link
+// (https://max.ru/<bot>/start/part_<id>) — открывает диалог бота; deep link
+// создаёт bot_started, который даёт боту право писать юзеру (уведомление
+// победителей).
+func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername string, participants int, botUserID int64) *model.Keyboard {
 	kb := model.NewKeyboard()
+	label := fmt.Sprintf("%s (%d)", buttonText, participants)
+	if botUserID != 0 {
+		kb.AddRow().AddButton(model.Button{
+			Type:      model.ButtonOpenApp,
+			Text:      label,
+			ContactID: botUserID,
+			Payload:   "part_" + strconv.FormatInt(giveawayID, 10),
+		})
+		return kb
+	}
 	botName := botUsername
 	if botName == "" {
 		botName = "max_bot"
 	}
 	link := "https://max.ru/" + botName + "/start/part_" + strconv.FormatInt(giveawayID, 10)
-	label := fmt.Sprintf("%s (%d)", buttonText, participants)
 	kb.AddRow().AddLink(label, link)
 	return kb
 }
@@ -205,8 +219,8 @@ func PreviewKeyboardBuilder(buttonText string, giveawayID int64) *model.Keyboard
 // GiveawayAttachments строит список вложений для поста розыгрыша:
 // медиа (image/video по токенам) + inline-клавиатура кнопки участия.
 // Используется и при публикации, и при предпросмотре (preview=true → PreviewKeyboard).
-// botUsername — для построения deep-link кнопки участия (открывает диалог).
-func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []MediaTokenSimple, preview bool, botUsername string) []model.Attachment {
+// botUsername — для построения deep-link кнопки участия (fallback-путь).
+func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []MediaTokenSimple, preview bool, botUsername string, botUserID int64) []model.Attachment {
 	var attachments []model.Attachment
 	for _, m := range mediaTokens {
 		switch m.Type {
@@ -227,7 +241,7 @@ func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []Medi
 	if preview {
 		kb = PreviewKeyboardBuilder(buttonText, giveawayID)
 	} else {
-		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, botUsername, 0)
+		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, botUsername, 0, botUserID)
 	}
 	attachments = append(attachments, kb.Build())
 	return attachments
