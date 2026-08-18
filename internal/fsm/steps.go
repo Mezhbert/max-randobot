@@ -88,6 +88,21 @@ var optionalSteps = map[string]bool{
 // IsOptional — можно ли пропустить шаг.
 func IsOptional(step string) bool { return optionalSteps[step] }
 
+// buttonSteps — шаги, где ввод делается КНОПКАМИ (не текстом). Используется
+// для валидации: текст/форварды на таких шагах отклоняются с подсказкой.
+var buttonSteps = map[string]bool{
+	StepSubChannels: true,
+	StepPubChannels: true,
+	StepPublishMode: true,
+	StepFinishMode:  true,
+	StepResultsLoc:  true,
+	StepCaptcha:     true,
+	StepPreview:     true,
+}
+
+// IsButtonStep — выбор на этом шаге делается кнопками?
+func IsButtonStep(step string) bool { return buttonSteps[step] }
+
 // NextStep возвращает следующий шаг или "" если это конец.
 func NextStep(step string) string {
 	for i, s := range orderedSteps {

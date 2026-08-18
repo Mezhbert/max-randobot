@@ -36,6 +36,7 @@ var editFields = map[string]editFieldDef{
 	"pub_channels":  {title: "📣 Каналы публикации", col: "publish_channel_ids", kind: "channels", skipActive: true},
 	"publish_at":    {title: "📅 Время публикации", col: "publish_at", kind: "date", skipActive: true},
 	"finish":        {title: "🏁 Условие итогов", col: "finish_mode", kind: "finishmode"},
+	"finish_at":     {title: "⏰ Дата итогов", col: "finish_at", kind: "date"}, // вводится через смену режима, кнопки в меню нет
 	"winners":       {title: "🏆 Кол-во победителей", col: "winners_count", kind: "number"},
 	"winners_msg":   {title: "✉️ Сообщение победителям", col: "winners_message", kind: "text"},
 	"results_loc":   {title: "📍 Где итоги", col: "results_in_original_post", kind: "resultsloc"},
@@ -445,6 +446,16 @@ func (b *Bot) applyEditSet(ctx context.Context, uid int64, key, value string, gi
 				})
 				_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 					"👥 Введите целевое число участников:", util.CancelEditKeyboard(g.ID))
+				return
+			}
+			if value == "time" && g.FinishAt == nil {
+				// Даты ещё нет — запрашиваем (иначе режим «по времени» без даты).
+				_ = b.db.SetSessionPayload(ctx, uid, store.SessionEditField, map[string]any{
+					"giveaway_id": float64(g.ID),
+					"field":       "finish_at",
+				})
+				_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+					"⏰ Введите дату итогов (ЧЧ:ММ или ДД.ММ.ГГГГ ЧЧ:ММ, МСК):", util.CancelEditKeyboard(g.ID))
 				return
 			}
 		}

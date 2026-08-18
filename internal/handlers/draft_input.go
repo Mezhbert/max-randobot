@@ -13,6 +13,14 @@ import (
 
 // handleDraftInput — текст пользователя в режиме создания розыгрыша.
 func (b *Bot) handleDraftInput(ctx context.Context, userID int64, g store.Giveaway, text string) {
+	// Защита от устаревшего шага (старые черновики: referral/promotion):
+	// промпта нет → пустое сообщение MAX молча отвергнет. Сбрасываем на первый.
+	if fsm.PromptForStep(g.DraftStep) == "" {
+		_ = b.db.SetDraftStep(ctx, g.ID, fsm.FirstStep)
+		g.DraftStep = fsm.FirstStep
+		b.showStep(ctx, userID, g, fsm.FirstStep)
+		return
+	}
 	if err := b.engine.HandleTextInput(ctx, g, text); err != nil {
 		// Неверный формат — повторяем запрос того же шага.
 		_, _ = b.api.SendTextWithKeyboard(ctx, userID,
@@ -91,8 +99,10 @@ func (b *Bot) showStep(ctx context.Context, userID int64, g store.Giveaway, step
 }
 
 // showChannelSelectStep — шаг выбора каналов с живыми галочками (тогглинг).
-// При первом показе — отправляет новое сообщение и запоминает mid; при повторных
-// (тоггл) — редактирует то же сообщение через EditChatText (edit-in-place).
+// Всегда отправляет НОВОЕ сообщение и запоминает mid: возврат к шагу (Назад,
+// Продолжить после подсказки) должен быть ВИДИМЫМ — редактирование старого
+// сообщения выше выглядело как «ничего не произошло». Тогглы же (нажатие на
+// канал) редактируют сообщение на месте — см. toggleChannelSelection.
 func (b *Bot) showChannelSelectStep(ctx context.Context, userID int64, g store.Giveaway, step string) {
 	// Ранний чек для каналов публикации: без хотя бы одного канала с админкой
 	// бота шаг бессмыслен (валидация «в конце» — плохо, см. заметки итерации).
@@ -107,18 +117,6 @@ func (b *Bot) showChannelSelectStep(ctx context.Context, userID int64, g store.G
 	}
 
 	text, kb := buildChannelSelectKB(ctx, b, userID, g, step)
-
-	// Если уже есть запомненный mid — редактируем (edit-in-place).
-	if g.ChannelSelectMID != "" {
-		if err := b.api.EditChatText(ctx, g.ChannelSelectMID, text, []model.Attachment{kb.Build()}, ""); err != nil {
-			// Edit упал (напр. истёк лимит времени) — шлём новым сообщением.
-			mid, _ := b.api.SendTextWithKeyboard(ctx, userID, text, kb)
-			_ = b.db.UpdateGiveawayField(ctx, g.ID, "channel_select_mid", mid)
-		}
-		return
-	}
-
-	// Первая отрисовка — отправляем и запоминаем mid.
 	mid, _ := b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 	if mid != "" {
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "channel_select_mid", mid)

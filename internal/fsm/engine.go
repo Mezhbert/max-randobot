@@ -153,6 +153,8 @@ func (e *Engine) StartDraft(ctx context.Context, ownerUserID int64) (store.Givea
 // ResumeDraft возобновляет создание существующего черновика по id.
 // Используется кнопкой «Продолжить создание» в карточке черновика.
 // Если шаг создания пуст (черновик сохранён через «Отменить») — стартуем с первого шага.
+// Устаревший шаг (referral/promotion из старых версий бота) — тоже сбрасываем
+// на первый: промпта для него нет, пустое сообщение MAX молча отвергает.
 func (e *Engine) ResumeDraft(ctx context.Context, id int64) (store.Giveaway, error) {
 	g, err := e.DB.GetGiveawayAny(ctx, id)
 	if err != nil {
@@ -162,7 +164,7 @@ func (e *Engine) ResumeDraft(ctx context.Context, id int64) (store.Giveaway, err
 		return g, fmt.Errorf("это не черновик")
 	}
 	step := g.DraftStep
-	if step == "" {
+	if step == "" || PromptForStep(step) == "" {
 		step = FirstStep
 		if err := e.DB.SetDraftStep(ctx, id, step); err != nil {
 			return g, err

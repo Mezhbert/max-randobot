@@ -221,25 +221,92 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		}
 	}
 
-	// Если идёт создание розыгрыша — отдать ввод в FSM
+	// Если идёт создание розыгрыша — валидируем ввод под тип шага.
 	if draft, err := b.db.GetDraftGiveaway(ctx, uid); err == nil && draft.DraftStep != "" {
-		// Шаг медиа обрабатываем по attachments, а не по тексту.
+		// Шаг медиа обрабатываем по attachments (форвард с фото/видео — ок).
 		if draft.DraftStep == fsm.StepMedia {
 			b.handleMediaInput(ctx, uid, draft, msg)
+			return
+		}
+		// Шаги, где выбор делается КНОПКАМИ (каналы/режимы/капча/подтверждение):
+		// текст и форварды не принимаем — объясняем и перерисовываем шаг.
+		if fsm.IsButtonStep(draft.DraftStep) {
+			if text != "" || isForward(msg) || hasAttachments(msg) {
+				b.rejectUnexpectedDraftInput(ctx, uid, draft)
+				return
+			}
+			// Пустое сообщение без вложений — тоже малополезно, подсказываем.
+			b.rejectUnexpectedDraftInput(ctx, uid, draft)
+			return
+		}
+		// Текстовые шаги: форвард поста — не тот ввод (текст нужен свой).
+		if isForward(msg) {
+			_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+				"⚠️ Это пересланное сообщение, а на этом шаге нужно ввести СВОЙ текст.\n\n"+
+					fsm.PromptForStep(draft.DraftStep),
+				kbForStep(draft.DraftStep))
 			return
 		}
 		b.handleDraftInput(ctx, uid, draft, text)
 		return
 	}
 
-	// Fallback: подпись reply-кнопки как текст (когда data-attachment не пришёл).
+	// Fallback: подпись кнопки меню как текст (напр. скопированная).
 	if payload := util.ReplyPayloadByText(text); payload != "" {
 		b.handleMenuAction(ctx, uid, payload)
 		return
 	}
 
-	// Иначе — эхо-подсказка
-	_ = b.api.SendText(ctx, uid, "Используйте кнопки меню. Для вызова меню отправьте /menu")
+	// Ничего не поняли — объясняем, что бот умеет сейчас (контекстная подсказка).
+	b.unexpectedNoFlow(ctx, uid, msg)
+}
+
+// isForward — пересланное сообщение (из канала/чата).
+func isForward(msg model.MessageUpdate) bool {
+	return msg.Link != nil && msg.Link.Type == model.LinkTypeForward && msg.Link.ChatID != 0
+}
+
+// hasAttachments — есть ли у сообщения вложения (медиа/файлы).
+func hasAttachments(msg model.MessageUpdate) bool {
+	return len(msg.Body.Attachments) > 0
+}
+
+// unexpectedNoFlow — пользователь прислал что-то неожидаемое вне любого флоу
+// (нет сессии, нет создания): объясняем и показываем меню.
+func (b *Bot) unexpectedNoFlow(ctx context.Context, uid int64, msg model.MessageUpdate) {
+	switch {
+	case isForward(msg):
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"🤔 Не понял: вы переслали пост.\n\n"+
+				"Если хотите ДОБАВИТЬ КАНАЛ — «Мои каналы → ➕ Добавить канал», затем перешлите пост ещё раз.\n"+
+				"Для остального — кнопки меню ниже 👇",
+			util.MainMenuKeyboard())
+	case hasAttachments(msg):
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"🤔 Не понял: сообщение с вложением.\n\nВыберите действие кнопками меню ниже 👇",
+			util.MainMenuKeyboard())
+	default:
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"🤔 Не понял команду.\n\nВыберите действие кнопками меню ниже 👇\n"+
+				"Меню также вызывается командой /menu.",
+			util.MainMenuKeyboard())
+	}
+}
+
+// rejectUnexpectedDraftInput — на кнопочном шаге пришёл текст/форвард:
+// объясняем и заново показываем шаг с кнопками.
+func (b *Bot) rejectUnexpectedDraftInput(ctx context.Context, uid int64, g store.Giveaway) {
+	var what string
+	switch g.DraftStep {
+	case fsm.StepSubChannels, fsm.StepPubChannels:
+		what = "выбрать каналы кнопками из списка"
+	case fsm.StepPreview:
+		what = "подтвердить кнопками «✅ Принять» / «❌ Отклонить»"
+	default:
+		what = "выбрать вариант кнопкой"
+	}
+	_ = b.api.SendText(ctx, uid, "⚠️ Здесь не нужен текст — нужно "+what+". Вот шаг ещё раз 👇")
+	b.showStep(ctx, uid, g, g.DraftStep)
 }
 
 // sendMainMenu отправляет главное меню пользователю.

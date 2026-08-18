@@ -347,7 +347,9 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 	case strings.HasPrefix(p, util.CBGwDelete):
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwDelete), 10, 64)
 		if err := b.db.DeleteGiveaway(ctx, id, uid); err == nil {
-			_ = b.api.SendText(ctx, uid, "Черновик удалён.")
+			_ = b.api.SendText(ctx, uid, "🗑 Черновик удалён.")
+			// Возврат к списку черновиков (не голое сообщение без кнопок).
+			b.showGiveawaysByStatus(ctx, uid, store.StatusDraft)
 		} else {
 			_ = b.api.SendText(ctx, uid, "Нельзя удалить завершённый розыгрыш.")
 		}
@@ -391,6 +393,10 @@ func (b *Bot) resumeGiveaway(ctx context.Context, uid, id int64) {
 		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
 		return
 	}
+	// Делаем этот черновик «самым свежим»: все FSM-кнопки работают с последним
+	// draft юзера (GetDraftGiveaway ORDER BY updated_at) — иначе при нескольких
+	// черновиках нажатия уводили бы в другой черновик.
+	_ = b.db.AbandonDraft(ctx, id) // только трогает updated_at, шаг сохраняется
 	b.showStep(ctx, uid, g, g.DraftStep)
 }
 

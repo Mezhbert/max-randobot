@@ -445,3 +445,402 @@ func TestFSM_FirstStepNoBack(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fsm.StepName, gg.DraftStep)
 }
+
+// ---------- Багфиксы итерации (ручное тестирование) ----------
+
+// fwdUpdate — пересланное сообщение из канала.
+func fwdUpdate(userID int64, text string) model.Update {
+	return model.Update{
+		UpdateType: model.UpdateMessageCreated,
+		UserID:     userID,
+		MessageID:  "mid.fwd." + strconv.FormatInt(time.Now().UnixNano(), 10),
+		User:       &model.User{UserID: userID, FirstName: "tester"},
+		Message: &model.MessageUpdate{
+			Link: &model.LinkedMessage{Type: model.LinkTypeForward, ChatID: 999},
+			Body: model.MessageBody{Text: text},
+		},
+	}
+}
+
+// TestInputValidation_ForwardOutsideFlow — пересылка поста вне любого флоу:
+// контекстная подсказка (не эхо «используйте кнопки» без объяснений).
+func TestInputValidation_ForwardOutsideFlow(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6801
+	testutil.EnsureUser(t, s, uid, "tester")
+
+	b.Handle(ctx, fwdUpdate(uid, "пост из канала"))
+
+	last := ""
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid {
+			last = r.Text
+		}
+	}
+	assert.Contains(t, last, "переслали пост", "должна быть человеческая подсказка про пересланный пост")
+	assert.Contains(t, last, "Добавить канал", "и путь решения: как добавить канал")
+}
+
+// TestInputValidation_ForwardOnTextStep — форвард на текстовом шаге отклоняется
+// с пояснением, шаг не двигается.
+func TestInputValidation_ForwardOnTextStep(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6802
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
+	b.Handle(ctx, msgUpdate(uid, "Имя"))
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, fsm.StepPostText, gg.DraftStep)
+
+	b.Handle(ctx, fwdUpdate(uid, "текст чужого поста"))
+
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepPostText, gg.DraftStep, "форвард не должен advancing шаг")
+	assert.NotEqual(t, "текст чужого поста", gg.PostText, "текст форварда не должен сохраниться в пост")
+
+	rejected := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "пересланное сообщение") {
+			rejected = true
+		}
+	}
+	assert.True(t, rejected, "должно быть пояснение про пересланный сообщение")
+}
+
+// TestInputValidation_TextOnButtonStep — текст на кнопочном шаге (режим
+// публикации) отклоняется, шаг перерисовывается.
+func TestInputValidation_TextOnButtonStep(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6803
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8801, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	click(util.CBCreateGiveaway)
+	b.Handle(ctx, msgUpdate(uid, "Имя"))
+	b.Handle(ctx, msgUpdate(uid, "Текст"))
+	click(util.CBFSMSkip)
+	click(util.CBFSMSkip)
+	click(util.CBFSMOption + "next")
+	click(util.CBChannelTogglePub + strconv.FormatInt(ch.ID, 10))
+	click(util.CBFSMOption + "next")
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, fsm.StepPublishMode, gg.DraftStep)
+
+	// Шлём мусорный текст на кнопочном шаге.
+	b.Handle(ctx, msgUpdate(uid, "хуйня какая-то"))
+
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepPublishMode, gg.DraftStep, "шаг не должен меняться от текста")
+
+	rejected := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "не нужен текст") {
+			rejected = true
+		}
+	}
+	assert.True(t, rejected, "должно быть пояснение «здесь кнопки»")
+}
+
+// TestDraftDelete_ReturnsToDraftsList — после удаления черновика показывается
+// список черновиков с кнопками, а не голое сообщение.
+func TestDraftDelete_ReturnsToDraftsList(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6810
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	click(util.CBCreateGiveaway)
+	b.Handle(ctx, msgUpdate(uid, "Мой черновик"))
+	b.Handle(ctx, msgUpdate(uid, "Текст"))
+	// Отменяем — черновик именованный, сохраняется.
+	click(util.CBFSMCancel)
+
+	gws, err := s.ListGiveaways(ctx, uid, store.StatusDraft)
+	require.NoError(t, err)
+	require.Len(t, gws, 1)
+
+	// Удаляем через карточку.
+	click(util.CBGwDelete + strconv.FormatInt(gws[0].ID, 10))
+
+	sends := mock.SnapshotSends()
+	deletedMsg, listShown := false, false
+	for _, r := range sends {
+		if r.UserID == uid && strings.Contains(r.Text, "Черновик удалён") {
+			deletedMsg = true
+		}
+		if r.UserID == uid && (strings.Contains(r.Text, "Выберите розыгрыш") || strings.Contains(r.Text, "Здесь пока пусто") || strings.Contains(r.Text, "пусто")) {
+			listShown = true
+		}
+	}
+	assert.True(t, deletedMsg, "должно быть сообщение об удалении")
+	assert.True(t, listShown, "после удаления должен вернуться список черновиков (с кнопками)")
+}
+
+// TestFSM_HintContinue_ChannelStep — «Продолжить» после подсказки на шаге
+// каналов РЕНДЕРИТ пикер заново (новым сообщением), а не редактирует старое.
+func TestFSM_HintContinue_ChannelStep(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6811
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8811, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	click(util.CBCreateGiveaway)
+	b.Handle(ctx, msgUpdate(uid, "Имя"))
+	b.Handle(ctx, msgUpdate(uid, "Текст"))
+	click(util.CBFSMSkip)
+	click(util.CBFSMSkip)
+	click(util.CBFSMOption + "next") // sub → pub
+
+	pickersBefore := 0
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Каналы публикации") {
+			pickersBefore++
+		}
+	}
+	require.Equal(t, 1, pickersBefore, "исходный пикер отправлен один раз")
+
+	// Лампочка → Продолжить.
+	click(util.CBFSMHint)
+	click(util.CBFSMContinue)
+
+	pickersAfter := 0
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Каналы публикации") {
+			pickersAfter++
+		}
+	}
+	assert.Equal(t, 2, pickersAfter, "после «Продолжить» пикер должен прийти СНОВА (видимый возврат)")
+
+	// Шаг не изменился, выбор канала по-прежнему работает.
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepPubChannels, gg.DraftStep)
+	click(util.CBChannelTogglePub + strconv.FormatInt(ch.ID, 10))
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Contains(t, gg.PublishChannelIDs, ch.ID)
+}
+
+// TestDraft_CancelThenResume — отмена (именованный черновик сохраняется) →
+// продолжение создания из «Черновики» работает, ввод двигает шаг.
+func TestDraft_CancelThenResume(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6812
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	click(util.CBCreateGiveaway)
+	b.Handle(ctx, msgUpdate(uid, "Возратимся"))
+	b.Handle(ctx, msgUpdate(uid, "Текст поста"))
+	click(util.CBFSMCancel) // именованный → сохранён в черновики
+
+	gws, err := s.ListGiveaways(ctx, uid, store.StatusDraft)
+	require.NoError(t, err)
+	require.Len(t, gws, 1)
+	gid := gws[0].ID
+	require.Equal(t, fsm.StepMedia, gws[0].DraftStep, "шаг сохранён")
+
+	// Продолжаем создание из карточки черновика.
+	click(util.CBGwEdit + strconv.FormatInt(gid, 10))
+
+	// Приглашение шага media отправлено.
+	promptShown := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Медиа") {
+			promptShown = true
+		}
+	}
+	assert.True(t, promptShown, "после «Продолжить создание» должен показаться шаг сохранённого этапа")
+
+	// Ввод дальше работает: пропускаем медиа → шаг кнопки.
+	click(util.CBFSMSkip)
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepButtonText, gg.DraftStep, "после resume ввод должен advancing шаги")
+}
+
+// TestDraft_ResumeStaleStep — старый черновик с удалённым шагом (referral)
+// продолжается с первого шага, а не молчит.
+func TestDraft_ResumeStaleStep(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6813
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	_, err := s.Pool().Exec(ctx, `
+		INSERT INTO giveaways (owner_user_id, name, post_text, status, draft_step)
+		VALUES ($1, 'Старый', 'текст', 'draft', 'referral')
+	`, uid)
+	require.NoError(t, err)
+	gws, err := s.ListGiveaways(ctx, uid, store.StatusDraft)
+	require.NoError(t, err)
+	require.Len(t, gws, 1)
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBGwEdit+strconv.FormatInt(gws[0].ID, 10)))
+
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.FirstStep, gg.DraftStep, "устаревший шаг должен сбрасываться на первый")
+
+	namePrompt := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Название конкурса") {
+			namePrompt = true
+		}
+	}
+	assert.True(t, namePrompt, "должен показаться промпт первого шага (не пустое сообщение)")
+}
+
+// TestEdit_FinishSwitchToTime_PromptsDate — смена режима итогов на «по времени»
+// без даты запрашивает дату (раньше молча оставляла режим без finish_at).
+func TestEdit_FinishSwitchToTime_PromptsDate(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6820
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8820, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	past := time.Now().UTC().Add(-time.Hour)
+	_, err = s.Pool().Exec(ctx, `
+		INSERT INTO giveaways (owner_user_id, name, post_text, publish_channel_ids, status,
+		  publish_at, finish_mode, finish_participants_count, winners_count)
+		VALUES ($1,'Финиш','Текст', ARRAY[$2]::bigint[], 'scheduled', $3, 'count', 50, 1)
+	`, uid, ch.ID, past)
+	require.NoError(t, err)
+	gws, err := s.ListGiveaways(ctx, uid, store.StatusScheduled)
+	require.NoError(t, err)
+	require.NotEmpty(t, gws)
+	gid := gws[0].ID
+
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	click(util.CBGwEdit + strconv.FormatInt(gid, 10))
+	click(util.CBGwEditField + "finish:" + strconv.FormatInt(gid, 10))
+	click(util.CBGwEditSet + "finish:time:" + strconv.FormatInt(gid, 10))
+
+	// Бот должен запросить дату итогов.
+	asked := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "дату итогов") {
+			asked = true
+		}
+	}
+	assert.True(t, asked, "переключение на «по времени» без даты должно запросить дату")
+
+	// Вводим дату — сохраняется.
+	b.Handle(ctx, msgUpdate(uid, util.FormatMoscowTime(time.Now().Add(48*time.Hour))))
+	g, err := s.GetGiveaway(ctx, gid, uid)
+	require.NoError(t, err)
+	assert.Equal(t, "time", g.FinishMode)
+	require.NotNil(t, g.FinishAt)
+}
+
+// TestEdit_SectionsComprehensive — прогон всех секций редактуры scheduled:
+// текстовые поля, числа, капча, место итогов, медиа-очистка, время публикации.
+func TestEdit_SectionsComprehensive(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6821
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8821, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	past := time.Now().UTC().Add(-time.Hour)
+	_, err = s.Pool().Exec(ctx, `
+		INSERT INTO giveaways (owner_user_id, name, post_text, button_text, publish_channel_ids, status,
+		  publish_at, finish_at, finish_mode, winners_count, captcha_mode, media_tokens)
+		VALUES ($1,'Компл','Текст','Участвовать', ARRAY[$2]::bigint[], 'scheduled',
+		  $3, now() + interval '7 days', 'time', 1, 'none', '[]'::jsonb)
+	`, uid, ch.ID, past)
+	require.NoError(t, err)
+	gws, err := s.ListGiveaways(ctx, uid, store.StatusScheduled)
+	require.NoError(t, err)
+	require.NotEmpty(t, gws)
+	gid := gws[0].ID
+	id := strconv.FormatInt(gid, 10)
+
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+
+	// Название.
+	click(util.CBGwEditField + "name:" + id)
+	b.Handle(ctx, msgUpdate(uid, "Новое имя"))
+	// Текст поста.
+	click(util.CBGwEditField + "post_text:" + id)
+	b.Handle(ctx, msgUpdate(uid, "Новый текст поста"))
+	// Кнопка.
+	click(util.CBGwEditField + "button_text:" + id)
+	b.Handle(ctx, msgUpdate(uid, "Жми"))
+	// Победители.
+	click(util.CBGwEditField + "winners:" + id)
+	b.Handle(ctx, msgUpdate(uid, "5"))
+	// Сообщение победителям.
+	click(util.CBGwEditField + "winners_msg:" + id)
+	b.Handle(ctx, msgUpdate(uid, "Пишите в личку"))
+	// Текст итогов.
+	click(util.CBGwEditField + "results_text:" + id)
+	b.Handle(ctx, msgUpdate(uid, "Итоги тут"))
+	// Время публикации.
+	click(util.CBGwEditField + "publish_at:" + id)
+	b.Handle(ctx, msgUpdate(uid, util.FormatMoscowTime(time.Now().Add(24*time.Hour))))
+	// Капча → да.
+	click(util.CBGwEditField + "captcha:" + id)
+	click(util.CBGwEditSet + "captcha:all:" + id)
+	// Итоги → отдельным постом.
+	click(util.CBGwEditField + "results_loc:" + id)
+	click(util.CBGwEditSet + "results_original:0:" + id)
+	// Медиа → очистить.
+	click(util.CBGwEditField + "media:" + id)
+	click(util.CBGwEditSet + "media:clear:" + id)
+
+	g, err := s.GetGiveaway(ctx, gid, uid)
+	require.NoError(t, err)
+	assert.Equal(t, "Новое имя", g.Name)
+	assert.Equal(t, "Новый текст поста", g.PostText)
+	assert.Equal(t, "Жми", g.ButtonText)
+	assert.Equal(t, 5, g.WinnersCount)
+	assert.Equal(t, "Пишите в личку", g.WinnersMessage)
+	assert.Equal(t, "Итоги тут", g.ResultsPostText)
+	assert.NotNil(t, g.PublishAt)
+	assert.True(t, g.PublishAt.After(time.Now()), "publish_at обновлён на будущее")
+	assert.Equal(t, store.CaptchaAll, g.CaptchaMode)
+	assert.False(t, g.ResultsInOriginalPost)
+	assert.Empty(t, g.MediaTokens)
+
+	// Меню редактуры active скрывает время публикации.
+	_, err = s.Pool().Exec(ctx, `UPDATE giveaways SET status='active' WHERE id=$1`, gid)
+	require.NoError(t, err)
+	click(util.CBGwEdit + id)
+	// Смотрим последнее меню редактуры (старые сообщения содержали publish_at).
+	lastMenu := ""
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Редактирование") {
+			lastMenu = r.Text
+		}
+	}
+	require.NotEmpty(t, lastMenu, "меню редактуры должно открыться")
+	assert.NotContains(t, lastMenu, "Время публикации", "у active не должно быть кнопки «Время публикации» в меню правки")
+}
