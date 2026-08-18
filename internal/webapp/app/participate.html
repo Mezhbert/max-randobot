@@ -66,11 +66,22 @@
 <script>
 (function () {
   var params = new URLSearchParams(location.search);
-  var sp = params.get('start_param') || '';
-  var gid = params.get('giveaway_id') || (sp.indexOf('part_') === 0 ? sp.slice(5) : '');
   var initData = params.get('init_data') || '';
+  var sp = params.get('start_param') || extractFromInitData(initData);
+  var gid = params.get('giveaway_id') || (sp.indexOf('part_') === 0 ? sp.slice(5) : '');
   var $ = function (id) { return document.getElementById(id); };
   var needCaptcha = false;
+
+  // start_param из init_data (query-string формат).
+  function extractFromInitData(initData) {
+    if (!initData) return '';
+    try {
+      return new URLSearchParams(decodeURIComponent(initData)).get('start_param') || '';
+    } catch (e) {
+      try { return new URLSearchParams(initData).get('start_param') || ''; }
+      catch (e2) { return ''; }
+    }
+  }
 
   if (!gid || !/^\d+$/.test(gid)) {
     $('load-err').textContent = 'Розыгрыш не указан. Откройте из поста в канале.';

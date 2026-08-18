@@ -389,7 +389,13 @@ func (b *Bot) handleEditMediaInput(ctx context.Context, uid int64, msg model.Mes
 			util.MediaEditDoneKeyboard(g.ID))
 		return true
 	}
-	all := append(append([]store.MediaToken{}, g.MediaTokens...), tokens...)
+	all, added := mergeMediaTokens(g.MediaTokens, tokens)
+	if added == 0 {
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"ℹ️ Это медиа уже добавлено (всего: "+strconv.Itoa(len(all))+"). Пришлите другое или «✅ Готово».",
+			util.MediaEditDoneKeyboard(g.ID))
+		return true
+	}
 	if err := b.db.UpdateGiveawayFieldAny(ctx, g.ID, "media_tokens", all); err != nil {
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения: "+err.Error())
 		return true

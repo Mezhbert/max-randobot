@@ -31,6 +31,9 @@
   <h1>Бот розыгрышей</h1>
   <div class="tagline">Розыгрыши в MAX: создание, публикация, честные итоги</div>
 
+  <noscript><div class="card">Для работы приложения включите JavaScript.</div></noscript>
+
+  <div id="app-desc">
   <div class="card">
     <h2>Что умеет</h2>
     <div class="row"><div class="ic">📝</div><div><b>Розыгрыши под ключ</b><span class="d">Пост с медиа и кнопкой «Участвовать», публикация сразу или по расписанию.</span></div></div>
@@ -53,6 +56,37 @@
   </div>
 
   <footer>Бот работает в мессенджере MAX<br>Все действия — в чате с ботом 👇</footer>
+  </div>
 </div>
+<script>
+// Роутер payload'ов open_app-кнопок: MAX открывает URL мини-аппа из MasterBot
+// (этот корень), а payload кнопки (part_N / results_N / captcha_N) приходит
+// в init_data.start_param — перенаправляем на нужную страницу.
+(function () {
+  var p = new URLSearchParams(location.search);
+  var sp = p.get('start_param') || extractFromInitData(p.get('init_data') || '');
+  if (!sp) return; // обычное открытие — главная с описанием
+
+  var qs = 'start_param=' + encodeURIComponent(sp) +
+    (p.get('init_data') ? '&init_data=' + encodeURIComponent(p.get('init_data')) : '');
+  var dest = null;
+  if (/^part_\d+$/.test(sp)) dest = '/app/participate.html';
+  else if (/^results_\d+$/.test(sp)) dest = '/app/results.html';
+  else if (/^captcha_\d+$/.test(sp)) dest = '/app/captcha.html';
+  if (dest) location.replace(dest + '?' + qs);
+})();
+
+// start_param из init_data (query-string формат: user=..&start_param=..&hash=..).
+function extractFromInitData(initData) {
+  if (!initData) return '';
+  try {
+    var dec = decodeURIComponent(initData);
+    return new URLSearchParams(dec).get('start_param') || '';
+  } catch (e) {
+    try { return new URLSearchParams(initData).get('start_param') || ''; }
+    catch (e2) { return ''; }
+  }
+}
+</script>
 </body>
 </html>

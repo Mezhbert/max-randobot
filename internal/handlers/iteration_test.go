@@ -433,8 +433,72 @@ func TestOpenAppResultsButton_WebAppNotEmpty(t *testing.T) {
 	assert.NotEmpty(t, btn.WebApp, "web_app у кнопки итогов не должен быть пустым")
 }
 
+// TestMedia_NoDuplicateTokens — повторная отправка того же вложения (после
+// «Назад») не дублирует медиа: «всего 1», а не 2.
+func TestMedia_NoDuplicateTokens(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6901
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
+	b.Handle(ctx, msgUpdate(uid, "Имя"))
+	b.Handle(ctx, msgUpdate(uid, "Текст"))
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, fsm.StepMedia, gg.DraftStep)
+
+	// Сообщение с фото (токен t1).
+	mediaMsg := func(token string) model.Update {
+		msgSeq++
+		return model.Update{
+			UpdateType: model.UpdateMessageCreated,
+			UserID:     uid,
+			MessageID:  "mid.m." + token + "." + strconv.FormatInt(msgSeq, 10),
+			User:       &model.User{UserID: uid, FirstName: "t"},
+			Message: &model.MessageUpdate{Body: model.MessageBody{Attachments: []model.Attachment{
+				{Type: model.AttachImage, Payload: model.Payload{Token: token}},
+			}}},
+		}
+	}
+
+	b.Handle(ctx, mediaMsg("t1"))
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Len(t, gg.MediaTokens, 1)
+
+	// «Назад» с медиа-шага (на post_text) и вперёд снова на медиа — то же
+	// фото не должно задублироваться.
+	b.Handle(ctx, callbackUpdate(uid, util.CBFSMBack)) // media → post_text
+	b.Handle(ctx, msgUpdate(uid, "Текст"))             // post_text → media
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, fsm.StepMedia, gg.DraftStep)
+
+	b.Handle(ctx, mediaMsg("t1"))
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Len(t, gg.MediaTokens, 1, "тот же токен не должен дублироваться")
+
+	// Сообщение честно говорит «уже добавлено».
+	dupNotice := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "уже добавлено") {
+			dupNotice = true
+		}
+	}
+	assert.True(t, dupNotice)
+
+	// Другое фото — добавляется: 2 всего.
+	b.Handle(ctx, mediaMsg("t2"))
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Len(t, gg.MediaTokens, 2)
+}
+
 // TestFSM_HintMessageFlow — лампочка шлёт хинт сообщением (алертов в MAX нет),
-// «Продолжить» возвращает на текущий шаг, draft_step не менялся.
+// «Продолжить» возвращает к текущему шагу, draft_step не менялся.
 func TestFSM_HintMessageFlow(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()

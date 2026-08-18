@@ -11,6 +11,7 @@ import (
 
 // handleMediaInput — пользователь прислал медиа (фото/видео).
 // Сохраняем токены вложений и остаёмся на шаге (можно добавить ещё), пока не нажмёт «Пропустить»/«Назад».
+// Повторное добавление того же вложения (после «Назад») не дублирует токен.
 func (b *Bot) handleMediaInput(ctx context.Context, uid int64, g store.Giveaway, msg model.MessageUpdate) {
 	var newTokens []store.MediaToken
 	for _, at := range msg.Body.Attachments {
@@ -31,13 +32,41 @@ func (b *Bot) handleMediaInput(ctx context.Context, uid int64, g store.Giveaway,
 			util.NavWithSkipKeyboard())
 		return
 	}
-	// Добавляем к уже сохранённым.
-	all := append(append([]store.MediaToken{}, g.MediaTokens...), newTokens...)
+	// Добавляем к уже сохранённым (без дублей токенов).
+	all, added := mergeMediaTokens(g.MediaTokens, newTokens)
+	if added == 0 {
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"ℹ️ Это медиа уже добавлено в пост (всего: "+strconv.Itoa(len(all))+"). Пришлите другое или «Пропустить».",
+			util.NavWithSkipKeyboard())
+		return
+	}
 	if err := b.db.UpdateGiveawayField(ctx, g.ID, "media_tokens", all); err != nil {
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения медиа: "+err.Error())
 		return
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"✅ Медиа добавлено ("+strconv.Itoa(len(newTokens))+" шт.). Можно добавить ещё или нажать «Пропустить».",
+		"✅ Медиа добавлено ("+strconv.Itoa(len(all))+" шт.). Можно добавить ещё или нажать «Пропустить».",
 		util.NavWithSkipKeyboard())
+}
+
+// mergeMediaTokens объединяет существующие и новые медиа-токены без дублей
+// (токен одного вложения уникален). Возвращает итог и число добавленных.
+func mergeMediaTokens(existing, incoming []store.MediaToken) ([]store.MediaToken, int) {
+	seen := make(map[string]bool, len(existing))
+	all := make([]store.MediaToken, 0, len(existing)+len(incoming))
+	for _, m := range existing {
+		if m.Token != "" && !seen[m.Token] {
+			seen[m.Token] = true
+			all = append(all, m)
+		}
+	}
+	added := 0
+	for _, m := range incoming {
+		if m.Token != "" && !seen[m.Token] {
+			seen[m.Token] = true
+			all = append(all, m)
+			added++
+		}
+	}
+	return all, added
 }

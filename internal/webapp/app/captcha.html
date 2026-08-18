@@ -64,10 +64,14 @@
 <script>
 (function () {
   var params = new URLSearchParams(location.search);
-  // start_param приходит как captcha_<giveaway_id> (payload open_app-кнопки).
-  var sp = params.get('start_param') || '';
-  var gid = params.get('giveaway_id') || (sp.indexOf('captcha_') === 0 ? sp.slice(8) : '');
   var initData = params.get('init_data') || '';
+  // start_param из запроса или из init_data (query-string формат).
+  var sp = params.get('start_param');
+  if (!sp && initData) {
+    try { sp = new URLSearchParams(decodeURIComponent(initData)).get('start_param') || ''; }
+    catch (e) { try { sp = new URLSearchParams(initData).get('start_param') || ''; } catch (e2) {} }
+  }
+  var gid = params.get('giveaway_id') || (sp.indexOf('captcha_') === 0 ? sp.slice(8) : '');
   var $ = function (id) { return document.getElementById(id); };
 
   if (!gid) { $('load-err').classList.remove('hidden'); return; }

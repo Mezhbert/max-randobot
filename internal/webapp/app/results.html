@@ -37,8 +37,15 @@
 // MAX MiniApp передаёт initData в URL (или через window.Telegram-подобный объект).
 // Наш API валидирует подпись initData на бэке и отдаёт данные розыгрыша.
 const params = new URLSearchParams(location.search);
-const gid = params.get('id') || (params.get('start_param') || '').replace('results_','');
 const initData = params.get('init_data') || '';
+// start_param из запроса или из init_data (query-string формат) — так его
+// передают open_app-кнопки (мини-апп открывается по URL из MasterBot).
+let sp = params.get('start_param');
+if (!sp && initData) {
+  try { sp = new URLSearchParams(decodeURIComponent(initData)).get('start_param') || ''; }
+  catch (e) { try { sp = new URLSearchParams(initData).get('start_param') || ''; } catch (e2) {} }
+}
+const gid = params.get('id') || (sp || '').replace('results_', '');
 
 // Открыто без id (кнопка мини-аппа без параметров) — на главную с описанием.
 if (!gid || !/^\d+$/.test(gid)) {
