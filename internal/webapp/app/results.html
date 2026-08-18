@@ -40,6 +40,11 @@ const params = new URLSearchParams(location.search);
 const gid = params.get('id') || (params.get('start_param') || '').replace('results_','');
 const initData = params.get('init_data') || '';
 
+// Открыто без id (кнопка мини-аппа без параметров) — на главную с описанием.
+if (!gid || !/^\d+$/.test(gid)) {
+  location.replace('/app/index.html');
+}
+
 async function load() {
   try {
     const url = `/app/api/giveaway/${gid}${initData ? '?init_data=' + encodeURIComponent(initData) : ''}`;

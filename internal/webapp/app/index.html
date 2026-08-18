@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎁 Бот розыгрышей</title>
+<style>
+  :root { --bg:#0f1420; --card:#1a2235; --accent:#7c5cff; --text:#e8ecf5; --muted:#8b93a7; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,'Segoe UI',Roboto,sans-serif; min-height:100vh; }
+  .wrap { max-width:480px; margin:0 auto; padding:28px 16px 48px; }
+  .logo { text-align:center; padding:18px 0 8px; }
+  .logo .emoji { font-size:52px; }
+  h1 { font-size:24px; text-align:center; margin:8px 0 6px; }
+  .tagline { color:var(--muted); text-align:center; font-size:14px; margin-bottom:22px; }
+  .card { background:var(--card); border-radius:16px; padding:18px; margin-bottom:14px; }
+  .card h2 { font-size:16px; margin-bottom:10px; }
+  .row { display:flex; gap:12px; align-items:flex-start; padding:8px 0; }
+  .row .ic { font-size:22px; line-height:1.2; }
+  .row b { display:block; font-size:14px; margin-bottom:2px; }
+  .row span.d { color:var(--muted); font-size:13px; line-height:1.45; }
+  .hint { background:rgba(124,92,255,.1); border:1px solid rgba(124,92,255,.25); border-radius:12px; padding:14px; font-size:13px; color:var(--text); line-height:1.5; margin-top:6px; }
+  .hint b { color:var(--accent); }
+  footer { color:var(--muted); font-size:12px; text-align:center; margin-top:24px; line-height:1.6; }
+  a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo"><div class="emoji">🎁</div></div>
+  <h1>Бот розыгрышей</h1>
+  <div class="tagline">Розыгрыши в MAX: создание, публикация, честные итоги</div>
+
+  <div class="card">
+    <h2>Что умеет</h2>
+    <div class="row"><div class="ic">📝</div><div><b>Розыгрыши под ключ</b><span class="d">Пост с медиа и кнопкой «Участвовать», публикация сразу или по расписанию.</span></div></div>
+    <div class="row"><div class="ic">🤖</div><div><b>Защита от ботов</b><span class="d">Капча при участии и проверка подписок на каналы.</span></div></div>
+    <div class="row"><div class="ic">🏆</div><div><b>Честные итоги</b><span class="d">Случайный выбор победителей, тэги в посте, уведомления в личку.</span></div></div>
+    <div class="row"><div class="ic">📊</div><div><b>Аналитика</b><span class="d">Динамика участников, отток, подозрительный трафик, CSV-выгрузка.</span></div></div>
+    <div class="row"><div class="ic">🔗</div><div><b>Трекинг-ссылки</b><span class="d">UTM-ссылки для замера источников подписчиков.</span></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Как участвовать</h2>
+    <div class="row"><div class="ic">1️⃣</div><div><span class="d">Нажмите «Участвовать» под постом розыгрыша в канале.</span></div></div>
+    <div class="row"><div class="ic">2️⃣</div><div><span class="d">Подпишитесь на каналы розыгрыша (если требуется) и пройдите капчу.</span></div></div>
+    <div class="row"><div class="ic">3️⃣</div><div><span class="d">Итоги — в посте розыгрыша и здесь, по кнопке «🏆 Проверить результаты».</span></div></div>
+  </div>
+
+  <div class="hint">
+    💡 <b>Создавать свои розыгрыши</b> — в чате с ботом: «🎁 Создать розыгрыш».
+    Полная справка — у бота в «🆘 Поддержка».
+  </div>
+
+  <footer>Бот работает в мессенджере MAX<br>Все действия — в чате с ботом 👇</footer>
+</div>
+</body>
+</html>

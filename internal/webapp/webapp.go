@@ -45,7 +45,9 @@ func Handler(d Deps, log *slog.Logger) http.Handler {
 	mux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if path == "/app/" || path == "/app" {
-			http.Redirect(w, r, "/app/results.html", http.StatusFound)
+			// Корень мини-аппа — главная с описанием бота (при открытии
+			// кнопкой без start_param именно она и нужна).
+			http.Redirect(w, r, "/app/index.html", http.StatusFound)
 			return
 		}
 		// Берём файл из embed (app/...), защищаясь от path traversal.
