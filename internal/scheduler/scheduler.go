@@ -76,6 +76,15 @@ func (s *Scheduler) PublishPending(ctx context.Context) error {
 	return nil
 }
 
+// PublishGiveawayNow публикует конкретный розыгрыш НЕМЕДЛЕННО (режим
+// «Опубликовать сразу»): планировщик дёргается сразу после Принять, не
+// дожидаясь тика. Атомарный claim делает повторный вызов из тика безопасным.
+func (s *Scheduler) PublishGiveawayNow(ctx context.Context, giveawayID int64) {
+	if err := s.publishOne(ctx, giveawayID); err != nil {
+		s.log.Warn("publish now", "id", giveawayID, "err", err)
+	}
+}
+
 // publishOne атомарно захватывает розыгрыш и публикует его во все каналы.
 func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 	g, err := s.db.ClaimForPublish(ctx, id)

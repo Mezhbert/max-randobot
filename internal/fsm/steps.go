@@ -54,8 +54,8 @@ var orderedSteps = []string{
 const FirstStep = StepName
 
 // StepSkipped — нужно ли ПРОПУСТИТЬ шаг в зависимости от режима розыгрыша:
-//   - publish_at — пропускается при «Опубликовать сразу» (publish_at уже выставлен
-//     на now+1m, отличить от ручного ввода нельзя — считаем «задан ранее минуты назад»);
+//   - publish_at — пропускается при «Опубликовать сразу» (publish_at выставлен
+//     на now при выборе режима; шаг уже «выполнен» автоматом);
 //   - finish_count — пропускается при режиме «по времени»;
 //   - finish_at — пропускается при режиме «по количеству»;
 //   - results_text — пропускается при «итоги в исходном посте».
@@ -65,7 +65,7 @@ const FirstStep = StepName
 func StepSkipped(g store.Giveaway, step string) bool {
 	switch step {
 	case StepPublishAt:
-		return g.PublishAt != nil && time.Until(*g.PublishAt) < time.Minute
+		return g.PublishAt != nil && !g.PublishAt.After(time.Now())
 	case StepFinishCount:
 		return g.FinishMode != "count"
 	case StepFinishAt:

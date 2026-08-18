@@ -28,6 +28,7 @@ type Bot struct {
 	botUserID    int64  // ID бота (contact_id для open_app-кнопок: капча/итоги)
 	helpURL      string // публичный URL справки (/app/help.html) для link-кнопки
 	counterUpd   func(ctx context.Context, g *store.Giveaway) // обновление счётчика участников в постах (сеттится из main, опционально)
+	publishNow   func(ctx context.Context, giveawayID int64) // немедленная публикация после Принять (сеттится из main)
 	lastCounters map[int64]int64                                // giveaway_id → unix-time последнего обновления счётчика (троттлинг)
 	dedup        *dedup.Deduplicator                            // опционально; nil — без дедупликации
 }
@@ -76,6 +77,12 @@ func (b *Bot) CaptchaService() *captcha.Service { return b.captcha }
 // в опубликованных постах (вызывается из main со ссылкой на Scheduler).
 func (b *Bot) SetCounterUpdater(f func(ctx context.Context, g *store.Giveaway)) {
 	b.counterUpd = f
+}
+
+// SetPublishNow подключает немедленную публикацию розыгрыша (режим
+// «Опубликовать сразу» — после Принять, без ожидания тика планировщика).
+func (b *Bot) SetPublishNow(f func(ctx context.Context, giveawayID int64)) {
+	b.publishNow = f
 }
 
 // SetDedup подключает дедупликатор апдейтов (защита от повторной обработки

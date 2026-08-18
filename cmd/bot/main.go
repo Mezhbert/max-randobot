@@ -78,6 +78,7 @@ func main() {
 	bot := handlers.New(api, db, slog.Default())
 	bot.SetDedup(dedup.New(dedupTTL(cfg.DedupTTL), 0))
 	bot.SetCounterUpdater(sch.UpdateParticipantCounter)
+	bot.SetPublishNow(sch.PublishGiveawayNow)
 	bot.SetHelpURL(cfg.WebhookURL + "/app/help.html")
 
 	// Deps мини-аппа (указатель — BotUsername вписывается после GetMyInfo).

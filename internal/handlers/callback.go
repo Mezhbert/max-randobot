@@ -147,7 +147,18 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 			}
 			return
 		}
-		b.sendMainMenu(ctx, uid, "✅ Розыгрыш запланирован! Пост будет опубликован автоматически в назначенное время. Следите в «Мои розыгрыши → Запланированные».")
+		// «Опубликовать сразу»: publish_at уже наступил (now при выборе режима)
+		// — публикуем немедленно, не ждём тика планировщика.
+		published := false
+		if b.publishNow != nil && g.PublishAt != nil && !g.PublishAt.After(time.Now().Add(time.Minute)) {
+			b.publishNow(ctx, g.ID)
+			published = true
+		}
+		if published {
+			b.sendMainMenu(ctx, uid, "✅ Розыгрыш опубликован! Пост уже в каналах, кнопка «Участвовать» активна.")
+		} else {
+			b.sendMainMenu(ctx, uid, "✅ Розыгрыш запланирован! Пост будет опубликован автоматически в назначенное время. Следите в «Мои розыгрыши → Запланированные».")
+		}
 
 	case p == util.CBFSMReject:
 		_ = b.engine.Abandon(ctx, g.ID)
@@ -209,9 +220,9 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 		b.advance(ctx, uid, g.ID, g.DraftStep)
 
 	case "publish_now":
-		// «Опубликовать сразу» — publish_at = сейчас + 1 минута; движок сам
-		// пропустит шаг publish_at (см. fsm.StepSkipped).
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_at", time.Now().Add(1*time.Minute))
+		// «Опубликовать сразу» — publish_at = сейчас; шаг publish_at движок
+		// пропустит; после Принять бот опубликует немедленно (publishNow).
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_at", time.Now().UTC())
 		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
 		b.advance(ctx, uid, g.ID, gg.DraftStep)
 

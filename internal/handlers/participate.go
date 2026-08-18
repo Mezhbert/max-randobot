@@ -9,7 +9,6 @@ import (
 
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/maxbot/giveawaybot/internal/util"
-	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
 
 // onParticipate — обработка нажатия "Участвовать" под постом розыгрыша.
@@ -88,28 +87,10 @@ func (b *Bot) needCaptcha(g store.Giveaway) bool {
 	return g.CaptchaMode == store.CaptchaAll
 }
 
-// startCaptchaChallenge — капча при участии.
-// Основной путь: мини-апп (open_app-кнопка «🤖 Подтвердить» в тихой карточке —
-// диалог открыт deep-link'ом). Если ID бота неизвестен (мини-апп не настроен) —
-// fallback: картинка с цифрами прямо в чате (SessionCaptchaVerify).
+// startCaptchaChallenge — капча при участии, полностью в чате бота:
+// картинка с цифрами (диалог открывается самой кнопкой-ссылкой участия),
+// ответ вводится сообщением (SessionCaptchaVerify).
 func (b *Bot) startCaptchaChallenge(ctx context.Context, userID, giveawayID int64) {
-	if b.botUserID != 0 {
-		// Тихая карточка с open_app-кнопкой: payload captcha_<id> открывает
-		// страницу капчи мини-аппа (start_param).
-		kb := model.NewKeyboard()
-		kb.AddRow().AddButton(model.Button{
-			Type:      model.ButtonOpenApp,
-			Text:      "🤖 Подтвердить участие",
-			WebApp:    "captcha", // required-заглушка (игнорируется при contact_id)
-			ContactID: b.botUserID,
-			Payload:   fmt.Sprintf("captcha_%d", giveawayID),
-		})
-		kb.AddRow().AddCallBack("✖ Не хочу участвовать", util.CBMainMenu)
-		_, _ = b.api.SendTextWithKeyboard(ctx, userID,
-			"🤖 Для участия нужно подтвердить, что вы не бот.\nНажмите кнопку ниже 👇", kb)
-		return
-	}
-	// Fallback: картинка-капча в чате.
 	pngData, err := b.captcha.Generate(userID)
 	if err != nil {
 		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка генерации капчи. Попробуйте ещё раз.")

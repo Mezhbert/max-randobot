@@ -401,23 +401,15 @@ func TestResults_AppendedEscape(t *testing.T) {
 
 // ---------- Лампочка: хинт сообщением + Продолжить ----------
 
-// TestOpenAppButtons_WebAppNotEmpty — у OpenAppButton поле web_app REQUIRED:
-// MAX отвергает сообщение целиком ("Field 'webApp' cannot be null"), из-за
-// этого публикация розыгрышей падала. Все наши open_app-кнопки должны иметь
-// непустую заглушку (игнорируется сервером при contact_id).
-func TestOpenAppButtons_WebAppNotEmpty(t *testing.T) {
-	// Кнопка участия.
-	kb := util.ParticipateKeyboardBuilder("Участвовать", 1, "bot", 0, 42)
+// TestParticipateButton_IsDeepLink — кнопка участия под постом: deep-link
+// (открывает диалог бота; участие и подтверждение в чате, бот получает право
+// писать юзеру — мини-апп-путь отключён по результатам живого тестирования).
+func TestParticipateButton_IsDeepLink(t *testing.T) {
+	kb := util.ParticipateKeyboardBuilder("Участвовать", 5, "mybot", 3, 42)
 	btn := kb.Build().Payload.Buttons[0][0]
-	require.Equal(t, model.ButtonOpenApp, btn.Type)
-	assert.NotEmpty(t, btn.WebApp, "web_app у кнопки участия не должен быть пустым (publish падает)")
-	assert.Equal(t, int64(42), btn.ContactID)
-	assert.Equal(t, "part_1", btn.Payload)
-
-	// Кнопка участия без мини-аппа — deep-link fallback, не open_app.
-	kb2 := util.ParticipateKeyboardBuilder("Участвовать", 1, "bot", 0, 0)
-	btn2 := kb2.Build().Payload.Buttons[0][0]
-	assert.NotEqual(t, model.ButtonOpenApp, btn2.Type)
+	assert.Equal(t, model.ButtonLink, btn.Type, "кнопка участия — ссылка (deep-link в чат)")
+	assert.Contains(t, btn.URL, "max.ru/mybot/start/part_5")
+	assert.Contains(t, btn.Text, "(3)", "счётчик участников в подписи кнопки")
 }
 
 // TestOpenAppResultsButton_WebAppNotEmpty — кнопка итогов с botUserID, но
