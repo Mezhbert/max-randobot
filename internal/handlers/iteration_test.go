@@ -401,6 +401,38 @@ func TestResults_AppendedEscape(t *testing.T) {
 
 // ---------- Лампочка: хинт сообщением + Продолжить ----------
 
+// TestOpenAppButtons_WebAppNotEmpty — у OpenAppButton поле web_app REQUIRED:
+// MAX отвергает сообщение целиком ("Field 'webApp' cannot be null"), из-за
+// этого публикация розыгрышей падала. Все наши open_app-кнопки должны иметь
+// непустую заглушку (игнорируется сервером при contact_id).
+func TestOpenAppButtons_WebAppNotEmpty(t *testing.T) {
+	// Кнопка участия.
+	kb := util.ParticipateKeyboardBuilder("Участвовать", 1, "bot", 0, 42)
+	btn := kb.Build().Payload.Buttons[0][0]
+	require.Equal(t, model.ButtonOpenApp, btn.Type)
+	assert.NotEmpty(t, btn.WebApp, "web_app у кнопки участия не должен быть пустым (publish падает)")
+	assert.Equal(t, int64(42), btn.ContactID)
+	assert.Equal(t, "part_1", btn.Payload)
+
+	// Кнопка участия без мини-аппа — deep-link fallback, не open_app.
+	kb2 := util.ParticipateKeyboardBuilder("Участвовать", 1, "bot", 0, 0)
+	btn2 := kb2.Build().Payload.Buttons[0][0]
+	assert.NotEqual(t, model.ButtonOpenApp, btn2.Type)
+}
+
+// TestOpenAppResultsButton_WebAppNotEmpty — кнопка итогов с botUserID, но
+// БЕЗ username (ранняя стадия старта) — заглушка вместо пустоты.
+func TestOpenAppResultsButton_WebAppNotEmpty(t *testing.T) {
+	sch := scheduler.New(nil, nil, nil)
+	sch.SetBotUserID(99)
+	// botUsername пуст — раньше web_app уходил пустым → "cannot be null".
+	atts := sch.ResultsKeyboardForTest(&store.Giveaway{ID: 7})
+	require.NotEmpty(t, atts)
+	btn := atts[0].Payload.Buttons[0][0]
+	assert.Equal(t, model.ButtonOpenApp, btn.Type)
+	assert.NotEmpty(t, btn.WebApp, "web_app у кнопки итогов не должен быть пустым")
+}
+
 // TestFSM_HintMessageFlow — лампочка шлёт хинт сообщением (алертов в MAX нет),
 // «Продолжить» возвращает на текущий шаг, draft_step не менялся.
 func TestFSM_HintMessageFlow(t *testing.T) {

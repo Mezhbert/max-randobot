@@ -100,6 +100,7 @@ func (b *Bot) startCaptchaChallenge(ctx context.Context, userID, giveawayID int6
 		kb.AddRow().AddButton(model.Button{
 			Type:      model.ButtonOpenApp,
 			Text:      "🤖 Подтвердить участие",
+			WebApp:    "captcha", // required-заглушка (игнорируется при contact_id)
 			ContactID: b.botUserID,
 			Payload:   fmt.Sprintf("captcha_%d", giveawayID),
 		})

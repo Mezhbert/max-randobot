@@ -329,13 +329,19 @@ func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winne
 
 // resultsKeyboard — клавиатура с кнопкой «Проверить результаты» (open_app).
 // Если botUserID неизвестен — callback-кнопка (мини-апп не настроен).
+// web_app REQUIRED у OpenAppButton (MAX: "Field 'webApp' cannot be null"),
+// при contact_id игнорируется — заглушка, как в SDK AddOpenApp.
 func (s *Scheduler) resultsKeyboard(g *store.Giveaway) []model.Attachment {
 	kb := model.NewKeyboard()
 	if s.botUserID != 0 {
+		webApp := s.botUsername
+		if webApp == "" {
+			webApp = "app" // required-заглушка (игнорируется при contact_id)
+		}
 		btn := model.Button{
 			Type:      model.ButtonOpenApp,
 			Text:      "🏆 Проверить результаты",
-			WebApp:    s.botUsername, // игнорируется сервером при contact_id
+			WebApp:    webApp,
 			ContactID: s.botUserID,
 			Payload:   fmt.Sprintf("results_%d", g.ID),
 		}
@@ -344,6 +350,11 @@ func (s *Scheduler) resultsKeyboard(g *store.Giveaway) []model.Attachment {
 		kb.AddRow().AddCallBack("🏆 Итоги подведены", "results_done:"+fmt.Sprintf("%d", g.ID))
 	}
 	return []model.Attachment{kb.Build()}
+}
+
+// ResultsKeyboardForTest — экспорт resultsKeyboard для тестов (проверка web_app).
+func (s *Scheduler) ResultsKeyboardForTest(g *store.Giveaway) []model.Attachment {
+	return s.resultsKeyboard(g)
 }
 
 // Winner — победитель с именем и ID (для кликабельного упоминания).

@@ -182,6 +182,10 @@ func ConfirmKeyboard() *model.Keyboard {
 // МИНИ-АППЕ (страница participate.html, payload part_<id>): не перекидывает
 // юзера в чат бота, капча и подтверждение там же.
 //
+// ВАЖНО: у OpenAppButton поле web_app REQUIRED (сервер MAX отвечает
+// "Field 'webApp' cannot be null"), хотя при contact_id оно игнорируется —
+// сам SDK-билдер AddOpenApp заполняет его заглушкой (по образцу).
+//
 // Fallback (мини-апп не настроен): ButtonLink с deep link
 // (https://max.ru/<bot>/start/part_<id>) — открывает диалог бота; deep link
 // создаёт bot_started, который даёт боту право писать юзеру (уведомление
@@ -193,6 +197,7 @@ func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername
 		kb.AddRow().AddButton(model.Button{
 			Type:      model.ButtonOpenApp,
 			Text:      label,
+			WebApp:    label, // required-заглушка (игнорируется при contact_id)
 			ContactID: botUserID,
 			Payload:   "part_" + strconv.FormatInt(giveawayID, 10),
 		})
