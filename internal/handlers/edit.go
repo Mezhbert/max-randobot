@@ -214,9 +214,18 @@ func (b *Bot) handleEditFieldInput(ctx context.Context, uid int64, text string) 
 			_ = b.api.SendText(ctx, uid, "⚠️ Время публикации должно быть в будущем.")
 			return true
 		}
-		if fieldKey == "finish_at" && g.PublishAt != nil && !t.After(*g.PublishAt) {
-			_ = b.api.SendText(ctx, uid, "⚠️ Итоги должны быть позже публикации.")
-			return true
+		if fieldKey == "finish_at" {
+			if g.PublishAt != nil && !t.After(*g.PublishAt) {
+				_ = b.api.SendText(ctx, uid, "⚠️ Итоги должны быть позже публикации.")
+				return true
+			}
+			if t.Before(time.Now().Add(5 * time.Minute)) {
+				_ = b.api.SendText(ctx, uid, fmt.Sprintf(
+					"⚠️ Итоги в %s — слишком рано, участники не успеют. Введите не раньше %s",
+					t.In(util.MoscowLocation()).Format("15:04"),
+					time.Now().Add(5*time.Minute).In(util.MoscowLocation()).Format("15:04")))
+				return true
+			}
 		}
 		val = t
 	case "number":

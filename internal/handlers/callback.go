@@ -139,11 +139,15 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 	case p == util.CBFSMConfirm:
 		if err := b.engine.Confirm(ctx, g.ID); err != nil {
 			var ve *fsm.ValidationError
+			msg := "⚠️ Ошибка: " + err.Error()
 			if errors.As(err, &ve) {
-				_ = b.api.SendText(ctx, uid, "⚠️ "+ve.Msg)
-			} else {
-				_ = b.api.SendText(ctx, uid, "⚠️ Ошибка: "+err.Error())
+				msg = "⚠️ " + ve.Msg
 			}
+			// Ошибка валидации на предпросмотре — предлагаем вернуться на
+			// соотв. шаг для исправления (не голый текст без кнопок).
+			_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+				msg+"\n\nНажмите «✏ Исправить» и пройдите к нужному шагу, или «✖ Отменить».",
+				util.ConfirmErrorKeyboard(g.ID))
 			return
 		}
 		// «Опубликовать сразу»: Confirm уже выставил publish_at=now —

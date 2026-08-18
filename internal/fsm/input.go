@@ -55,9 +55,12 @@ func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text str
 				g.PublishAt.In(util.MoscowLocation()).Format("15:04"))
 		}
 		// Слишком близкое время = мгновенное завершение без участников.
-		if t.Before(time.Now().Add(2 * time.Minute)) {
-			return fmt.Errorf("итоги в %s — слишком рано, участники не успеют присоединиться. Введите время хотя бы на пару минут позже",
-				t.In(util.MoscowLocation()).Format("15:04"))
+		// Порог с запасом на оставшиеся шаги создания (5 мин от СЕЙЧАС).
+		if t.Before(time.Now().Add(5 * time.Minute)) {
+			return fmt.Errorf("итоги в %s — участники не успеют присоединиться.\nВведите время не раньше %s (например %s)",
+				t.In(util.MoscowLocation()).Format("15:04"),
+				time.Now().Add(5*time.Minute).In(util.MoscowLocation()).Format("15:04"),
+				time.Now().Add(30*time.Minute).In(util.MoscowLocation()).Format("15:04"))
 		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "finish_at", t)
 

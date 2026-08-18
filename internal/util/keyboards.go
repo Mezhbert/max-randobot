@@ -176,6 +176,15 @@ func ConfirmKeyboard() *model.Keyboard {
 	return kb
 }
 
+// ConfirmErrorKeyboard — ошибка валидации при Принять: вернуться к шагу
+// (fsm_back с предпросмотра ведёт на последний содержательный шаг) или отменить.
+func ConfirmErrorKeyboard(giveawayID int64) *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("✏ Исправить", CBFSMBack)
+	kb.AddRow().AddCallBack("✖ Отменить", CBFSMCancel)
+	return kb
+}
+
 // ParticipateKeyboardBuilder — кнопка «Участвовать (N)» под постом розыгрыша.
 // ButtonLink с deep link (https://max.ru/<bot>/start/part_<id>): при нажатии
 // MAX открывает диалог с ботом, bot_started даёт боту право писать юзеру
