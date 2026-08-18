@@ -63,6 +63,7 @@ func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload str
 	if payload == "" {
 		return
 	}
+	b.log.Info("deeplink start", "user", userID, "payload", payload)
 	// Кнопка «Участвовать» под постом розыгрыша (deep link открывает диалог).
 	if strings.HasPrefix(payload, "part_") {
 		idStr := strings.TrimPrefix(payload, "part_")

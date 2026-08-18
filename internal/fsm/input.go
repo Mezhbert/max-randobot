@@ -54,6 +54,11 @@ func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text str
 			return fmt.Errorf("время итогов должно быть позже публикации (%s)",
 				g.PublishAt.In(util.MoscowLocation()).Format("15:04"))
 		}
+		// Слишком близкое время = мгновенное завершение без участников.
+		if t.Before(time.Now().Add(2 * time.Minute)) {
+			return fmt.Errorf("итоги в %s — слишком рано, участники не успеют присоединиться. Введите время хотя бы на пару минут позже",
+				t.In(util.MoscowLocation()).Format("15:04"))
+		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "finish_at", t)
 
 	case StepFinishCount:
