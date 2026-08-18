@@ -65,7 +65,8 @@ const FirstStep = StepName
 func StepSkipped(g store.Giveaway, step string) bool {
 	switch step {
 	case StepPublishAt:
-		return g.PublishAt != nil && !g.PublishAt.After(time.Now())
+		// Режим «сразу» (флаг) или publish_at уже наступил (выставлен ранее).
+		return g.PublishNow || (g.PublishAt != nil && !g.PublishAt.After(time.Now()))
 	case StepFinishCount:
 		return g.FinishMode != "count"
 	case StepFinishAt:

@@ -94,6 +94,7 @@ type Giveaway struct {
 	WinnersNotifiedUserIDs []int64 // кому из победителей уже отправлено ЛС (идемпотентность finish)
 	ResultsPublished       bool    // итоги уже опубликованы (обе ветки: edit поста / отдельный пост)
 	ChannelSelectMID       string // mid сообщения выбора каналов (для edit-in-place тоггла)
+	PublishNow             bool   // «Опубликовать сразу»: publish_at = now в момент Принять
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 

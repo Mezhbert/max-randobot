@@ -438,7 +438,8 @@ func TestFSM_FullCreateFlow_Scheduled(t *testing.T) {
 }
 
 // TestFSM_PublishNow_SkipsDateStep — «Опубликовать сразу» пропускает ввод даты
-// и ставит publish_at ≈ now+1min.
+// и ставит ФЛАГ publish_now (publish_at будет выставлен на now в момент
+// «Принять» — не в момент выбора режима, иначе время «протухает»).
 func TestFSM_PublishNow_SkipsDateStep(t *testing.T) {
 	b, s, _, cleanup := newBot(t)
 	defer cleanup()
@@ -469,9 +470,9 @@ func TestFSM_PublishNow_SkipsDateStep(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fsm.StepFinishMode, gg.DraftStep, "publish_now должен пропустить publish_at")
 
-	// publish_at установлен ≈ now+1min.
-	require.NotNil(t, gg.PublishAt)
-	assert.WithinDuration(t, time.Now().Add(time.Minute), *gg.PublishAt, 2*time.Minute)
+	// Флаг установлен, publish_at ещё НЕТ (будет now в момент Принять).
+	assert.True(t, gg.PublishNow, "флаг publish_now установлен")
+	assert.Nil(t, gg.PublishAt, "publish_at не должен ставиться при выборе режима")
 }
 
 // TestFSM_FinishByCount — «По количеству участников» пропускает finish_at,

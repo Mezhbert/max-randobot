@@ -16,10 +16,18 @@ type ValidationError struct{ Msg string }
 func (e *ValidationError) Error() string { return e.Msg }
 
 // Confirm валидирует черновик и публикует его (scheduled/active).
+// Режим «Опубликовать сразу»: publish_at перезаписывается на now ЗДЕСЬ —
+// в момент «Принять» (не в момент выбора режима: пока юзер шёл по оставшимся
+// шагам, раннее время успевало «пройти» и валидация его отвергала).
 func (e *Engine) Confirm(ctx context.Context, id int64) error {
 	g, err := e.DB.GetGiveawayAny(ctx, id)
 	if err != nil {
 		return err
+	}
+	if g.PublishNow {
+		now := time.Now().UTC()
+		_ = e.DB.UpdateGiveawayFieldAny(ctx, id, "publish_at", now)
+		g.PublishAt = &now
 	}
 	if err := validate(g); err != nil {
 		return err

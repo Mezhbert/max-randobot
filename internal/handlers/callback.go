@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/maxbot/giveawaybot/internal/fsm"
 	"github.com/maxbot/giveawaybot/internal/store"
@@ -147,12 +146,14 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 			}
 			return
 		}
-		// «Опубликовать сразу»: publish_at уже наступил (now при выборе режима)
-		// — публикуем немедленно, не ждём тика планировщика.
+		// «Опубликовать сразу»: Confirm уже выставил publish_at=now —
+		// перечитываем и публикуем немедленно, без ожидания тика.
 		published := false
-		if b.publishNow != nil && g.PublishAt != nil && !g.PublishAt.After(time.Now().Add(time.Minute)) {
-			b.publishNow(ctx, g.ID)
-			published = true
+		if b.publishNow != nil {
+			if gg, err := b.db.GetGiveawayAny(ctx, g.ID); err == nil && gg.PublishNow {
+				b.publishNow(ctx, gg.ID)
+				published = true
+			}
 		}
 		if published {
 			b.sendMainMenu(ctx, uid, "✅ Розыгрыш опубликован! Пост уже в каналах, кнопка «Участвовать» активна.")
@@ -220,9 +221,10 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 		b.advance(ctx, uid, g.ID, g.DraftStep)
 
 	case "publish_now":
-		// «Опубликовать сразу» — publish_at = сейчас; шаг publish_at движок
-		// пропустит; после Принять бот опубликует немедленно (publishNow).
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_at", time.Now().UTC())
+		// «Опубликовать сразу»: НЕ ставим publish_at тут (пока юзер идёт по
+		// оставшимся шагам, время бы «прошло»). Только флаг — publish_at
+		// будет перезаписан на now в момент «Принять» (см. engine.Confirm).
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_now", true)
 		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
 		b.advance(ctx, uid, g.ID, gg.DraftStep)
 

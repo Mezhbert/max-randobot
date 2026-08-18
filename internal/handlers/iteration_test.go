@@ -951,3 +951,57 @@ func TestEdit_SectionsComprehensive(t *testing.T) {
 	require.NotEmpty(t, lastMenu, "меню редактуры должно открыться")
 	assert.NotContains(t, lastMenu, "Время публикации", "у active не должно быть кнопки «Время публикации» в меню правки")
 }
+
+// TestFSM_PublishNow_ConfirmSetsFreshTime — «Опубликовать сразу» + неспешное
+// прохождение оставшихся шагов: Confirm перезаписывает publish_at на now
+// в момент «Принять» — валидация больше не отвергает «уже прошедшее» время
+// (баг: publish_at ставился при выборе режима и протухал к подтверждению).
+func TestFSM_PublishNow_ConfirmSetsFreshTime(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6950
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8950, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	send := func(text string) { b.Handle(ctx, msgUpdate(uid, text)) }
+
+	click(util.CBCreateGiveaway)
+	send("Быстрый")
+	send("Текст")
+	click(util.CBFSMSkip)                                  // media
+	click(util.CBFSMSkip)                                  // button
+	click(util.CBFSMOption + "next")                       // sub
+	click(util.CBChannelTogglePub + strconv.FormatInt(ch.ID, 10))
+	click(util.CBFSMOption + "next") // pub → publish_mode
+	click(util.CBFSMOption + "publish_now")
+
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.True(t, gg.PublishNow, "флаг установлен")
+	require.Nil(t, gg.PublishAt, "publish_at ещё нет — будет now при Принять")
+	require.NotEqual(t, fsm.StepPublishAt, gg.DraftStep)
+
+	click(util.CBFSMOption + "finish_time")
+	send(util.FormatMoscowTime(time.Now().Add(time.Hour))) // итоги через час
+	send("1")                                              // победители
+	click(util.CBFSMSkip)                                  // сообщение победителям
+	click(util.CBFSMOption + "results_original")
+	click(util.CBFSMOption + "captcha_none")
+
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, fsm.StepPreview, gg.DraftStep)
+
+	// «Неспешность» юзера эмулируется самим фактом нескольких шагов после
+	// выбора режима; главное — Confirm не должен отвергнуть.
+	click(util.CBFSMConfirm)
+
+	got, err := s.GetGiveawayAny(ctx, gg.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, store.StatusDraft, got.Status, "после Принять — не draft")
+	require.NotNil(t, got.PublishAt, "Confirm должен выставить publish_at=now")
+	assert.WithinDuration(t, time.Now(), *got.PublishAt, time.Minute)
+}

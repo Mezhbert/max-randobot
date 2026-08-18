@@ -115,7 +115,7 @@ var fieldWhitelist = map[string]bool{
 	"winners_count": true, "winners_message": true,
 	"referral_enabled": true, "referral_limit": true,
 	"captcha_mode": true, "captcha_percent": true, "promotion_enabled": true,
-	"draft_step": true, "name": true, "channel_select_mid": true,
+	"draft_step": true, "name": true, "channel_select_mid": true, "publish_now": true,
 }
 
 // UpdateGiveawayField — точечное обновление одного поля черновика в процессе FSM.
@@ -401,7 +401,7 @@ const giveawayCols = `id, owner_user_id, name, post_text, post_format, media_tok
 	publish_at, finish_at, finish_mode, finish_participants_count, winners_count, winners_message,
 	referral_enabled, referral_limit, captcha_mode, captcha_percent, promotion_enabled,
 	draft_step, status, publish_message_ids, results_message_ids, winners_user_ids,
-	winners_notified_user_ids, results_published, channel_select_mid, created_at, updated_at`
+	winners_notified_user_ids, results_published, channel_select_mid, publish_now, created_at, updated_at`
 
 // giveawayColNames — имена колонок в том же порядке, что giveawayCols.
 // Используется giveawayColsAlias для подстановки алиаса в JOIN'ах.
@@ -411,7 +411,7 @@ var giveawayColNames = []string{
 	"publish_at", "finish_at", "finish_mode", "finish_participants_count", "winners_count", "winners_message",
 	"referral_enabled", "referral_limit", "captcha_mode", "captcha_percent", "promotion_enabled",
 	"draft_step", "status", "publish_message_ids", "results_message_ids", "winners_user_ids",
-	"winners_notified_user_ids", "results_published", "channel_select_mid", "created_at", "updated_at",
+	"winners_notified_user_ids", "results_published", "channel_select_mid", "publish_now", "created_at", "updated_at",
 }
 
 func giveawayColsAlias(alias string) string {
@@ -460,7 +460,7 @@ func scanDest(g *Giveaway) []any {
 		&g.publishAt, &g.finishAt, &g.FinishMode, &g.FinishParticipantsCount, &g.WinnersCount, &g.WinnersMessage,
 		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
 		&g.draftStep, &g.Status, &g.publishMsgs, &g.resultsMsgs, &g.WinnersUserIDs,
-		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.CreatedAt, &g.UpdatedAt,
+		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.PublishNow, &g.CreatedAt, &g.UpdatedAt,
 	}
 }
 
