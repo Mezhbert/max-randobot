@@ -10,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	maxbot "github.com/max-messenger/max-bot-api-client-go/v2"
@@ -38,7 +40,7 @@ type Deps struct {
 }
 
 // Handler возвращает HTTP-хендлеры мини-аппа:
-//   GET /app/                  → редирект на index.html (главная бота)
+//   GET /app/                  → серверный роутер start_param → страница (или главная)
 //   GET /app/participate.html  → страница участия (open_app-кнопка на посте)
 //   GET /app/api/giveaway/{id} → JSON с данными розыгрыша
 //   POST /app/api/participate  → регистрация участия (init_data-авторизация)
@@ -51,8 +53,23 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 	mux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if path == "/app/" || path == "/app" {
-			// Корень мини-аппа — главная с описанием бота (при открытии
-			// кнопкой без start_param именно она и нужна).
+			// Корень мини-аппа: если в init_data есть start_param (payload
+			// open_app-кнопки) — серверный редирект на нужную страницу.
+			// Клиент MAX всегда открывает URL из MasterBot, payload приезжает
+			// только в init_data — маршрутизируем на сервере (надёжнее JS).
+			if sp := startParamFromInitData(r.URL.Query().Get("init_data")); sp != "" {
+				if dest, ok := miniAppRoute(sp); ok {
+					log.Info("miniapp route", "start_param", sp, "dest", dest)
+					q := "start_param=" + url.QueryEscape(sp) +
+						"&init_data=" + url.QueryEscape(r.URL.Query().Get("init_data"))
+					http.Redirect(w, r, dest+"?"+q, http.StatusFound)
+					return
+				}
+				log.Info("miniapp route: unknown start_param", "start_param", sp)
+			} else if id := r.URL.Query().Get("init_data"); id != "" {
+				log.Info("miniapp root: init_data без start_param", "len", len(id))
+			}
+			// Обычное открытие — главная с описанием бота.
 			http.Redirect(w, r, "/app/index.html", http.StatusFound)
 			return
 		}
@@ -228,6 +245,51 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 	})
 
 	return mux
+}
+
+// startParamFromInitData достаёт start_param из init_data мини-аппа.
+// init_data — query-string (user=..&auth_date=..&start_param=..&hash=..),
+// но клиенты кодируют её по-разному: голой строкой, %-encoded, или сам
+// параметр содержит вложенный query — перебираем варианты.
+func startParamFromInitData(initData string) string {
+	if initData == "" {
+		return ""
+	}
+	for _, candidate := range []string{initData} {
+		// 1) как есть.
+		if v := parseQS(candidate).Get("start_param"); v != "" {
+			return v
+		}
+		// 2) %-декодированная целиком (двойное кодирование).
+		if dec, err := url.QueryUnescape(candidate); err == nil && dec != candidate {
+			if v := parseQS(dec).Get("start_param"); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+// parseQS — url.ParseQuery без паники.
+func parseQS(s string) url.Values {
+	v, err := url.ParseQuery(s)
+	if err != nil {
+		return url.Values{}
+	}
+	return v
+}
+
+// miniAppRoute — страница мини-аппа для payload open_app-кнопки.
+func miniAppRoute(sp string) (string, bool) {
+	switch {
+	case strings.HasPrefix(sp, "part_"):
+		return "/app/participate.html", true
+	case strings.HasPrefix(sp, "results_"):
+		return "/app/results.html", true
+	case strings.HasPrefix(sp, "captcha_"):
+		return "/app/captcha.html", true
+	}
+	return "", false
 }
 
 // validateInitDataUser проверяет подпись init_data (HMAC) и возвращает user_id.
