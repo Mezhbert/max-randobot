@@ -143,12 +143,6 @@ func main() {
 			go bot.OnDeepLinkStart(context.Background(), body, payload)
 		}
 
-		// Нажатие reply-кнопки (кнопки у поля ввода): message_created с
-		// data-attachment, payload = действие меню. Либа поле data не парсит.
-		if uid, payload := maxapi.ParseDataPayload(body); payload != "" {
-			go bot.OnReplyKeyboardAction(context.Background(), uid, payload)
-		}
-
 		webhookHandler.ServeHTTP(w, r)
 		slog.Debug("webhook", "took", time.Since(start))
 	})

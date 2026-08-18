@@ -712,9 +712,9 @@ func TestMockAPI_CoversAllUsedMethods(t *testing.T) {
 
 	testutil.EnsureUser(t, s, 7000, "tester")
 
-	// /menu → SendTextReplyKeyboard (кнопки у поля ввода).
+	// /menu → SendTextWithKeyboard (inline: reply-keyboard в MAX ботам недоступен).
 	b.Handle(ctx, msgUpdate(7000, "/menu"))
-	require.Greater(t, sendsByMethod(mock, "SendTextReplyKeyboard"), 0)
+	require.Greater(t, sendsByMethod(mock, "SendTextWithKeyboard"), 0)
 
 	// Поддержка → SendTextWithKeyboard (инлайн внутри разделов).
 	before := sendsByMethod(mock, "SendTextWithKeyboard")

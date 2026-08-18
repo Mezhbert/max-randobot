@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,8 +51,6 @@ type BotAPI interface {
 	// SendTextQuiet — без push-уведомления (карточка в открытом диалоге).
 	SendTextQuiet(ctx context.Context, userID int64, text string) error
 	SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) (string, error)
-	// SendTextReplyKeyboard — текст + reply-keyboard (кнопки у поля ввода).
-	SendTextReplyKeyboard(ctx context.Context, userID int64, text string, rows [][]*model.Button) error
 	SendWithAttachments(ctx context.Context, userID int64, text string, attachments []model.Attachment, format model.TextFormat) error
 	SendToChat(ctx context.Context, chatID int64, text string, attachments []model.Attachment, format model.TextFormat) (string, error)
 	EditChatText(ctx context.Context, messageID, text string, attachments []model.Attachment, format model.TextFormat) error
@@ -128,11 +125,14 @@ func ParseStartedUserID(body []byte) int64 {
 	return probe.User.UserID
 }
 
-// ParseDataPayload достаёт payload reply-кнопки из raw JSON тела webhook для
-// update_type=message_created. Нажатие reply-кнопки (SendMessageButton) шлёт
-// сообщение от юзера с attachment type="data", payload.data = payload кнопки.
+// ParseDataPayload достаёт payload data-attachment из raw JSON тела webhook
+// для update_type=message_created. Сообщения от SendMessageButton (reply-
+// keyboard) приходят с attachment type="data", payload.data = payload кнопки.
 // Либа НЕ парсит поле data (в model.Payload его нет) — читаем сами.
 // Возвращает (0, "") если это не message_created или data-attachment нет.
+//
+// NOTE: сейчас reply-keyboard в MAX ботам недоступен (платформа выкидывает
+// attachment при отправке), функция оставлена на случай включения фичи.
 func ParseDataPayload(body []byte) (userID int64, payload string) {
 	var probe struct {
 		UpdateType string `json:"update_type"`
@@ -242,47 +242,6 @@ func (a *API) SendTextQuiet(ctx context.Context, userID int64, text string) erro
 	}
 	a.metrics.Inc(metrics.MethodSendText, err)
 	return err
-}
-
-// SendTextReplyKeyboard — текст + reply-keyboard (кнопки у поля ввода).
-// rows — матрица кнопок; каждая кнопка {text, type:"message", payload} —
-// нажатие шлёт сообщение от юзера с data-attachment (payload приходит в
-// webhook, парсируется ParseDataPayload).
-//
-// ВАЖНО (асимметрия MAX API, проверено живым запросом): у inline-клавиатуры
-// кнопки лежат в payload.buttons, а у reply_keyboard — НА ВЕРХНЕМ УРОВНЕ
-// attachment: {"type":"reply_keyboard","buttons":[[...]]}. SDK-модель так не
-// умеет — отправляем сырым REST (POST /messages) собственным типом.
-func (a *API) SendTextReplyKeyboard(ctx context.Context, userID int64, text string, rows [][]*model.Button) error {
-	a.rl.wait(ctx)
-	notify := false // тихо: диалог уже открыт (меню показывается по нажатию)
-	body := replyKeyboardBody{
-		Text:        text,
-		Notify:      &notify,
-		Attachments: []replyKeyboardAttachment{{Type: string(model.AttachReplyKeyboard), Buttons: rows}},
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	var res model.SendMessageResult
-	err = a.rawREST(ctx, http.MethodPost, "/messages?user_id="+strconv.FormatInt(userID, 10), payload, &res)
-	a.metrics.Inc(metrics.MethodSendTextReply, err)
-	return err
-}
-
-// replyKeyboardBody — тело POST /messages с reply-keyboard. Кнопки attachment
-// лежат на верхнем уровне (не в payload) — см. комментарий выше.
-type replyKeyboardBody struct {
-	Text        string                   `json:"text,omitempty"`
-	Notify      *bool                    `json:"notify,omitempty"`
-	Attachments []replyKeyboardAttachment `json:"attachments"`
-}
-
-// replyKeyboardAttachment — attachment типа reply_keyboard.
-type replyKeyboardAttachment struct {
-	Type    string            `json:"type"`
-	Buttons [][]*model.Button `json:"buttons"` // required: верхний уровень, не payload
 }
 
 // SendTextWithKeyboard — текст + inline-клавиатура пользователю.

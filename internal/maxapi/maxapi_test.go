@@ -1,61 +1,15 @@
 package maxapi
 
 import (
-	"encoding/json"
 	"testing"
 
-	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// TestReplyKeyboardBodyJSON — формат reply-keyboard: кнопки ОБЯЗАНЫ лежать на
-// верхнем уровне attachment (асимметрия MAX API: у inline — в payload.buttons,
-// у reply_keyboard — сверху). Живой запрос с payload.buttons MAX отвергает:
-// 400 "Field 'buttons' cannot be null".
-func TestReplyKeyboardBodyJSON(t *testing.T) {
-	notify := false
-	body := replyKeyboardBody{
-		Text:   "Меню",
-		Notify: &notify,
-		Attachments: []replyKeyboardAttachment{{
-			Type: string(model.AttachReplyKeyboard),
-			Buttons: [][]*model.Button{
-				{{Text: "🎁 Создать розыгрыш", Type: model.ButtonMessage, Payload: "create"}},
-				{{Text: "📋 Мои розыгрыши", Type: model.ButtonMessage, Payload: "my_giveaways"}},
-			},
-		}},
-	}
-	raw, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	var probe struct {
-		Attachments []struct {
-			Type    string `json:"type"`
-			Buttons  [][]struct {
-				Text    string `json:"text"`
-				Type    string `json:"type"`
-				Payload string `json:"payload"`
-			} `json:"buttons"`
-			Payload *json.RawMessage `json:"payload"`
-		} `json:"attachments"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &probe))
-	require.Len(t, probe.Attachments, 1)
-
-	at := probe.Attachments[0]
-	assert.Equal(t, "reply_keyboard", at.Type)
-	assert.Nil(t, at.Payload, "payload быть не должно — кнопки на верхнем уровне")
-	require.Len(t, at.Buttons, 2)
-	assert.Equal(t, "🎁 Создать розыгрыш", at.Buttons[0][0].Text)
-	assert.Equal(t, "message", at.Buttons[0][0].Type, "reply-кнопка = SendMessageButton (type=message)")
-	assert.Equal(t, "create", at.Buttons[0][0].Payload)
-
-	// Страховка от регрессии: строка payload.buttons не должна встречаться.
-	assert.NotContains(t, string(raw), `"payload":{"buttons"`)
-}
-
-// TestParseDataPayload — извлечение payload reply-кнопки из raw webhook.
+// TestParseDataPayload — извлечение payload data-attachment из raw webhook.
+// Функция оставлена для будущего: reply-keyboard в MAX ботам сейчас недоступен
+// (платформа выкидывает attachment при отправке), но формат входящего
+// data-сообщения зафиксирован тестом.
 func TestParseDataPayload(t *testing.T) {
 	body := []byte(`{"update_type":"message_created","user_id":42,` +
 		`"message":{"body":{"mid":"m1","text":"","attachments":[` +
@@ -76,4 +30,20 @@ func TestParseDataPayload(t *testing.T) {
 
 	// Битый JSON — не паникует.
 	assert.NotPanics(t, func() { ParseDataPayload([]byte("not json")) })
+}
+
+// TestParseStartedPayload — payload диплинка из bot_started (raw body).
+func TestParseStartedPayload(t *testing.T) {
+	assert.Equal(t, "utm_abc", ParseStartedPayload(
+		[]byte(`{"update_type":"bot_started","payload":"utm_abc"}`)))
+	assert.Equal(t, "", ParseStartedPayload(
+		[]byte(`{"update_type":"message_created","payload":"x"}`)))
+	assert.Equal(t, "", ParseStartedPayload([]byte(`bad json`)))
+}
+
+// TestParseStartedUserID — user_id из bot_started (raw body).
+func TestParseStartedUserID(t *testing.T) {
+	assert.Equal(t, int64(123), ParseStartedUserID(
+		[]byte(`{"update_type":"bot_started","user":{"user_id":123}}`)))
+	assert.Equal(t, int64(0), ParseStartedUserID([]byte(`{}`)))
 }

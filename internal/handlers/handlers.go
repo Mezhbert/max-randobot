@@ -242,30 +242,14 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 	_ = b.api.SendText(ctx, uid, "Используйте кнопки меню. Для вызова меню отправьте /menu")
 }
 
-// OnReplyKeyboardAction — нажатие reply-кнопки (кнопки у поля ввода).
-// payload приходит из data-attachment сообщения (см. maxapi.ParseDataPayload).
-func (b *Bot) OnReplyKeyboardAction(ctx context.Context, uid int64, payload string) {
-	defer func() {
-		if r := recover(); r != nil {
-			b.log.Error("panic in OnReplyKeyboardAction", "err", r)
-		}
-	}()
-	if uid == 0 || payload == "" {
-		return
-	}
-	// Дедупликация: то же сообщение придёт и через SDK-хендлер — там будет
-	// message_created без текста, эхо-подсказка не сработает (пустой текст не
-	// матчится ни на одну сессию/команду — безопасно).
-	b.handleMenuAction(ctx, uid, payload)
-}
-
-// sendMainMenu отправляет главное меню пользователю: сначала пытается
-// reply-keyboard (кнопки у поля ввода), при ошибке — inline-клавиатура.
+// sendMainMenu отправляет главное меню пользователю.
+//
+// NOTE: reply-keyboard (кнопки у поля ввода) в MAX для ботов НЕ работает:
+// платформа принимает attachment (200 OK), но молча выкидывает его —
+// сообщение доходит голым текстом (проверено живым API-запросом и чтением
+// сообщения обратно: attachments пуст). Поэтому меню — всегда inline.
 func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
-	if err := b.api.SendTextReplyKeyboard(ctx, userID, text, util.MainMenuReplyRows()); err != nil {
-		b.log.Debug("reply keyboard failed, fallback to inline", "err", err, "user", userID)
-		_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
-	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
 }
 
 // sendStartScreen — информативное приветствие при /start: что умеет бот + меню.

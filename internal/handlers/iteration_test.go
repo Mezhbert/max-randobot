@@ -21,36 +21,35 @@ import (
 	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
 
-// ---------- Reply keyboard ----------
+// ---------- Меню ----------
 
-// TestReplyKeyboard_MenuSentAndRouted — /menu шлёт reply-keyboard; нажатие
-// reply-кнопки (payload через OnReplyKeyboardAction) открывает раздел.
-func TestReplyKeyboard_MenuSentAndRouted(t *testing.T) {
+// TestMenu_InlineAlways — /menu шлёт inline-клавиатуру (reply-keyboard в MAX
+// ботам недоступен: платформа выкидывает attachment — проверено живым API).
+func TestMenu_InlineAlways(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6001
 	testutil.EnsureUser(t, s, uid, "tester")
 
-	// /menu → должен уйти SendTextReplyKeyboard (не инлайн).
+	// /menu → SendTextWithKeyboard с инлайн-кнопками.
 	b.Handle(ctx, msgUpdate(uid, "/menu"))
+	assert.Greater(t, sendsByMethod(mock, "SendTextWithKeyboard"), 0,
+		"меню должно отправляться inline-клавиатурой")
+
+	// Никаких reply-методов в API больше нет — проверяем, что не падает.
 	found := false
 	for _, r := range mock.SnapshotSends() {
-		if r.Method == "SendTextReplyKeyboard" && r.UserID == uid {
+		if r.UserID == uid && strings.Contains(r.Text, "Главное меню") {
 			found = true
 		}
 	}
-	assert.True(t, found, "меню должно отправляться reply-keyboard (кнопки у поля ввода)")
-
-	// Нажатие reply-кнопки «Мои розыгрыши» (payload как из data-attachment).
-	before := sendsToUser(mock, uid)
-	b.OnReplyKeyboardAction(ctx, uid, util.CBMyGiveaways)
-	assert.Equal(t, before+1, sendsToUser(mock, uid), "reply-кнопка должна открыть раздел")
+	assert.True(t, found)
 }
 
-// TestReplyKeyboard_TextFallback — если data-attachment не пришёл, подпись
-// кнопки как текст тоже маршрутизируется.
-func TestReplyKeyboard_TextFallback(t *testing.T) {
+// TestMenu_TextFallback — подпись кнопки меню, отправленная текстом,
+// маршрутизируется (fallback для сообщений от кнопок-как-текст).
+func TestMenu_TextFallback(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -59,7 +58,7 @@ func TestReplyKeyboard_TextFallback(t *testing.T) {
 
 	before := sendsToUser(mock, uid)
 	b.Handle(ctx, msgUpdate(uid, "📊 Аналитика"))
-	assert.Equal(t, before+1, sendsToUser(mock, uid), "текст подписи reply-кнопки должен открывать раздел")
+	assert.Equal(t, before+1, sendsToUser(mock, uid), "текст подписи кнопки меню должен открывать раздел")
 }
 
 // ---------- Каналы ----------

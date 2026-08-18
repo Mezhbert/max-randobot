@@ -83,10 +83,14 @@ func MainMenuKeyboard() *model.Keyboard {
 	return kb
 }
 
-// replyMenuButtons — подписи reply-кнопок главного меню (кнопки у поля ввода).
-// Порядок как в MainMenuKeyboard. Payload кнопки = payload соответствующего
-// действия; нажатие шлёт message с data-attachment (см. maxapi.ParseDataPayload).
-var replyMenuButtons = []string{
+// replyMenuTexts — подписи кнопок главного меню. Используются как текстовый
+// fallback: если сообщение от кнопки меню пришло как обычный текст, оно
+// маршрутизируется через ReplyPayloadByText.
+//
+// NOTE: настоящий reply-keyboard (кнопки у поля ввода) в MAX для ботов не
+// работает: платформа принимает attachment (200 OK), но молча выкидывает его
+// (проверено живым API-запросом). Меню — inline.
+var replyMenuTexts = []string{
 	"🎁 Создать розыгрыш",
 	"📋 Мои розыгрыши",
 	"📢 Мои каналы",
@@ -95,22 +99,9 @@ var replyMenuButtons = []string{
 	"🆘 Поддержка",
 }
 
-// MainMenuReplyRows — матрица кнопок reply-keyboard для главного меню.
-func MainMenuReplyRows() [][]*model.Button {
-	rows := make([][]*model.Button, 0, len(replyMenuButtons))
-	for _, text := range replyMenuButtons {
-		rows = append(rows, []*model.Button{{
-			Text:    text,
-			Type:    model.ButtonMessage,
-			Payload: replyPayloadFor(text),
-		}})
-	}
-	return rows
-}
-
-// replyPayloadFor — payload reply-кнопки по её подписи (совпадает с payload
-// инлайн-кнопки главного меню). Fallback на "menu" для неизвестного текста.
-func replyPayloadFor(text string) string {
+// ReplyPayloadByText — payload действия по подписи кнопки меню ("", если не
+// кнопка меню). Fallback для текстовых сообщений.
+func ReplyPayloadByText(text string) string {
 	switch text {
 	case "🎁 Создать розыгрыш":
 		return CBCreateGiveaway
@@ -124,17 +115,6 @@ func replyPayloadFor(text string) string {
 		return CBAnalytics
 	case "🆘 Поддержка":
 		return CBSupport
-	}
-	return CBMainMenu
-}
-
-// ReplyPayloadByText — payload действия по подписи reply-кнопки ("", если не
-// кнопка меню). Используется как fallback, когда data-attachment не пришёл.
-func ReplyPayloadByText(text string) string {
-	for _, t := range replyMenuButtons {
-		if t == text {
-			return replyPayloadFor(t)
-		}
 	}
 	return ""
 }

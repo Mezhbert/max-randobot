@@ -32,7 +32,6 @@ const (
 	MethodCheckChannelAdmin    Method = "check_channel_admin"
 	MethodGetChatInfo          Method = "get_chat_info"
 	MethodAnswerCallback       Method = "answer_callback"
-	MethodSendTextReply        Method = "send_text_reply_kb"
 	MethodGetChatByLink        Method = "get_chat_by_link"
 )
 
@@ -41,7 +40,7 @@ var orderedMethods = []Method{
 	MethodSendText, MethodSendTextWithKeyboard, MethodSendWithAttachments,
 	MethodSendToChat, MethodEditChatText, MethodIsSubscriber,
 	MethodIsBotAdminInChat, MethodCheckChannelAdmin, MethodGetChatInfo,
-	MethodAnswerCallback, MethodSendTextReply, MethodGetChatByLink,
+	MethodAnswerCallback, MethodGetChatByLink,
 }
 
 // Counters — потокобезопасные счётчики вызовов MAX API.

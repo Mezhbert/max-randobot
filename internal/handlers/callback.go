@@ -41,7 +41,8 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 }
 
 // handleMenuAction — единый роутер действий главного меню/навигации.
-// Вызывается и из callback-кнопок (inline), и из reply-кнопок (у поля ввода).
+// Вызывается из callback-кнопок (inline) и из текстовых подписей меню
+// (fallback: сообщение от кнопки может прийти как текст).
 func (b *Bot) handleMenuAction(ctx context.Context, uid int64, p string) {
 	switch p {
 	case util.CBMainMenu:
