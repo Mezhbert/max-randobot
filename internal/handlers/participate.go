@@ -60,24 +60,18 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 	existing, _ := b.db.CountParticipant(ctx, g.ID, userID)
 	if existing > 0 {
 		b.api.AnswerCallback(ctx, callbackID, "✅ Вы уже участвуете!")
-		// Deep-link повторно (callbackID пуст) — это opt-in уведомлений из
-		// мини-аппа: диалог открыт юзером осознанно, подтверждаем включение.
-		if callbackID == "" {
-			_ = b.api.SendText(ctx, userID,
-				fmt.Sprintf("🔔 Уведомления о розыгрыше «%s» включены. О победе напишем сюда!", g.Name))
-		}
 		return
 	}
 
-	// Капча: если включена — показываем (мини-апп или fallback-картинка).
+	// Капча: если включена — картинка в чате (сообщение откроет диалог).
 	if b.needCaptcha(g) {
-		// НЕ шлём AnswerCallback (alert) — он блокирует открытие диалога.
-		// Сообщение с капчей само откроет диалог с ботом.
+		// НЕ шлём AnswerCallback (alert) заранее — сообщение с капчей
+		// откроет диалог с ботом лучше алерта.
 		b.startCaptchaChallenge(ctx, userID, g.ID)
 		return
 	}
 
-	// Без капчи — регистрируем сразу (legacy deep-link: диалог открыт → карточка уместна).
+	// Без капчи — регистрируем сразу; карточка «Вы участвуете» откроет диалог.
 	b.registerParticipant(ctx, userID, g, callbackID, true)
 }
 

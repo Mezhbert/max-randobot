@@ -401,14 +401,15 @@ func TestResults_AppendedEscape(t *testing.T) {
 
 // ---------- Лампочка: хинт сообщением + Продолжить ----------
 
-// TestParticipateButton_IsDeepLink — кнопка участия под постом: deep-link
-// (открывает диалог бота; участие и подтверждение в чате, бот получает право
-// писать юзеру — мини-апп-путь отключён по результатам живого тестирования).
-func TestParticipateButton_IsDeepLink(t *testing.T) {
+// TestParticipateButton_IsCallback — кнопка участия под постом: CALLBACK
+// (part:<id>) — нажатие шлёт message_callback напрямую, без deep-link'ов
+// (link-кнопка с max.ru/<bot>/start/part_N на авто-имени бота не резолвилась
+// клиентом: «ссылка устарела», bot_started не приходил).
+func TestParticipateButton_IsCallback(t *testing.T) {
 	kb := util.ParticipateKeyboardBuilder("Участвовать", 5, "mybot", 3, 42)
 	btn := kb.Build().Payload.Buttons[0][0]
-	assert.Equal(t, model.ButtonLink, btn.Type, "кнопка участия — ссылка (deep-link в чат)")
-	assert.Contains(t, btn.URL, "max.ru/mybot/start/part_5")
+	assert.Equal(t, model.ButtonCallback, btn.Type, "кнопка участия — callback")
+	assert.Equal(t, "part:5", btn.Payload)
 	assert.Contains(t, btn.Text, "(3)", "счётчик участников в подписи кнопки")
 }
 

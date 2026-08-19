@@ -186,18 +186,16 @@ func ConfirmErrorKeyboard(giveawayID int64) *model.Keyboard {
 }
 
 // ParticipateKeyboardBuilder — кнопка «Участвовать (N)» под постом розыгрыша.
-// ButtonLink с deep link (https://max.ru/<bot>/start/part_<id>): при нажатии
-// MAX открывает диалог с ботом, bot_started даёт боту право писать юзеру
-// (уведомление о победе гарантировано) — участие и подтверждение в чате.
+//
+// CALLBACK-кнопка (part:<id>): нажатие шлёт message_callback напрямую боту —
+// не зависит от deep-link'ов и bot_started (link-кнопка с
+// max.ru/<bot>/start/part_<id> на авто-имени бота вида id123_bot не
+// резолвилась клиентом: «ссылка устарела», событие не приходило).
+// Ответ бота в диалог открывает чат с участником.
 func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername string, participants int, botUserID int64) *model.Keyboard {
 	kb := model.NewKeyboard()
-	botName := botUsername
-	if botName == "" {
-		botName = "max_bot"
-	}
-	link := "https://max.ru/" + botName + "/start/part_" + strconv.FormatInt(giveawayID, 10)
 	label := fmt.Sprintf("%s (%d)", buttonText, participants)
-	kb.AddRow().AddLink(label, link)
+	kb.AddRow().AddCallBack(label, CBParticipate+strconv.FormatInt(giveawayID, 10))
 	return kb
 }
 
