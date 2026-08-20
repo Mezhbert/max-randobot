@@ -25,7 +25,7 @@ func (b *Bot) handleDraftInput(ctx context.Context, userID int64, g store.Giveaw
 		// Неверный формат — повторяем запрос того же шага.
 		_, _ = b.api.SendTextWithKeyboard(ctx, userID,
 			"⚠️ "+err.Error()+"\n\n"+fsm.PromptForStep(g.DraftStep),
-			kbForStep(g.DraftStep))
+			kbForStep(g.DraftStep, g))
 		return
 	}
 	// Переход к следующему шагу
@@ -38,12 +38,14 @@ func (b *Bot) handleDraftInput(ctx context.Context, userID int64, g store.Giveaw
 func (b *Bot) advance(ctx context.Context, userID int64, giveawayID int64, currentStep string) {
 	g, err := b.db.GetGiveawayAny(ctx, giveawayID)
 	if err != nil {
-		_ = b.api.SendText(ctx, userID, "⚠️ Не удалось получить черновик: "+err.Error())
+		b.log.Warn("advance: get draft", "err", err, "id", giveawayID, "user", userID)
+		_ = b.api.SendText(ctx, userID, "⚠️ Не удалось получить черновик. Попробуйте позже.")
 		return
 	}
 	next, err := b.engine.GoNext(ctx, giveawayID, currentStep, g)
 	if err != nil {
-		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка перехода: "+err.Error())
+		b.log.Warn("advance: next step", "err", err, "id", giveawayID, "step", currentStep)
+		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка перехода к следующему шагу. Попробуйте позже.")
 		return
 	}
 	if next == currentStep {
@@ -74,7 +76,7 @@ func (b *Bot) showStep(ctx context.Context, userID int64, g store.Giveaway, step
 			mediaSimple = append(mediaSimple, util.MediaTokenSimple{Type: mt.Type, Token: mt.Token})
 		}
 		// 1) Полный предпросмотр поста (как будет в канале).
-		attachments := util.GiveawayAttachments(buttonText, g.ID, mediaSimple, true, b.botUsername, b.botUserID)
+		attachments := util.GiveawayAttachments(buttonText, g.ID, mediaSimple, true)
 		_ = b.api.SendWithAttachments(ctx, userID, g.PostText, attachments, model.TextFormat(g.PostFormat))
 
 		// 2) Если итоги отдельным постом — тоже предпросмотрим.
@@ -95,7 +97,7 @@ func (b *Bot) showStep(ctx context.Context, userID int64, g store.Giveaway, step
 		return
 	}
 
-	_, _ = b.api.SendTextWithKeyboard(ctx, userID, fsm.PromptForStep(step), kbForStep(step))
+	_, _ = b.api.SendTextWithKeyboard(ctx, userID, fsm.PromptForStep(step), kbForStep(step, g))
 }
 
 // showChannelSelectStep — шаг выбора каналов с живыми галочками (тогглинг).
@@ -182,9 +184,11 @@ func buildChannelSelectKB(ctx context.Context, b *Bot, userID int64, g store.Giv
 }
 
 // kbForStep возвращает клавиатуру для шага (навигация + опции + 💡 подсказка).
+// g нужен только шагу медиа: кнопка «Пропустить»/«Далее →» зависит от того,
+// добавлено ли уже медиа в ЭТОТ черновик.
 // Для шагов дат добавлена кнопка 📋 — копирует шаблон текущего времени МСК
 // в буфер обмена (type=clipboard), чтобы вставить и поправить.
-func kbForStep(step string) *model.Keyboard {
+func kbForStep(step string, g store.Giveaway) *model.Keyboard {
 	switch step {
 	case fsm.StepPublishAt, fsm.StepFinishAt:
 		kb := model.NewKeyboard()
@@ -221,7 +225,9 @@ func kbForStep(step string) *model.Keyboard {
 			AddCallBack("← Назад", util.CBFSMBack).
 			AddCallBack("✖ Отменить", util.CBFSMCancel)
 		return kb
-	case fsm.StepMedia, fsm.StepWinnersMsg, fsm.StepButtonText, fsm.StepResultsText:
+	case fsm.StepMedia:
+		return util.MediaStepKeyboard(len(g.MediaTokens) > 0)
+	case fsm.StepWinnersMsg, fsm.StepButtonText, fsm.StepResultsText:
 		return util.NavWithSkipKeyboard()
 	case fsm.StepSubChannels, fsm.StepPubChannels:
 		kb := model.NewKeyboard()

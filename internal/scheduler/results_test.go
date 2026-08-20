@@ -22,24 +22,16 @@ func TestBuildResultsText_CustomHeader(t *testing.T) {
 	g := store.Giveaway{ResultsPostText: "🏆 Победители мега-розыгрыша"}
 	out := BuildResultsText(&g, []Winner{{Name: "x", UserID: 9}})
 	assert.Contains(t, out, "🏆 Победители мега-розыгрыша")
-	assert.Contains(t, out, "Победители (1): [x](max://user/9)")
+	// Победитель — своей строкой с буллетом.
+	assert.Contains(t, out, "Победители (1):\n• [x](max://user/9)")
 }
 
-func TestBuildResultsText_ManyWinnersUseMultilineSeparator(t *testing.T) {
-	ws := []Winner{}
-	for i := 1; i <= 7; i++ {
-		ws = append(ws, Winner{Name: string(rune('a' + i)), UserID: int64(i)})
-	}
-	g := store.Giveaway{}
-	out := BuildResultsText(&g, ws)
-	assert.True(t, strings.Contains(out, "\n• "), "ожидали многострочный список: %q", out)
-}
-
-func TestBuildResultsText_FewWinnersUseComma(t *testing.T) {
+func TestBuildResultsText_EveryWinnerOnOwnLine(t *testing.T) {
 	g := store.Giveaway{}
 	out := BuildResultsText(&g, []Winner{{Name: "a", UserID: 1}, {Name: "b", UserID: 2}})
-	assert.Contains(t, out, ", ")
-	assert.False(t, strings.Contains(out, "\n• "))
+	// Формат неизменен для любого числа победителей: список, не строка через запятую.
+	assert.Contains(t, out, "\n• [a](max://user/1)\n• [b](max://user/2)")
+	assert.False(t, strings.Contains(out, ", "), "запятая между победителями не ожидается: %q", out)
 }
 
 func TestBuildResultsText_EmptyWinners(t *testing.T) {

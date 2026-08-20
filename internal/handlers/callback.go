@@ -97,7 +97,8 @@ func isFSMPayload(p string) bool {
 func (b *Bot) startCreate(ctx context.Context, uid int64) {
 	g, err := b.engine.StartDraft(ctx, uid)
 	if err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать создание: "+err.Error())
+		b.log.Warn("start draft", "err", err, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать создание. Попробуйте позже.")
 		return
 	}
 	b.showStep(ctx, uid, g, g.DraftStep)
@@ -139,9 +140,11 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 	case p == util.CBFSMConfirm:
 		if err := b.engine.Confirm(ctx, g.ID); err != nil {
 			var ve *fsm.ValidationError
-			msg := "⚠️ Ошибка: " + err.Error()
+			msg := "⚠️ Не удалось подтвердить розыгрыш. Попробуйте позже."
 			if errors.As(err, &ve) {
-				msg = "⚠️ " + ve.Msg
+				msg = "⚠️ " + ve.Msg //ValidationError — авторский текст, internals не утекают
+			} else {
+				b.log.Warn("confirm", "err", err, "id", g.ID, "user", uid)
 			}
 			// Ошибка валидации на предпросмотре — предлагаем вернуться на
 			// соотв. шаг для исправления (не голый текст без кнопок).
@@ -356,10 +359,25 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		}
 
 	case strings.HasPrefix(p, util.CBGwCancel):
+		// Отмена — как и остальные операции, только владельцем и только
+		// scheduled/active: отменённый/завершённый розыгрыш трогать нельзя
+		// (иначе crafted-callback мог «отменить» итоги и скрыть победителей).
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwCancel), 10, 64)
-		if err := b.db.SetStatus(ctx, id, store.StatusCancelled); err == nil {
-			_ = b.api.SendText(ctx, uid, "Запланированный розыгрыш отменён.")
+		g, err := b.db.GetGiveaway(ctx, id, uid)
+		if err != nil {
+			_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+			return
 		}
+		if g.Status != store.StatusScheduled && g.Status != store.StatusActive {
+			_ = b.api.SendText(ctx, uid, "Отменить можно только запланированный или текущий розыгрыш.")
+			return
+		}
+		if err := b.db.CancelGiveaway(ctx, id, uid); err != nil {
+			b.log.Warn("cancel giveaway", "err", err, "id", id, "user", uid)
+			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось отменить розыгрыш. Попробуйте позже.")
+			return
+		}
+		_ = b.api.SendText(ctx, uid, "Розыгрыш отменён.")
 
 	case strings.HasPrefix(p, util.CBGwDelete):
 		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwDelete), 10, 64)
@@ -403,7 +421,8 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 func (b *Bot) resumeGiveaway(ctx context.Context, uid, id int64) {
 	g, err := b.engine.ResumeDraft(ctx, id)
 	if err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось продолжить: "+err.Error())
+		b.log.Warn("resume draft", "err", err, "id", id, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось продолжить создание. Попробуйте позже.")
 		return
 	}
 	if g.OwnerUserID != uid {

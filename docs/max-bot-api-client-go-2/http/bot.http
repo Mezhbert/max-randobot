@@ -1,0 +1,17 @@
+### get info about bot
+GET {{ host }}/me
+Authorization: {{token}}
+
+### patch bot commands
+PATCH {{ host }}/me/commands
+Authorization: {{token}}
+Content-Type: application/json
+
+{
+  "commands": [
+    {
+      "name": "/help",
+      "description": "Commands and any info"
+    }
+  ]
+}

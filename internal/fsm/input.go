@@ -17,17 +17,26 @@ import (
 func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text string) error {
 	switch g.DraftStep {
 	case StepPostText:
+		// Обязательное поле валидируется ЗДЕСЬ, а не на предпросмотре:
+		// пустой ввод (стикер, фото без подписи) раньше сохранялся и
+		// всплывал ошибкой лишь после заполнения всех оставшихся шагов.
+		if err := util.ValidatePostText(text); err != nil {
+			return err
+		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "post_text", text)
 
 	case StepName:
-		if strings.TrimSpace(text) == "" {
-			return errors.New("название не может быть пустым")
+		if err := util.ValidateName(text); err != nil {
+			return err
 		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "name", text)
 
 	case StepButtonText:
 		if strings.TrimSpace(text) == "" {
 			text = "участвовать"
+		}
+		if err := util.ValidateButtonText(text); err != nil {
+			return err
 		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "button_text", text)
 
@@ -79,9 +88,15 @@ func (e *Engine) HandleTextInput(ctx context.Context, g store.Giveaway, text str
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "winners_count", n)
 
 	case StepWinnersMsg:
+		if err := util.ValidateLongText("Сообщение победителям", text); err != nil {
+			return err
+		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "winners_message", text)
 
 	case StepResultsText:
+		if err := util.ValidateLongText("Текст итогов", text); err != nil {
+			return err
+		}
 		return e.DB.UpdateGiveawayField(ctx, g.ID, "results_post_text", text)
 
 	// Шаги с выбором каналов / опциями обрабатываются через callback, не текстом.

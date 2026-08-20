@@ -44,7 +44,7 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 		if err != nil {
 			b.api.AnswerCallback(ctx, callbackID, "⚠️ Не удалось проверить подписку")
 			_ = b.api.SendText(ctx, userID,
-				"⚠️ Не удалось проверить подписку. Попробуйте позже."+fmtErr(err))
+				"⚠️ Не удалось проверить подписку. Попробуйте позже.")
 			return
 		}
 		if len(missing.Titles) > 0 {
@@ -134,9 +134,8 @@ func (b *Bot) handleCaptchaVerifyInput(ctx context.Context, userID int64, answer
 }
 
 // registerParticipant финализирует участие: добавляет в БД, логирует подписки,
-// обновляет счётчик в постах. sendCard=false — полностью без сообщений от бота
-// (путь мини-аппа: подтверждение рисует страница); true — одна карточка
-// (legacy deep-link путь, диалог с ботом открыт самой ссылкой).
+// обновляет счётчик в постах. sendCard=false — полностью без сообщений от бота;
+// true — одна карточка (deep-link путь: диалог открыт самой ссылкой).
 func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giveaway, callbackID string, sendCard bool) {
 	p, err := b.db.AddParticipant(ctx, store.Participant{
 		GiveawayID:    g.ID,
@@ -171,57 +170,6 @@ func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giv
 		_ = b.api.SendText(ctx, userID,
 			fmt.Sprintf("🎉 Вы участвуете в розыгрыше «%s»! Удачи!", g.Name))
 	}
-}
-
-// ParticipateResult — ответ API участия из мини-аппа.
-type ParticipateResult struct {
-	Ok         bool   // зарегистрирован / уже участвовал
-	Err        string // причина отказа (подписка/статус) — пусто при Ok
-	Notifiable bool   // бот может писать юзеру (диалог начат) — для opt-in
-}
-
-// ParticipateFromApp — участие через мини-апп (кнопка «Участвовать» на посте —
-// open_app). Полный пайплайн: статус → подписки → регистрация. Без единого
-// сообщения от бота: подтверждение рисует страница. Капча (если нужна)
-// проходится на странице ДО вызова этого метода.
-func (b *Bot) ParticipateFromApp(giveawayID, userID int64) ParticipateResult {
-	ctx := context.Background()
-	g, err := b.db.GetGiveawayAny(ctx, giveawayID)
-	if err != nil {
-		return ParticipateResult{Err: "Розыгрыш не найден"}
-	}
-	if g.Status != store.StatusActive {
-		return ParticipateResult{Err: "Этот розыгрыш уже не активен"}
-	}
-
-	// Проверка подписок на каналы (если заданы).
-	if len(g.SubscribeChannelIDs) > 0 {
-		missing, err := b.subs.VerifySubscriptions(ctx, userID, g)
-		if err != nil {
-			return ParticipateResult{Err: "Не удалось проверить подписку. Попробуйте позже."}
-		}
-		if len(missing.Titles) > 0 {
-			return ParticipateResult{Err: "Сначала подпишитесь на каналы: " + missing.String()}
-		}
-	}
-
-	// Идемпотентность: уже участвует — тоже Ok (перезаход в мини-апп).
-	if n, _ := b.db.CountParticipant(ctx, g.ID, userID); n > 0 {
-		return ParticipateResult{Ok: true, Notifiable: b.userNotifiable(ctx, userID)}
-	}
-
-	b.registerParticipant(ctx, userID, g, "", false)
-	return ParticipateResult{Ok: true, Notifiable: b.userNotifiable(ctx, userID)}
-}
-
-// userNotifiable — может ли бот писать юзеру (диалог был начат и не остановлен).
-// У мини-апп-участника без старта бота=false → страница покажет opt-in кнопку.
-func (b *Bot) userNotifiable(ctx context.Context, userID int64) bool {
-	u, err := b.db.GetUser(ctx, userID)
-	if err != nil {
-		return false
-	}
-	return u.FlagInBase
 }
 
 // updateCounterThrottled обновляет счётчик в постах не чаще раза в 10 секунд

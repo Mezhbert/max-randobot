@@ -45,9 +45,9 @@
 
   <div class="card">
     <h2>Как участвовать</h2>
-    <div class="row"><div class="ic">1️⃣</div><div><span class="d">Нажмите «Участвовать» под постом розыгрыша в канале.</span></div></div>
+    <div class="row"><div class="ic">1️⃣</div><div><span class="d">Нажмите «Участвовать» под постом розыгрыша в канале — откроется чат с ботом.</span></div></div>
     <div class="row"><div class="ic">2️⃣</div><div><span class="d">Подпишитесь на каналы розыгрыша (если требуется) и пройдите капчу.</span></div></div>
-    <div class="row"><div class="ic">3️⃣</div><div><span class="d">Итоги — в посте розыгрыша и здесь, по кнопке «🏆 Проверить результаты».</span></div></div>
+    <div class="row"><div class="ic">3️⃣</div><div><span class="d">Итоги — в посте розыгрыша: победители списком с тегами.</span></div></div>
   </div>
 
   <div class="hint">
@@ -58,35 +58,8 @@
   <footer>Бот работает в мессенджере MAX<br>Все действия — в чате с ботом 👇</footer>
   </div>
 </div>
-<script>
-// Роутер payload'ов open_app-кнопок: MAX открывает URL мини-аппа из MasterBot
-// (этот корень), а payload кнопки (part_N / results_N / captcha_N) приходит
-// в init_data.start_param — перенаправляем на нужную страницу.
-(function () {
-  var p = new URLSearchParams(location.search);
-  var sp = p.get('start_param') || extractFromInitData(p.get('init_data') || '');
-  if (!sp) return; // обычное открытие — главная с описанием
-
-  var qs = 'start_param=' + encodeURIComponent(sp) +
-    (p.get('init_data') ? '&init_data=' + encodeURIComponent(p.get('init_data')) : '');
-  var dest = null;
-  if (/^part_\d+$/.test(sp)) dest = '/app/participate.html';
-  else if (/^results_\d+$/.test(sp)) dest = '/app/results.html';
-  else if (/^captcha_\d+$/.test(sp)) dest = '/app/captcha.html';
-  if (dest) location.replace(dest + '?' + qs);
-})();
-
-// start_param из init_data (query-string формат: user=..&start_param=..&hash=..).
-function extractFromInitData(initData) {
-  if (!initData) return '';
-  try {
-    var dec = decodeURIComponent(initData);
-    return new URLSearchParams(dec).get('start_param') || '';
-  } catch (e) {
-    try { return new URLSearchParams(initData).get('start_param') || ''; }
-    catch (e2) { return ''; }
-  }
-}
-</script>
+<!-- Мини-апп — только главный экран: участие и итоги в чате бота и постах
+     каналов. Роутер start_param удалён вместе со страницами participate/
+     results/captcha; сервер /app/ всегда отдаёт этот экран. -->
 </body>
 </html>

@@ -107,15 +107,18 @@ func (s *Store) ListMyParticipations(ctx context.Context, userID int64) ([]Givea
 }
 
 // fieldWhitelist — разрешённые к точечному обновлению колонки giveaways.
+// Ровно те, что реально пишутся FSM/редактурой. Мёртвые legacy-колонки
+// (referral_*, promotion_*, captcha_percent, post_format) убраны: разрешать
+// больше, чем используется — лишняя поверхность для mass assignment.
 var fieldWhitelist = map[string]bool{
-	"post_text": true, "post_format": true, "media_tokens": true, "button_text": true,
+	"name": true, "post_text": true, "button_text": true,
+	"media_tokens": true,
 	"subscribe_channel_ids": true, "publish_channel_ids": true,
 	"results_in_original_post": true, "results_post_text": true,
 	"publish_at": true, "finish_at": true, "finish_mode": true, "finish_participants_count": true,
 	"winners_count": true, "winners_message": true,
-	"referral_enabled": true, "referral_limit": true,
-	"captcha_mode": true, "captcha_percent": true, "promotion_enabled": true,
-	"draft_step": true, "name": true, "channel_select_mid": true, "publish_now": true,
+	"captcha_mode": true,
+	"draft_step": true, "channel_select_mid": true, "publish_now": true,
 }
 
 // UpdateGiveawayField — точечное обновление одного поля черновика в процессе FSM.
@@ -193,11 +196,28 @@ func (s *Store) PublishDraft(ctx context.Context, id int64) error {
 	return err
 }
 
-// SetStatus — смена статуса (cancel/finish).
+// SetStatus — смена статуса (внутренние переходы: publishing→active и т.п.).
 // Явный cast: колонка status имеет тип giveaway_status (enum).
 func (s *Store) SetStatus(ctx context.Context, id int64, status string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE giveaways SET status=$2::giveaway_status WHERE id=$1`, id, status)
 	return err
+}
+
+// CancelGiveaway — отмена розыгрыша ПОЛЬЗОВАТЕЛЕМ. Владелец и допустимый
+// статус проверяются атомарно в SQL: отменить завершённый/уже отменённый
+// (crafted-callback или гонка с планировщиком) невозможно.
+func (s *Store) CancelGiveaway(ctx context.Context, id, ownerUserID int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE giveaways SET status='cancelled'::giveaway_status, updated_at=now()
+		WHERE id=$1 AND owner_user_id=$2 AND status IN ('scheduled','active')
+	`, id, ownerUserID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

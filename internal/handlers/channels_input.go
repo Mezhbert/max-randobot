@@ -14,7 +14,8 @@ import (
 // startAddChannel — переводит юзера в режим добавления канала.
 func (b *Bot) startAddChannel(ctx context.Context, uid int64) {
 	if err := b.db.SetSession(ctx, uid, store.SessionAddingChannel); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка: "+err.Error())
+		b.log.Warn("add channel: set session", "err", err, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать добавление канала. Попробуйте позже.")
 		return
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
@@ -102,9 +103,17 @@ func (b *Bot) handleAddChannelInput(ctx context.Context, uid int64, msg model.Me
 	}
 
 	// Проверяем админство и получаем инфу о чате.
+	// NOTE: в MAX chat_id каналов ОТРИЦАТЕЛЬНЫЕ (напр. -74970071115840,
+	// см. логи публикации), положительные — юзеры. Проверок на знак быть
+	// не должно: валидный id из форварда/ссылки всегда «ненулевой».
+	if chatID == 0 {
+		_ = b.api.SendText(ctx, uid, "⚠️ Не похоже на канал. Отправьте ссылку, ID канала или перешлите сообщение из него.")
+		return true
+	}
 	info, isAdmin, err := b.api.CheckChannelAdmin(ctx, chatID)
 	if err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось получить доступ к каналу. Убедитесь, что бот добавлен админом.\n("+err.Error()+")")
+		b.log.Warn("add channel: check admin", "err", err, "chat", chatID, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось получить доступ к каналу. Убедитесь, что бот добавлен админом, и повторите ещё раз.")
 		return true
 	}
 	if !isAdmin {
@@ -124,7 +133,10 @@ func (b *Bot) handleAddChannelInput(ctx context.Context, uid int64, msg model.Me
 		IsBotAdmin:  true,
 	})
 	if err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения канала: "+err.Error())
+		// Чаще всего — канал уже добавлен (UNIQUE owner+chat). Без текста
+		// ошибки: имя констрейнта — внутренняя деталь.
+		b.log.Warn("add channel: save", "err", err, "chat", chatID, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось сохранить канал (возможно, он уже добавлен).")
 		return true
 	}
 
@@ -201,7 +213,8 @@ func (b *Bot) toggleChannelSelection(ctx context.Context, uid int64, p string) {
 	}
 
 	if err := b.db.UpdateGiveawayField(ctx, g.ID, field, updated); err != nil {
-		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "⚠️ Ошибка обновления: "+err.Error(), nil)
+		b.log.Warn("toggle channel: update", "err", err, "field", field, "user", uid)
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "⚠️ Не удалось обновить выбор. Попробуйте позже.", nil)
 		return
 	}
 

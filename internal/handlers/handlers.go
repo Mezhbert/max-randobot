@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/maxbot/giveawaybot/internal/captcha"
 	"github.com/maxbot/giveawaybot/internal/dedup"
@@ -24,13 +25,14 @@ type Bot struct {
 	subs         *subscription.Checker
 	captcha      *captcha.Service
 	log          *slog.Logger
-	botUsername  string // публичное имя бота (для UTM-диплинков)
-	botUserID    int64  // ID бота (contact_id для open_app-кнопок: капча/итоги)
+	botUsername  string // публичное имя бота (для диплинков UTM/участия)
 	helpURL      string // публичный URL справки (/app/help.html) для link-кнопки
 	counterUpd   func(ctx context.Context, g *store.Giveaway) // обновление счётчика участников в постах (сеттится из main, опционально)
 	publishNow   func(ctx context.Context, giveawayID int64) // немедленная публикация после Принять (сеттится из main)
 	lastCounters map[int64]int64                                // giveaway_id → unix-time последнего обновления счётчика (троттлинг)
 	dedup        *dedup.Deduplicator                            // опционально; nil — без дедупликации
+	pendingMu    sync.Mutex                                     // защита pendingStarts
+	pendingStarts map[int64]string                              // user_id → payload диплинка (до доставки bot_started в Handle)
 }
 
 // New создаёт обработчика.
@@ -46,20 +48,14 @@ func New(api maxapi.BotAPI, db *store.Store, log *slog.Logger) *Bot {
 		captcha:      captcha.New(0),
 		log:          log,
 		lastCounters: make(map[int64]int64),
+		pendingStarts: make(map[int64]string),
 	}
 }
 
-// SetUsername задаёт публичное имя бота (для построения диплинков UTM).
+// SetUsername задаёт публичное имя бота (для построения диплинков UTM/участия).
 func (b *Bot) SetUsername(name string) {
 	if name != "" {
 		b.botUsername = strings.TrimPrefix(name, "@")
-	}
-}
-
-// SetBotUserID задаёт ID бота — contact_id для open_app-кнопок (капча, итоги).
-func (b *Bot) SetBotUserID(id int64) {
-	if id != 0 {
-		b.botUserID = id
 	}
 }
 
@@ -69,9 +65,6 @@ func (b *Bot) SetHelpURL(url string) {
 		b.helpURL = url
 	}
 }
-
-// CaptchaService отдаёт сервис капчи (для webapp-эндпоинтов).
-func (b *Bot) CaptchaService() *captcha.Service { return b.captcha }
 
 // SetCounterUpdater подключает функцию обновления счётчика участников
 // в опубликованных постах (вызывается из main со ссылкой на Scheduler).
@@ -152,24 +145,39 @@ func (b *Bot) Handle(ctx context.Context, u model.Update) {
 }
 
 // onBotStarted — пользователь запустил бота (или по диплинку ?start=...).
-// Показываем информативный стартовый экран с описанием функций.
+// Диплинк (кнопка участия part_/UTM): юзер «провалился» в диалог из канала —
+// стартовый экран не шлём (шум: следующим сообщением бот скажет, что делать —
+// капча/регистрация). Обычный /start — информативный экран с меню.
 func (b *Bot) onBotStarted(ctx context.Context, u model.Update) {
+	if p := b.takePendingStart(u.UserID); p != "" {
+		b.onBotStartedPayload(ctx, u.UserID, p)
+		return
+	}
 	b.sendStartScreen(ctx, u.UserID)
 }
 
-// OnDeepLinkStart — вызывается из main.go при bot_started с payload диплинка.
-// body — raw JSON вебхука (для извлечения user_id), payload — значение диплинка.
-func (b *Bot) OnDeepLinkStart(ctx context.Context, body []byte, payload string) {
-	defer func() {
-		if r := recover(); r != nil {
-			b.log.Error("panic in OnDeepLinkStart", "err", r)
-		}
-	}()
-	uid := maxapi.ParseStartedUserID(body)
-	if uid == 0 {
-		return
+// SetPendingStart запоминает payload диплинка до доставки апдейта в Handle.
+// Вызывается из webhook-сервера СИНХРОННО (до передачи body в SDK-хендлер):
+// к моменту `go bot.Handle(...)` payload уже ждёт — гонки двух горутин нет.
+// Нужен потому, что SDK-модель Update не парсит поле payload у bot_started.
+func (b *Bot) SetPendingStart(userID int64, payload string) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	if len(b.pendingStarts) > 10000 { // защита от утечки (апдейт не дошёл)
+		b.pendingStarts = make(map[int64]string)
 	}
-	b.onBotStartedPayload(ctx, uid, payload)
+	b.pendingStarts[userID] = payload
+}
+
+// takePendingStart забирает и очищает payload диплинка юзера ("" — нет).
+func (b *Bot) takePendingStart(userID int64) string {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	p, ok := b.pendingStarts[userID]
+	if ok {
+		delete(b.pendingStarts, userID)
+	}
+	return p
 }
 
 // onMessageCreated — текстовое сообщение пользователя.
@@ -237,7 +245,7 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 			_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 				"⚠️ Это пересланное сообщение, а на этом шаге нужно ввести СВОЙ текст.\n\n"+
 					fsm.PromptForStep(draft.DraftStep),
-				kbForStep(draft.DraftStep))
+				kbForStep(draft.DraftStep, draft))
 			return
 		}
 		b.handleDraftInput(ctx, uid, draft, text)

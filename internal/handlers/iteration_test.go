@@ -264,53 +264,6 @@ func TestEdit_PubChannelsAndFinish(t *testing.T) {
 
 // ---------- Участие ----------
 
-// TestParticipate_FromApp_NoBotMessages — участие через мини-апп
-// (ParticipateFromApp): регистрация без ЕДИНОГО сообщения от бота
-// (подтверждение рисует страница), notifiable=true если диалог начат.
-func TestParticipate_FromApp_NoBotMessages(t *testing.T) {
-	b, s, mock, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	g, ch := setupActiveGiveawayWithChannel(t, s, 6401)
-	mock.IsSubscriberMap = map[int64]map[int64]bool{ch.ChatID: {6401: true}}
-
-	before := len(mock.SnapshotSends())
-	res := b.ParticipateFromApp(g.ID, 6401)
-
-	assert.True(t, res.Ok, "участие через мини-апп должно регистрировать, err=%s", res.Err)
-	assert.True(t, res.Notifiable, "юзер с начатым диалогом — notifiable")
-	n, err := s.CountParticipants(ctx, g.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-
-	after := len(mock.SnapshotSends())
-	assert.Equal(t, before, after, "мини-апп-путь не должен слать сообщений от бота")
-
-	// Идемпотентность: повторный заход — тоже Ok, без дублей.
-	res = b.ParticipateFromApp(g.ID, 6401)
-	assert.True(t, res.Ok)
-	n, err = s.CountParticipants(ctx, g.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-}
-
-// TestParticipate_FromApp_NotSubscribed — отказ с причиной, без регистрации.
-func TestParticipate_FromApp_NotSubscribed(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	g, _ := setupActiveGiveawayWithChannel(t, s, 6402)
-	res := b.ParticipateFromApp(g.ID, 6402)
-
-	assert.False(t, res.Ok)
-	assert.Contains(t, res.Err, "подпишитесь")
-	n, err := s.CountParticipants(ctx, g.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 0, n, "без подписки участник не регистрируется")
-}
-
 // TestParticipants_KickAndCSV — удаление участника (анти-накрутка) и CSV.
 func TestParticipants_KickAndCSV(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
@@ -402,28 +355,29 @@ func TestResults_AppendedEscape(t *testing.T) {
 // ---------- Лампочка: хинт сообщением + Продолжить ----------
 
 // TestParticipateButton_IsCallback — кнопка участия под постом: CALLBACK
-// (part:<id>) — нажатие шлёт message_callback напрямую, без deep-link'ов
-// (link-кнопка с max.ru/<bot>/start/part_N на авто-имени бота не резолвилась
-// клиентом: «ссылка устарела», bot_started не приходил).
+// (part:<id>). Deep-link не годится: повторный клик у уже запущенного бота
+// открывает диалог на клиенте, но bot_started НЕ присылается — участие
+// терялось (подтверждено логами). Callback приходит всегда; капча-картинка
+// в личку открывает диалог с ботом.
 func TestParticipateButton_IsCallback(t *testing.T) {
-	kb := util.ParticipateKeyboardBuilder("Участвовать", 5, "mybot", 3, 42)
+	kb := util.ParticipateKeyboardBuilder("Участвовать", 5, 3)
 	btn := kb.Build().Payload.Buttons[0][0]
 	assert.Equal(t, model.ButtonCallback, btn.Type, "кнопка участия — callback")
 	assert.Equal(t, "part:5", btn.Payload)
 	assert.Contains(t, btn.Text, "(3)", "счётчик участников в подписи кнопки")
 }
 
-// TestOpenAppResultsButton_WebAppNotEmpty — кнопка итогов с botUserID, но
-// БЕЗ username (ранняя стадия старта) — заглушка вместо пустоты.
-func TestOpenAppResultsButton_WebAppNotEmpty(t *testing.T) {
-	sch := scheduler.New(nil, nil, nil)
-	sch.SetBotUserID(99)
-	// botUsername пуст — раньше web_app уходил пустым → "cannot be null".
-	atts := sch.ResultsKeyboardForTest(&store.Giveaway{ID: 7})
-	require.NotEmpty(t, atts)
-	btn := atts[0].Payload.Buttons[0][0]
-	assert.Equal(t, model.ButtonOpenApp, btn.Type)
-	assert.NotEmpty(t, btn.WebApp, "web_app у кнопки итогов не должен быть пустым")
+// TestMediaStepKeyboard_SkipVsNext — на шаге медиа кнопка зависит от наличия
+// медиа в черновике: «Пропустить» без медиа, «Далее →» после добавления.
+func TestMediaStepKeyboard_SkipVsNext(t *testing.T) {
+	kbEmpty := util.MediaStepKeyboard(false)
+	btnEmpty := kbEmpty.Build().Payload.Buttons[0][0]
+	assert.Equal(t, "⏭ Пропустить", btnEmpty.Text)
+
+	kbFull := util.MediaStepKeyboard(true)
+	btnFull := kbFull.Build().Payload.Buttons[0][0]
+	assert.Equal(t, "Далее →", btnFull.Text)
+	assert.Equal(t, util.CBFSMSkip, btnFull.Payload, "payload тот же: для media skip == переход дальше")
 }
 
 // TestMedia_NoDuplicateTokens — повторная отправка того же вложения (после

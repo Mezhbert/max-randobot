@@ -57,14 +57,15 @@ func (b *Bot) onUserRemoved(ctx context.Context, u model.Update) {
 	_ = b.db.UTMAccountUnsub(ctx, userID, chatID)
 }
 
-// onBotStartedPayload — обработка payload диплинка из bot_started.
-// payload приходит в формате "utm_<code>". Если есть — фиксируем клик + атрибуцию.
+// onBotStartedPayload — обработка payload диплинка из bot_started
+// (UTM-ссылки; part_ — легаси-посты с link-кнопкой участия).
 func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload string) {
 	if payload == "" {
 		return
 	}
 	b.log.Info("deeplink start", "user", userID, "payload", payload)
-	// Кнопка «Участвовать» под постом розыгрыша (deep link открывает диалог).
+	// Легаси-путь: пост со link-кнопкой участия (part_<id>) — обрабатываем
+	// как обычное нажатие «Участвовать».
 	if strings.HasPrefix(payload, "part_") {
 		idStr := strings.TrimPrefix(payload, "part_")
 		b.onParticipate(ctx, userID, idStr, "")
@@ -73,16 +74,22 @@ func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload str
 	// UTM-диплинк.
 	code := strings.TrimPrefix(payload, utmPayloadPrefix)
 	if code == "" || code == payload {
-		return // не UTM-диплинк
+		// Не UTM и не part_ — обычный запуск: показываем стартовый экран.
+		b.sendStartScreen(ctx, userID)
+		return
 	}
 	link, err := b.db.GetUTMLinkByCode(ctx, code)
 	if err != nil {
 		b.log.Debug("utm link not found", "code", code, "err", err)
+		// Код битый/устаревший — юзер всё равно пришёл: показываем бот.
+		b.sendStartScreen(ctx, userID)
 		return
 	}
 	if err := b.db.UTMRecordClick(ctx, link.ID, userID); err != nil {
 		b.log.Warn("utm record click", "err", err)
 	}
+	// Диалог только что открылся ссылкой — без экрана юзер висел бы в пустом чате.
+	b.sendStartScreen(ctx, userID)
 }
 
 // showUTMMenu — меню конкретного канала: генерация UTM / аналитика.
@@ -149,8 +156,15 @@ func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 	if err != nil {
 		return
 	}
+	// Канал должен принадлежать юзеру — crafted-callback с чужим channel_id
+	// иначе привязал бы трекинг-ссылку к чужому каналу (см. showUTMMenu).
+	if _, err := b.db.GetChannel(ctx, chID, uid); err != nil {
+		_ = b.api.SendText(ctx, uid, "Канал не найден.")
+		return
+	}
 	if err := b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{"channel_id": float64(chID)}); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+		b.log.Warn("utm: set session", "err", err, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать создание ссылки. Попробуйте позже.")
 		return
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
@@ -178,15 +192,16 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 	chID := int64(chIDf2)
 
 	source := strings.TrimSpace(text)
-	if source == "" {
-		_ = b.api.SendText(ctx, uid, "⚠️ Название не может быть пустым. Отправьте название источника.")
+	if err := util.ValidateUTMSource(source); err != nil {
+		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
 		return true
 	}
 
 	// Генерим ссылку: source — что ввёл юзер, остальное авто.
 	code := util.RandomCode(10)
 	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "referral", source, "", code); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка: "+err.Error())
+		b.log.Warn("utm: create link", "err", err, "user", uid, "channel", chID)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось создать ссылку. Попробуйте позже.")
 		return true
 	}
 	_ = b.db.ClearSession(ctx, uid)
@@ -287,9 +302,16 @@ func (b *Bot) exportUTMCSV(ctx context.Context, uid int64, p string) {
 		util.ChannelUTMKeyboard(chID))
 }
 
+// csvEscape — quoting по RFC 4180 + нейтрализация формул Excel/LibreOffice
+// (leading = + - @ или таб). Имена UTM-источников и профили участников —
+// пользовательский ввод; без префикса '=HYPERLINK(...)' исполняется при
+// открытии выгрузки организатором.
 func csvEscape(s string) string {
-	if strings.ContainsAny(s, ",\"\n") {
-		return "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
+	if strings.ContainsAny(s, ",\"\n\r") {
+		s = "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
+	}
+	if len(s) > 0 && strings.ContainsRune("=+-@\t", rune(s[0])) {
+		return "'" + s
 	}
 	return s
 }

@@ -184,8 +184,8 @@ func (b *Bot) handleEditFieldInput(ctx context.Context, uid int64, text string) 
 	// Особый случай: ввод целевого числа участников (finish_mode=count).
 	if fieldKey == "finish_count" {
 		n, err := strconv.Atoi(strings.TrimSpace(text))
-		if err != nil || n < 2 {
-			_ = b.api.SendText(ctx, uid, "⚠️ Введите целое число ≥ 2.")
+		if err != nil || n < 2 || n > 1000000 {
+			_ = b.api.SendText(ctx, uid, "⚠️ Введите целое число от 2 до 1000000.")
 			return true
 		}
 		_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "finish_participants_count", n)
@@ -207,12 +207,22 @@ func (b *Bot) handleEditFieldInput(ctx context.Context, uid int64, text string) 
 	case "date":
 		t, err := util.ParseMoscowTime(strings.TrimSpace(text))
 		if err != nil {
-			_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+			_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error()) // авторский текст парсера
 			return true
 		}
-		if fieldKey == "publish_at" && !t.After(time.Now()) {
-			_ = b.api.SendText(ctx, uid, "⚠️ Время публикации должно быть в будущем.")
-			return true
+		if fieldKey == "publish_at" {
+			if !t.After(time.Now()) {
+				_ = b.api.SendText(ctx, uid, "⚠️ Время публикации должно быть в будущем.")
+				return true
+			}
+			// Перекрёстная проверка: публикация не позже итогов (иначе розыгрыш
+			// выйдет и мгновенно завершится без участников). Зеркало проверок finish_at.
+			if g.FinishMode != "count" && g.FinishAt != nil && !t.Before(*g.FinishAt) {
+				_ = b.api.SendText(ctx, uid, fmt.Sprintf(
+					"⚠️ Публикация должна быть раньше итогов (%s).",
+					g.FinishAt.In(util.MoscowLocation()).Format("02.01.2006 15:04")))
+				return true
+			}
 		}
 		if fieldKey == "finish_at" {
 			if g.PublishAt != nil && !t.After(*g.PublishAt) {
@@ -244,11 +254,30 @@ func (b *Bot) handleEditFieldInput(ctx context.Context, uid int64, text string) 
 			_ = b.api.SendText(ctx, uid, "⚠️ Значение не может быть пустым.")
 			return true
 		}
+		// Лимиты — те же, что при создании (см. util/validate.go).
+		var verr error
+		switch fieldKey {
+		case "name":
+			verr = util.ValidateName(text)
+		case "post_text":
+			verr = util.ValidatePostText(text)
+		case "button_text":
+			verr = util.ValidateButtonText(text)
+		case "winners_msg":
+			verr = util.ValidateLongText("Сообщение победителям", text)
+		case "results_text":
+			verr = util.ValidateLongText("Текст итогов", text)
+		}
+		if verr != nil {
+			_ = b.api.SendText(ctx, uid, "⚠️ "+verr.Error())
+			return true
+		}
 		val = text
 	}
 
 	if err := b.db.UpdateGiveawayFieldAny(ctx, g.ID, def.col, val); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения: "+err.Error())
+		b.log.Warn("edit field: save", "err", err, "field", fieldKey, "id", g.ID, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось сохранить значение. Попробуйте позже.")
 		return true
 	}
 	_ = b.db.ClearSession(ctx, uid)
@@ -406,7 +435,8 @@ func (b *Bot) handleEditMediaInput(ctx context.Context, uid int64, msg model.Mes
 		return true
 	}
 	if err := b.db.UpdateGiveawayFieldAny(ctx, g.ID, "media_tokens", all); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения: "+err.Error())
+		b.log.Warn("edit media: save", "err", err, "id", g.ID, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось сохранить медиа. Попробуйте позже.")
 		return true
 	}
 	// Подтверждение с кнопкой «Готово» на каждом шаге приёма — флоу не сбивается.
@@ -549,7 +579,8 @@ func (b *Bot) toggleEditChannel(ctx context.Context, uid int64, p string) {
 	}
 
 	if err := b.db.UpdateGiveawayFieldAny(ctx, g.ID, field, updated); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка обновления: "+err.Error())
+		b.log.Warn("edit channels: update", "err", err, "field", field, "id", g.ID, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось обновить список каналов. Попробуйте позже.")
 		return
 	}
 	// Перерисовываем пикер с актуальным выбором.
@@ -603,16 +634,14 @@ func (b *Bot) pickExtraWinner(ctx context.Context, uid, gid int64) {
 	// Дописываем к победителям.
 	all := append(append([]int64{}, g.WinnersUserIDs...), extra...)
 	if err := b.db.SaveWinners(ctx, g.ID, all); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения: "+err.Error())
+		b.log.Warn("extra winner: save", "err", err, "id", g.ID, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось сохранить победителя. Попробуйте позже.")
 		return
 	}
 
-	// Резолвим имя и оповещаем.
+	// Резолвим имя (@username → имя → #id) и оповещаем.
 	u, _ := b.db.GetUser(ctx, extra[0])
-	name := fmt.Sprintf("Участник #%d", extra[0])
-	if u.FirstName != "" {
-		name = u.FirstName
-	}
+	name := util.DisplayName(extra[0], u.Username, u.FirstName)
 	mention := fmt.Sprintf("[%s](max://user/%d)", escapeMarkdown(name), extra[0])
 	_ = b.api.SendText(ctx, uid, fmt.Sprintf("🎲 Доп. победитель: %s", mention))
 

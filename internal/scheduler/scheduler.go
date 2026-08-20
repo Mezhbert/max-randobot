@@ -28,11 +28,9 @@ const staleClaimAge = 5 * time.Minute
 
 // Scheduler содержит логику операций по расписанию.
 type Scheduler struct {
-	api         maxapi.BotAPI
-	db          *store.Store
-	log         *slog.Logger
-	botUsername string // для построения deep-link кнопки «Участвовать»
-	botUserID   int64  // для open_app-кнопки «Проверить результаты» (contact_id)
+	api maxapi.BotAPI
+	db  *store.Store
+	log *slog.Logger
 }
 
 // New создаёт Scheduler.
@@ -41,20 +39,6 @@ func New(api maxapi.BotAPI, db *store.Store, log *slog.Logger) *Scheduler {
 		log = slog.Default()
 	}
 	return &Scheduler{api: api, db: db, log: log}
-}
-
-// SetBotUsername задаёт публичное имя бота (для deep-link кнопки участия).
-func (s *Scheduler) SetBotUsername(name string) {
-	if name != "" {
-		s.botUsername = name
-	}
-}
-
-// SetBotUserID задаёт ID бота (contact_id для open_app-кнопки результатов).
-func (s *Scheduler) SetBotUserID(id int64) {
-	if id != 0 {
-		s.botUserID = id
-	}
 }
 
 // PublishPending публикует все scheduled-розыгрыши, у которых наступило publish_at.
@@ -112,10 +96,10 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 		return fmt.Errorf("publish: нет каналов публикации")
 	}
 
-	// Кнопка участия со счётчиком участников (стартует с 0). Если мини-апп
-	// настроен (botUserID) — open_app: участие внутри мини-аппа, без перехода
-	// в чат бота; иначе deep-link fallback.
-	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, 0, s.botUserID).Build()}
+	// Кнопка участия со счётчиком участников (стартует с 0): deep-link
+	// max.ru/<bot>/start/part_N — клиент открывает диалог с ботом, участие
+	// принимается там. Без username — callback-fallback.
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, 0).Build()}
 	var media []model.Attachment
 	for _, m := range g.MediaTokens {
 		switch m.Type {
@@ -182,7 +166,7 @@ func (s *Scheduler) UpdateParticipantCounter(ctx context.Context, g *store.Givea
 		return
 	}
 
-	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, s.botUsername, count, s.botUserID).Build()}
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, count).Build()}
 	var media []model.Attachment
 	for _, m := range g.MediaTokens {
 		switch m.Type {
@@ -286,26 +270,23 @@ func (s *Scheduler) finishOne(ctx context.Context, id int64) error {
 
 // publishResults публикует итоги: либо редактирует исходный пост, либо (при
 // ошибке/недоступности редактирования — fallback) отправляет отдельным постом.
-// Победители — кликабельные упоминания markdown [Имя](max://user/ID).
-// Вместо кнопки участия — кнопка «🏆 Проверить результаты» (open_app мини-апп).
+// Победители — списком @юзернеймов с кликабельными тегами прямо в тексте:
+// никакой кнопки под итогами не нужно (мини-апп результатов удалён).
 // Гарантия: итоги появляются ровно один раз.
 func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winners []int64) error {
 	// Резолвим имена победителей через БД.
 	ws := s.resolveWinners(ctx, winners)
 
-	// Кнопка «Проверить результаты» — открывает мини-апп с деталями.
-	resultsBtn := s.resultsKeyboard(g)
-
 	if g.ResultsInOriginalPost && len(g.PublishMessageIDs) > 0 {
 		// Ветка «в исходном посте»: оригинальный текст сохраняется, итоги дописываются.
 		appendedText := BuildResultsAppended(g, ws)
 		for chatID, mid := range g.PublishMessageIDs {
-			if err := s.api.EditChatText(ctx, mid, appendedText, resultsBtn, model.FormatMarkdown); err != nil {
+			if err := s.api.EditChatText(ctx, mid, appendedText, nil, model.FormatMarkdown); err != nil {
 				// MAX ограничивает время на редактирование сообщения; для длинного
 				// розыгрыша edit молча падал. Логируем и делаем fallback — отдельный пост.
 				s.log.Warn("edit results into original post — fallback to separate post",
 					"giveaway", g.ID, "chat", chatID, "mid", mid, "err", err)
-				if nmid, ferr := s.api.SendToChat(ctx, chatID, appendedText, resultsBtn, model.FormatMarkdown); ferr == nil {
+				if nmid, ferr := s.api.SendToChat(ctx, chatID, appendedText, nil, model.FormatMarkdown); ferr == nil {
 					_ = s.db.StoreResultsMessageID(ctx, g.ID, chatID, nmid)
 				} else {
 					s.log.Error("results fallback send failed", "giveaway", g.ID, "chat", chatID, "err", ferr)
@@ -326,7 +307,7 @@ func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winne
 		if _, ok := g.ResultsMessageIDs[ch.ChatID]; ok {
 			continue
 		}
-		mid, err := s.api.SendToChat(ctx, ch.ChatID, resultsText, resultsBtn, model.FormatMarkdown)
+		mid, err := s.api.SendToChat(ctx, ch.ChatID, resultsText, nil, model.FormatMarkdown)
 		if err != nil {
 			s.log.Warn("results post to channel", "channel", ch.ChatID, "err", err)
 			continue
@@ -336,36 +317,6 @@ func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winne
 	return s.db.SetResultsPublished(ctx, g.ID)
 }
 
-// resultsKeyboard — клавиатура с кнопкой «Проверить результаты» (open_app).
-// Если botUserID неизвестен — callback-кнопка (мини-апп не настроен).
-// web_app REQUIRED у OpenAppButton (MAX: "Field 'webApp' cannot be null"),
-// при contact_id игнорируется — заглушка, как в SDK AddOpenApp.
-func (s *Scheduler) resultsKeyboard(g *store.Giveaway) []model.Attachment {
-	kb := model.NewKeyboard()
-	if s.botUserID != 0 {
-		webApp := s.botUsername
-		if webApp == "" {
-			webApp = "app" // required-заглушка (игнорируется при contact_id)
-		}
-		btn := model.Button{
-			Type:      model.ButtonOpenApp,
-			Text:      "🏆 Проверить результаты",
-			WebApp:    webApp,
-			ContactID: s.botUserID,
-			Payload:   fmt.Sprintf("results_%d", g.ID),
-		}
-		kb.AddRow().AddButton(btn)
-	} else {
-		kb.AddRow().AddCallBack("🏆 Итоги подведены", "results_done:"+fmt.Sprintf("%d", g.ID))
-	}
-	return []model.Attachment{kb.Build()}
-}
-
-// ResultsKeyboardForTest — экспорт resultsKeyboard для тестов (проверка web_app).
-func (s *Scheduler) ResultsKeyboardForTest(g *store.Giveaway) []model.Attachment {
-	return s.resultsKeyboard(g)
-}
-
 // Winner — победитель с именем и ID (для кликабельного упоминания).
 type Winner struct {
 	Name   string
@@ -373,15 +324,17 @@ type Winner struct {
 }
 
 // resolveWinners резолвит ID победителей в имена через БД.
+// Отображение: @username → имя → «Участник #id» (см. util.DisplayName) —
+// список победителей по юзернеймам, как принято в розыгрышах.
 func (s *Scheduler) resolveWinners(ctx context.Context, ids []int64) []Winner {
 	ws := make([]Winner, 0, len(ids))
 	for _, id := range ids {
 		u, err := s.db.GetUser(ctx, id)
-		if err != nil || u.FirstName == "" {
+		if err != nil {
 			ws = append(ws, Winner{Name: fmt.Sprintf("Участник #%d", id), UserID: id})
 			continue
 		}
-		ws = append(ws, Winner{Name: u.FirstName, UserID: id})
+		ws = append(ws, Winner{Name: util.DisplayName(id, u.Username, u.FirstName), UserID: id})
 	}
 	return ws
 }
@@ -400,17 +353,15 @@ func escapeMarkdownName(s string) string {
 	return r.Replace(s)
 }
 
-// winnersLine — строка победителей (упоминания через запятую или списком).
+// winnersLine — список победителей: каждый СВОЕЙ строкой с буллетом,
+// упоминание кликабельно (тап → профиль, юзеру приходит уведомление).
+// Запятая в одну строку читалась плохо и ломала перенос на длинных списках.
 func winnersLine(ws []Winner) string {
 	parts := make([]string, 0, len(ws))
 	for _, w := range ws {
-		parts = append(parts, mentionLink(w))
+		parts = append(parts, "• "+mentionLink(w))
 	}
-	sep := ", "
-	if len(ws) > 5 {
-		sep = "\n• "
-	}
-	return strings.Join(parts, sep)
+	return strings.Join(parts, "\n")
 }
 
 // BuildResultsText строит текст отдельного поста с итогами (markdown, упоминания).
@@ -419,13 +370,13 @@ func BuildResultsText(g *store.Giveaway, ws []Winner) string {
 	if body == "" {
 		body = "🏁 Итоги розыгрыша"
 	}
-	return fmt.Sprintf("%s\n\nПобедители (%d): %s", body, len(ws), winnersLine(ws))
+	return fmt.Sprintf("%s\n\nПобедители (%d):\n%s", body, len(ws), winnersLine(ws))
 }
 
 // BuildResultsAppended сохраняет оригинальный текст поста розыгрыша и дополняет
 // его блоком итогов с кликабельными победителями (markdown-упоминания).
 func BuildResultsAppended(g *store.Giveaway, ws []Winner) string {
-	suffix := fmt.Sprintf("🏁 Итоги!\nПобедители (%d): %s", len(ws), winnersLine(ws))
+	suffix := fmt.Sprintf("🏁 Итоги!\nПобедители (%d):\n%s", len(ws), winnersLine(ws))
 	if g.PostText == "" {
 		return suffix
 	}

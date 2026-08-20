@@ -1,0 +1,11 @@
+*.sum
+/debug
+
+.DS_Store
+**/.DS_Store
+
+.env
+.vscode
+.idea
+.run
+/vendor

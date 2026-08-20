@@ -187,16 +187,35 @@ func ConfirmErrorKeyboard(giveawayID int64) *model.Keyboard {
 
 // ParticipateKeyboardBuilder — кнопка «Участвовать (N)» под постом розыгрыша.
 //
-// CALLBACK-кнопка (part:<id>): нажатие шлёт message_callback напрямую боту —
-// не зависит от deep-link'ов и bot_started (link-кнопка с
-// max.ru/<bot>/start/part_<id> на авто-имени бота вида id123_bot не
-// резолвилась клиентом: «ссылка устарела», событие не приходило).
-// Ответ бота в диалог открывает чат с участником.
-func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, botUsername string, participants int, botUserID int64) *model.Keyboard {
+// CALLBACK-кнопка (part:<id>): message_callback приходит ВСЕГДА, в отличие от
+// deep-link. Проверено живьём: повторный клик max.ru/<bot>/start/part_N у уже
+// запущенного бота просто открывает диалог на клиенте — bot_started НЕ
+// присылается (в логах ни одного вебхука на клик) → участие терялось.
+// Ответ бота в личку (капча-картинка / карточка «Вы участвуете») открывает
+// диалог с ботом — юзер «проваливается» в чат.
+func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, participants int) *model.Keyboard {
 	kb := model.NewKeyboard()
 	label := fmt.Sprintf("%s (%d)", buttonText, participants)
 	kb.AddRow().AddCallBack(label, CBParticipate+strconv.FormatInt(giveawayID, 10))
 	return kb
+}
+
+// MediaStepKeyboard — клавиатура шага медиа в создании розыгрыша.
+// hasMedia=false → «⏭ Пропустить» (медиа опциональны);
+// hasMedia=true  → «Далее →» (медиа уже добавлено — «Пропустить» сбивает
+// с толку). Условие динамическое: в каждом черновике своё (удалили медиа
+// в редактуре → снова «Пропустить»), никакого перманентного переименования.
+func MediaStepKeyboard(hasMedia bool) *model.Keyboard {
+	if hasMedia {
+		kb := model.NewKeyboard()
+		kb.AddRow().AddCallBack("Далее →", CBFSMSkip)
+		kb.AddRow().
+			AddCallBack("💡", CBFSMHint).
+			AddCallBack("← Назад", CBFSMBack).
+			AddCallBack("✖ Отменить", CBFSMCancel)
+		return kb
+	}
+	return NavWithSkipKeyboard()
 }
 
 // PreviewKeyboardBuilder — кнопка участия для ПРЕДПРОСМОТРА (с пометкой "превью",
@@ -211,8 +230,7 @@ func PreviewKeyboardBuilder(buttonText string, giveawayID int64) *model.Keyboard
 // GiveawayAttachments строит список вложений для поста розыгрыша:
 // медиа (image/video по токенам) + inline-клавиатура кнопки участия.
 // Используется и при публикации, и при предпросмотре (preview=true → PreviewKeyboard).
-// botUsername — для построения deep-link кнопки участия (fallback-путь).
-func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []MediaTokenSimple, preview bool, botUsername string, botUserID int64) []model.Attachment {
+func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []MediaTokenSimple, preview bool) []model.Attachment {
 	var attachments []model.Attachment
 	for _, m := range mediaTokens {
 		switch m.Type {
@@ -233,7 +251,7 @@ func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []Medi
 	if preview {
 		kb = PreviewKeyboardBuilder(buttonText, giveawayID)
 	} else {
-		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, botUsername, 0, botUserID)
+		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, 0)
 	}
 	attachments = append(attachments, kb.Build())
 	return attachments

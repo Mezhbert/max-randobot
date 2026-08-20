@@ -29,24 +29,25 @@ func (b *Bot) handleMediaInput(ctx context.Context, uid int64, g store.Giveaway,
 	if len(newTokens) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 			"Не увидел фото/видео во вложениях. Пришлите медиа или нажмите «Пропустить».",
-			util.NavWithSkipKeyboard())
+			util.MediaStepKeyboard(len(g.MediaTokens) > 0))
 		return
 	}
 	// Добавляем к уже сохранённым (без дублей токенов).
 	all, added := mergeMediaTokens(g.MediaTokens, newTokens)
 	if added == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"ℹ️ Это медиа уже добавлено в пост (всего: "+strconv.Itoa(len(all))+"). Пришлите другое или «Пропустить».",
-			util.NavWithSkipKeyboard())
+			"ℹ️ Это медиа уже добавлено в пост (всего: "+strconv.Itoa(len(all))+"). Пришлите другое или «Далее →».",
+			util.MediaStepKeyboard(true))
 		return
 	}
 	if err := b.db.UpdateGiveawayField(ctx, g.ID, "media_tokens", all); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка сохранения медиа: "+err.Error())
+		b.log.Warn("media input: save", "err", err, "id", g.ID, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось сохранить медиа. Попробуйте позже.")
 		return
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"✅ Медиа добавлено ("+strconv.Itoa(len(all))+" шт.). Можно добавить ещё или нажать «Пропустить».",
-		util.NavWithSkipKeyboard())
+		"✅ Медиа добавлено ("+strconv.Itoa(len(all))+" шт.). Можно добавить ещё или нажмите «Далее →».",
+		util.MediaStepKeyboard(true))
 }
 
 // mergeMediaTokens объединяет существующие и новые медиа-токены без дублей

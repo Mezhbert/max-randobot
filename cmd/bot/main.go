@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -81,14 +80,6 @@ func main() {
 	bot.SetPublishNow(sch.PublishGiveawayNow)
 	bot.SetHelpURL(cfg.WebhookURL + "/app/help.html")
 
-	// Deps мини-аппа (указатель — BotUsername вписывается после GetMyInfo).
-	webappDeps := &webapp.Deps{
-		DB:         db,
-		Captcha:    bot.CaptchaService(),
-		BotToken:   cfg.BotToken,
-		Participate: bot.ParticipateFromApp,
-	}
-
 	schedCtx, schedStop := context.WithCancel(context.Background())
 	defer schedStop()
 	go runScheduler(schedCtx, sch)
@@ -102,24 +93,15 @@ func main() {
 		}
 	}()
 
-	// Узнаём публичное имя бота — нужно для построения UTM-диплинков (max.ru/<bot>/start/...).
+	// Узнаём публичное имя бота — нужно для построения UTM-диплинков.
 	// Заодно регистрируем меню команд бота (PatchCommands), чтобы при вводе «/»
 	// в MAX появлялся список доступных команд, а не «команды не найдены».
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if info, err := api.Bots.GetMyInfo(ic); err == nil {
-			if info.Username != "" {
-				bot.SetUsername(info.Username)
-				sch.SetBotUsername(info.Username)
-				webappDeps.BotUsername = strings.TrimPrefix(info.Username, "@") // deep-link opt-in на странице участия
-				slog.Info("bot username", "name", info.Username)
-			}
-			if info.UserID != 0 {
-				bot.SetBotUserID(info.UserID)
-				sch.SetBotUserID(info.UserID)
-				slog.Info("bot user_id (для open_app)", "id", info.UserID)
-			}
+		if info, err := api.Bots.GetMyInfo(ic); err == nil && info.Username != "" {
+			bot.SetUsername(info.Username)
+			slog.Info("bot username", "name", info.Username)
 		}
 		if err := api.RegisterCommands(ic); err != nil {
 			slog.Warn("register bot commands (продолжаю)", "err", err)
@@ -140,6 +122,17 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookPath, func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		// Секрет проверяем ДО любого разбора body: раньше ParseStartedPayload
+		// запускал обработку диплинка до того, как библиотечный handler
+		// проверял X-Max-Bot-Api-Secret — подделанный bot_started регистрировал
+		// участников без подписи. Здесь — граница доверия, дальше всё аутентично.
+		if secret := r.Header.Get("X-Max-Bot-Api-Secret"); secret == "" || secret != cfg.WebhookSecret {
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		// Лимит тела: апдейты MAX — килобайты; гигабайтный POST не должен
+		// съедать память процесса.
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "bad body", http.StatusBadRequest)
@@ -148,10 +141,14 @@ func main() {
 		r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
 
-		// Если это bot_started с payload диплинка (utm_X) — фиксируем клик UTM.
+		// bot_started с payload диплинка (part_/utm_): payload недоступен в
+		// SDK-модели Update — запоминаем СИНХРОННО до передачи body в SDK-хендлер,
+		// чтобы onBotStarted в Handle забрал его без гонки (и не слал стартовый
+		// экран поверх целевого сообщения — юзер «провалился» в диалог по кнопке).
 		if payload := maxapi.ParseStartedPayload(body); payload != "" {
-			// Достаём user_id тем же парсингом.
-			go bot.OnDeepLinkStart(context.Background(), body, payload)
+			if uid := maxapi.ParseStartedUserID(body); uid > 0 {
+				bot.SetPendingStart(uid, payload)
+			}
 		}
 
 		webhookHandler.ServeHTTP(w, r)
@@ -170,8 +167,8 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		api.Metrics().WritePrometheus(w)
 	})
-	// Мини-апп: статика + API (главная, участие, капча, итоги).
-	mux.Handle("/app/", webapp.Handler(webappDeps, slog.Default()))
+	// Мини-апп: только главный экран с описанием (+ справка для «Поддержка»).
+	mux.Handle("/app/", webapp.Handler())
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

@@ -188,12 +188,14 @@ func statusName(status string) string {
 	return status
 }
 
-// truncate обрезает текст до max символов, добавляя «…».
+// truncate обрезает текст до max РУН (не байт — иначе кириллица режется
+// посимвольно и в кнопки попадает «�»), добавляя «…».
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	runes := []rune(s)
+	if len(runes) <= max {
 		return s
 	}
-	return s[:max-1] + "…"
+	return string(runes[:max-1]) + "…"
 }
 
 // showAnalyticsMenu — главная аналитика: трекинг-ссылки, розыгрыши, каналы.

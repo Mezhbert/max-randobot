@@ -427,11 +427,11 @@ func (a *API) PinChatMessage(ctx context.Context, chatID int64, messageID string
 
 // RegisterCommands регистрирует меню команд бота в MAX (PATCH /me/commands).
 // После этого при вводе «/» в диалоге появляется список доступных команд вместо
-// «команды не найдены». Список должен совпадать с командами, которые реально
-// обрабатывает бот (см. handlers.onMessageCreated).
+// «команды не найдены». В подсказках — только /menu: /start обрабатывается
+// (в т.ч. диплинками), но не рекламируется — лишняя команда в подсказке
+// сбивает с толку.
 func (a *API) RegisterCommands(ctx context.Context) error {
 	commands := []model.BotCommand{
-		{Name: "/start", Description: "Запустить бота — описание и меню"},
 		{Name: "/menu", Description: "Показать главное меню"},
 	}
 	a.rl.wait(ctx)

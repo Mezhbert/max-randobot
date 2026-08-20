@@ -82,6 +82,16 @@ func (c *Config) validate() error {
 	if c.MaxRPS < 1 || c.MaxRPS > 30 {
 		errs = append(errs, "MAX_RPS должен быть 1-30 (лимит платформы MAX — 30 rps)")
 	}
+	// HTTP-пути: без ведущего «/» ServeMux молча не зарегистрирует роут,
+	// а неверный порт упадёт лишь в момент listen — проверяем на старте.
+	for name, p := range map[string]string{"WEBHOOK_PATH": c.WebhookPath, "METRICS_PATH": c.MetricsPath} {
+		if !strings.HasPrefix(p, "/") || p == "/" || strings.Contains(p, "..") {
+			errs = append(errs, name+" должен начинаться с «/» и быть путём (получено: "+strconv.Quote(p)+")")
+		}
+	}
+	if _, err := strconv.Atoi(c.HTTPPort); err != nil {
+		errs = append(errs, "HTTP_PORT должен быть числом (получено: "+strconv.Quote(c.HTTPPort)+")")
+	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
 	}
