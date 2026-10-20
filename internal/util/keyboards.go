@@ -41,7 +41,8 @@ const (
 	CBGwCSVParts     = "gw_csv:"                     // + giveaway_id (экспорт участников CSV)
 
 	// UTM-трекинг (общее)
-	CBUTMQuickCreate = "utm_quick" // быстрая трекинг-ссылка без канала
+	CBUTMQuickCreate = "utm_quick"      // быстрая трекинг-ссылка без канала
+	CBUTMSkipPost    = "utm_post_skip" // билдер ссылки: пропустить пост-источник
 
 	// Каналы
 	CBChannelAdd       = "ch_add"
@@ -307,6 +308,14 @@ func AnalyticsKeyboard(giveawayID int64) *model.Keyboard {
 // CancelKeyboard — кнопка отмены произвольного режима.
 func CancelKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("✖ Отмена", CBMainMenu)
+	return kb
+}
+
+// PostRefKeyboard — шаг билдера трекинг-ссылки: пост-источник (пропуск/отмена).
+func PostRefKeyboard() *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("⏭ Без поста-источника", CBUTMSkipPost)
 	kb.AddRow().AddCallBack("✖ Отмена", CBMainMenu)
 	return kb
 }

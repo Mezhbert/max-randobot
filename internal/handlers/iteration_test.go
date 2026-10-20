@@ -303,6 +303,7 @@ func TestParticipants_KickAndCSV(t *testing.T) {
 // ---------- UTM без канала ----------
 
 // TestUTM_QuickNoChannel — трекинг-ссылка из «Аналитика» создаётся без канала.
+// Билдер двухшаговый: источник → пост-источник.
 func TestUTM_QuickNoChannel(t *testing.T) {
 	b, s, _, cleanup := newBot(t)
 	defer cleanup()
@@ -312,20 +313,39 @@ func TestUTM_QuickNoChannel(t *testing.T) {
 
 	b.Handle(ctx, callbackUpdate(uid, util.CBAnalytics))
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
-	b.Handle(ctx, msgUpdate(uid, "Реклама у Петрова"))
+	b.Handle(ctx, msgUpdate(uid, "Реклама у Петрова"))  // шаг 1: источник
+	b.Handle(ctx, msgUpdate(uid, "Пост в TG от 15.10")) // шаг 2: пост-источник
 
-	links, err := s.ListUTMStats(ctx, uid, 0)
-	require.NoError(t, err)
-	_ = links // channel_id=0 фильтр может не вернуть; проверяем через все.
 	all, err := s.ListUTMStatsAll(ctx, uid)
 	require.NoError(t, err)
 	found := false
 	for _, l := range all {
 		if l.Source == "Реклама у Петрова" {
 			found = true
+			assert.Equal(t, "Пост в TG от 15.10", l.PostRef, "пост-источник должен сохраниться")
 		}
 	}
 	assert.True(t, found, "быстрая UTM-ссылка должна создаться без канала")
+}
+
+// TestUTM_SkipPost — кнопка «⏭ Без поста-источника»: ссылка создаётся,
+// post_ref пустой.
+func TestUTM_SkipPost(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6602
+	testutil.EnsureUser(t, s, uid, "owner")
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
+	b.Handle(ctx, msgUpdate(uid, "Сторис"))
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipPost))
+
+	all, err := s.ListUTMStatsAll(ctx, uid)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.Equal(t, "Сторис", all[0].Source)
+	assert.Equal(t, "", all[0].PostRef, "пропуск поста → пустой post_ref")
 }
 
 // ---------- Итоги: экранирование ----------

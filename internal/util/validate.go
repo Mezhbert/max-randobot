@@ -60,6 +60,15 @@ func ValidateUTMSource(s string) error {
 	return checkLen("Название источника", s, MaxUTMSourceLen)
 }
 
+// ValidatePostRef — пост-источник трекинг-ссылки (куда ссылка будет размещена):
+// одна строка (ссылка на пост или описание «Сторис от 15.10»), до 128 символов.
+func ValidatePostRef(s string) error {
+	if strings.ContainsAny(s, "\n\r") {
+		return errors.New("пост-источник должен быть одной строкой: ссылкой на пост или коротким описанием")
+	}
+	return checkLen("Пост-источник", s, 128)
+}
+
 // checkLen — длина в рунах в пределах max. Сообщение готово для показа юзеру.
 func checkLen(what, s string, max int) error {
 	if n := utf8.RuneCountInString(s); n > max {

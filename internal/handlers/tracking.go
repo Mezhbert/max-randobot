@@ -175,7 +175,12 @@ func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 		util.CancelKeyboard())
 }
 
-// handleUTMCreateInput — ввод названия источника для UTM-ссылки.
+// handleUTMCreateInput — билдер трекинг-ссылки, два шага:
+//  1. название источника (откуда идёт трафик в целом);
+//  2. пост-источник (ссылка на конкретный пост/сторис, где будет размещена
+//     ссылка) — в аналитике и CSV видно, какой пост привёл подписчиков.
+//
+// Сессия payload: {channel_id, stage: "source"|"post", source}.
 func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) bool {
 	sess, err := b.db.GetSessionPayload(ctx, uid)
 	if err != nil || sess.State != store.SessionUTMCreate {
@@ -190,19 +195,51 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 	}
 	chIDf2, _ := chIDf.(float64)
 	chID := int64(chIDf2)
+	stage, _ := sess.Payload["stage"].(string)
 
-	source := strings.TrimSpace(text)
-	if err := util.ValidateUTMSource(source); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+	if stage != "post" {
+		// Шаг 1: название источника.
+		source := strings.TrimSpace(text)
+		if err := util.ValidateUTMSource(source); err != nil {
+			_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+			return true
+		}
+		if err := b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
+			"channel_id": chIDf2, "stage": "post", "source": source,
+		}); err != nil {
+			b.log.Warn("utm: set session", "err", err, "user", uid)
+			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать создание ссылки. Попробуйте позже.")
+			return true
+		}
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"📍 Пост-источник (необязательно).\n\n"+
+				"Где будет размещена ссылка? Отправьте ссылку на конкретный пост "+
+				"или короткое описание (напр. «Пост в TG от 15.10», «Сторис»). "+
+				"В аналитике будет видно, какой пост привёл каждого подписчика.\n\n"+
+				"Можно пропустить — тогда привязки к посту не будет.",
+			util.PostRefKeyboard())
 		return true
 	}
 
-	// Генерим ссылку: source — что ввёл юзер, остальное авто.
+	// Шаг 2: пост-источник (пустой ввод трактуем как пропуск).
+	source, _ := sess.Payload["source"].(string)
+	postRef := strings.TrimSpace(text)
+	if err := util.ValidatePostRef(postRef); err != nil {
+		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+		return true
+	}
+	b.finishUTMLink(ctx, uid, chID, source, postRef)
+	return true
+}
+
+// finishUTMLink — финал билдера: создаёт ссылку и показывает результат.
+// Вызывается из шага «пост» и по кнопке «⏭ Без поста-источника».
+func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRef string) {
 	code := util.RandomCode(10)
-	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "referral", source, "", code); err != nil {
+	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "referral", source, postRef, code); err != nil {
 		b.log.Warn("utm: create link", "err", err, "user", uid, "channel", chID)
 		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось создать ссылку. Попробуйте позже.")
-		return true
+		return
 	}
 	_ = b.db.ClearSession(ctx, uid)
 
@@ -213,24 +250,26 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 	}
 	link := fmt.Sprintf("https://max.ru/%s/start/%s%s", botName, utmPayloadPrefix, code)
 
+	postLine := ""
+	if postRef != "" {
+		postLine = fmt.Sprintf("\n📍 Пост-источник: %s", postRef)
+	}
+
 	// Быстрая ссылка (без канала) — свой ответ и своя клавиатура.
 	if chID == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\n"+
-				"Источник: %s\n\n"+
+			fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\nИсточник: %s%s\n\n"+
 				"Размещайте где угодно — клики и подписки будут учтены "+
-				"в «Аналитика → Каналы».", link, source),
+				"в «Аналитика → Каналы».", link, source, postLine),
 			util.BackKeyboard())
-		return true
+		return
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\n"+
-			"Источник: %s\n\n"+
+		fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\nИсточник: %s%s\n\n"+
 			"Размещайте эту ссылку где угодно — каждый переход и подписка будут "+
 			"учтены в аналитике этого канала.",
-			link, source),
+			link, source, postLine),
 		util.ChannelUTMKeyboard(chID))
-	return true
 }
 
 // showUTMStats — аналитика UTM по каналу.
@@ -256,8 +295,12 @@ func (b *Bot) showUTMStats(ctx context.Context, uid int64, p string) {
 		if s.Clicks > 0 {
 			conv = float64(s.Signups) / float64(s.Clicks) * 100
 		}
-		fmt.Fprintf(&sb, "• %s / %s\n  клики: %d | подписки: %d | отписки: %d | конверсия: %.0f%%\n",
-			s.Source, s.Campaign, s.Clicks, s.Signups, s.Unsubs, conv)
+		postRef := "—"
+		if s.PostRef != "" {
+			postRef = s.PostRef
+		}
+		fmt.Fprintf(&sb, "• %s / %s\n  пост: %s\n  клики: %d | подписки: %d | отписки: %d | конверсия: %.0f%%\n",
+			s.Source, s.Campaign, postRef, s.Clicks, s.Signups, s.Unsubs, conv)
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), util.ChannelUTMStatsKeyboard(chID))
 }

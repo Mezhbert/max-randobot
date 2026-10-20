@@ -395,6 +395,16 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 	case strings.HasPrefix(p, util.CBChannelToggleSub), strings.HasPrefix(p, util.CBChannelTogglePub):
 		b.toggleChannelSelection(ctx, uid, p)
 
+	case strings.HasPrefix(p, util.CBUTMSkipPost):
+		// Билдер трекинг-ссылки: пропустить пост-источник.
+		sess, err := b.db.GetSessionPayload(ctx, uid)
+		if err != nil || sess.State != store.SessionUTMCreate {
+			return
+		}
+		source, _ := sess.Payload["source"].(string)
+		chIDf, _ := sess.Payload["channel_id"].(float64)
+		b.finishUTMLink(ctx, uid, int64(chIDf), source, "")
+
 	case strings.HasPrefix(p, util.CBChannelUTM):
 		// Выбор канала для генерации UTM-ссылки
 		b.showUTMMenu(ctx, uid, p)
