@@ -1,0 +1,20 @@
+# Caddy — обратный прокси с АВТО-TLS (Let's Encrypt) перед ботом.
+# Домен и email задаются переменными окружения compose-сервиса caddy:
+#   DOMAIN=bot.example.com  ACME_EMAIL=you@mail.com
+# Сертификат выпускается и продлевается автоматически, хранится в volume.
+#
+# Локально (без домена): DOMAIN=localhost — Caddy выдаст self-signed
+# и будет писать предупреждение в лог; для локальной разработки туннелем
+# (scripts/dev-tunnel.sh) Caddy вообще не нужен.
+
+{$DOMAIN} {
+	encode gzip
+
+	# Основное: webhook + мини-апп + healthz + metrics — всё у бота на 8080.
+	reverse_proxy bot:8080
+
+	# Немного гигиены: без этого Caddy отдаёт Server-заголовок — не критично.
+	header {
+		-Server
+	}
+}
