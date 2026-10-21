@@ -98,7 +98,9 @@ func (b *Bot) showGiveawayAnalytics(ctx context.Context, uid, gid int64) {
 	if stats.FreshAccounts > 0 && stats.ParticipantsTotal > 0 {
 		pct := stats.FreshAccounts * 100 / stats.ParticipantsTotal
 		if pct >= 20 {
-			warnings = append(warnings, fmt.Sprintf("⚠️ %d%% аккаунтов младше 3 дней — возможна накрутка", pct))
+			// created_at в users — когда бот ВПЕРВЫЕ увидел юзера, НЕ возраст
+			// аккаунта (MAX его не отдаёт): формулировка честная.
+			warnings = append(warnings, fmt.Sprintf("⚠️ %d%% впервые замечены ботом менее чем за 3 дня до участия — возможна накрутка", pct))
 		}
 	}
 	if len(stats.Bursts) > 0 {
@@ -166,7 +168,11 @@ func (b *Bot) showGiveawayParticipants(ctx context.Context, uid, gid int64) {
 		if winnersSet[r.UserID] {
 			mark = " 🏆" // победителя удалить нельзя
 		}
-		sb.WriteString(fmt.Sprintf("• %s%s\n", name, mark))
+		ticketsMark := ""
+		if r.Tickets > 1 {
+			ticketsMark = fmt.Sprintf(" (🎟×%d)", r.Tickets)
+		}
+		sb.WriteString(fmt.Sprintf("• %s%s%s\n", name, ticketsMark, mark))
 		if winnersSet[r.UserID] {
 			shown++
 			continue

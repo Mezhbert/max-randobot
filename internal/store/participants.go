@@ -108,12 +108,13 @@ type ParticipantRow struct {
 	Username  string
 	IsBot     bool
 	JoinedAt  time.Time
+	Tickets   int // ≥1; >1 — за реферальных друзей
 }
 
 // ListParticipants — участники розыгрыша с данными юзера (для экрана участников).
 func (s *Store) ListParticipants(ctx context.Context, giveawayID int64) ([]ParticipantRow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT p.user_id, COALESCE(u.first_name, ''), COALESCE(u.username, ''), COALESCE(u.is_bot, false), p.joined_at
+		SELECT p.user_id, COALESCE(u.first_name, ''), COALESCE(u.username, ''), COALESCE(u.is_bot, false), p.joined_at, p.tickets
 		FROM participants p
 		JOIN users u ON u.user_id = p.user_id
 		WHERE p.giveaway_id = $1
@@ -126,7 +127,7 @@ func (s *Store) ListParticipants(ctx context.Context, giveawayID int64) ([]Parti
 	var res []ParticipantRow
 	for rows.Next() {
 		var r ParticipantRow
-		if err := rows.Scan(&r.UserID, &r.FirstName, &r.Username, &r.IsBot, &r.JoinedAt); err != nil {
+		if err := rows.Scan(&r.UserID, &r.FirstName, &r.Username, &r.IsBot, &r.JoinedAt, &r.Tickets); err != nil {
 			return nil, err
 		}
 		res = append(res, r)

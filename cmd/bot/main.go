@@ -83,7 +83,7 @@ func main() {
 
 	schedCtx, schedStop := context.WithCancel(context.Background())
 	defer schedStop()
-	go runScheduler(schedCtx, sch)
+	go runScheduler(schedCtx, sch, db)
 
 	// Регистрируем webhook при старте (идемпотентно со стороны MAX).
 	go func() {
@@ -155,6 +155,11 @@ func main() {
 		webhookHandler.ServeHTTP(w, r)
 		slog.Debug("webhook", "took", time.Since(start))
 	})
+	// Версия сборки (для диагностики; APP_VERSION пробрасывается при сборке).
+	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(os.Getenv("APP_VERSION")))
+	})
 	// healthcheck (без проверки секрета).
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -205,10 +210,28 @@ func main() {
 //   - подводит итоги active-розыгрышей с наступившим finish_at (→ finished).
 //
 // Запускается отдельной горутиной, останавливается по отмене ctx.
-func runScheduler(ctx context.Context, sch *scheduler.Scheduler) {
+func runScheduler(ctx context.Context, sch *scheduler.Scheduler, db *store.Store) {
 	const interval = 30 * time.Second
 	// Сразу один проход при старте — чтобы «догнать» пропущенные публикации
 	// (например, бот был выключен в момент publish_at).
+	// Отписки и чистка черновиков — редко (раз в 10 минут), отдельным счётчиком:
+	// CheckUnsubs дергает API MAX за каждого участника активных розыгрышей.
+	lastSlow := time.Time{}
+	slowTick := func() {
+		if time.Since(lastSlow) < 10*time.Minute {
+			return
+		}
+		lastSlow = time.Now()
+		c, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		if err := sch.CheckUnsubs(c); err != nil {
+			slog.Warn("scheduler CheckUnsubs", "err", err)
+		}
+		if err := db.DeleteDraftsOlderThan(c, time.Now().UTC().Add(-30*24*time.Hour)); err != nil {
+			slog.Debug("drafts ttl cleanup", "err", err)
+		}
+	}
+
 	tick := func() {
 		c, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
@@ -218,6 +241,7 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler) {
 		if err := sch.FinishPending(c); err != nil {
 			slog.Warn("scheduler FinishPending", "err", err)
 		}
+		slowTick()
 	}
 	tick()
 

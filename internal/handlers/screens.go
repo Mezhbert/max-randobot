@@ -42,8 +42,14 @@ func (b *Bot) showGiveawaysByStatus(ctx context.Context, uid int64, status strin
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid, "Здесь пока пусто.", util.BackKeyboard())
 		return
 	}
+	// Пагинация: лимит кнопок на сообщение ~30; показываем последние 25.
+	const maxShown = 25
+	shown := filtered
+	if len(shown) > maxShown {
+		shown = shown[len(shown)-maxShown:]
+	}
 	kb := model.NewKeyboard()
-	for _, g := range filtered {
+	for _, g := range shown {
 		title := g.Name
 		if title == "" {
 			title = "(без названия)"
@@ -51,7 +57,11 @@ func (b *Bot) showGiveawaysByStatus(ctx context.Context, uid int64, status strin
 		kb.AddRow().AddCallBack(title, util.CBGwOpen+fmt.Sprintf("%d", g.ID))
 	}
 	kb.AddRow().AddCallBack("← Назад", util.CBGwList)
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, "Выберите розыгрыш:", kb)
+	note := "Выберите розыгрыш:"
+	if len(filtered) > maxShown {
+		note = fmt.Sprintf("Показаны последние %d из %d (по свежести):", maxShown, len(filtered))
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, note, kb)
 }
 
 // showGiveawayDetails — карточка розыгрыша с действиями.
@@ -96,6 +106,7 @@ func (b *Bot) showGiveawayDetails(ctx context.Context, uid, id int64) {
 	case store.StatusFinished:
 		kb.AddRow().AddCallBack("📊 Аналитика", util.CBGwAnalytics+fmt.Sprintf("%d", g.ID))
 		kb.AddRow().AddCallBack("🎲 Доп. победитель", util.CBGwExtraWinner+fmt.Sprintf("%d", g.ID))
+		kb.AddRow().AddCallBack("📋 Создать копию", util.CBGwCopy+fmt.Sprintf("%d", g.ID))
 	}
 	kb.AddRow().AddCallBack("← Назад", util.CBGwList)
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)

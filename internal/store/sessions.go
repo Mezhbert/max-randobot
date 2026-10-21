@@ -15,6 +15,7 @@ const (
 	SessionCaptchaVerify = "captcha_verify"  // ожидание ответа капчи (при участии)
 	SessionEditField     = "edit_field"      // редактура поля розыгрыша (scheduled/active)
 	SessionEditMedia     = "edit_media"      // ввод новых медиа в редактуре
+	SessionCaptchaWaitStart = "captcha_wait_start" // юзер не начинал диалог: капча придёт при первом старте бота
 )
 
 // UserSession — произвольное состояние юзера с контекстом (payload).

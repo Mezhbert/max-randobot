@@ -261,6 +261,12 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 		// «Отдельным постом» — запросить текст итогов (след. шаг results_text).
 		b.advance(ctx, uid, g.ID, g.DraftStep)
 
+	case "referral_on":
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "referral_enabled", true)
+		b.advance(ctx, uid, g.ID, g.DraftStep)
+	case "referral_off":
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "referral_enabled", false)
+		b.advance(ctx, uid, g.ID, g.DraftStep)
 	case "captcha_none":
 		_ = b.db.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaNone)
 		b.advance(ctx, uid, g.ID, g.DraftStep)
@@ -358,6 +364,23 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 			b.showEditMenu(ctx, uid, id) // scheduled/active — меню редактирования полей
 		}
 
+	case strings.HasPrefix(p, util.CBGwCopy):
+		// «Создать копию»: черновик с настройками завершённого розыгрыша
+		// (контент/каналы/режимы), даты и publish_now не переносятся.
+		id, _ := strconv.ParseInt(strings.TrimPrefix(p, util.CBGwCopy), 10, 64)
+		src, err := b.db.GetGiveaway(ctx, id, uid)
+		if err != nil {
+			_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+			return
+		}
+		g, err := b.db.CreateDraftFromGiveaway(ctx, uid, src)
+		if err != nil {
+			b.log.Warn("copy giveaway", "err", err, "id", id, "user", uid)
+			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось создать копию. Попробуйте позже.")
+			return
+		}
+		b.showStep(ctx, uid, g, fsm.FirstStep)
+
 	case strings.HasPrefix(p, util.CBGwCancel):
 		// Отмена — как и остальные операции, только владельцем и только
 		// scheduled/active: отменённый/завершённый розыгрыш трогать нельзя
@@ -412,6 +435,9 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 	case strings.HasPrefix(p, util.CBUTMCreate):
 		// Начать создание UTM-ссылки на канал
 		b.startCreateUTM(ctx, uid, p)
+
+	case strings.HasPrefix(p, util.CBUTMDyn):
+		b.showChannelDynamics(ctx, uid, p)
 
 	case strings.HasPrefix(p, util.CBUTMStats):
 		// Показать аналитику UTM по каналу

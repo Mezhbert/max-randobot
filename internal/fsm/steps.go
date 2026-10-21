@@ -22,6 +22,7 @@ const (
 	StepFinishCount = "finish_count" // кол-во участников для finish_mode=count
 	StepWinners     = "winners"
 	StepWinnersMsg  = "winners_msg"
+	StepReferral    = "referral" // приглашение друзей: +1 билет за каждого
 	StepResultsLoc  = "results_loc"
 	StepResultsText = "results_text"
 	StepCaptcha     = "captcha"
@@ -44,6 +45,7 @@ var orderedSteps = []string{
 	StepFinishCount,
 	StepWinners,
 	StepWinnersMsg,
+	StepReferral,
 	StepResultsLoc,
 	StepResultsText,
 	StepCaptcha,
@@ -92,6 +94,7 @@ func IsOptional(step string) bool { return optionalSteps[step] }
 // buttonSteps — шаги, где ввод делается КНОПКАМИ (не текстом). Используется
 // для валидации: текст/форварды на таких шагах отклоняются с подсказкой.
 var buttonSteps = map[string]bool{
+	StepReferral:    true,
 	StepSubChannels: true,
 	StepPubChannels: true,
 	StepPublishMode: true,

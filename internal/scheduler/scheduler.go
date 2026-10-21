@@ -220,7 +220,10 @@ func (s *Scheduler) finishOne(ctx context.Context, id int64) error {
 	// 1) Победители. Если уже избраны (после краха до уведомления) — переиспользуем.
 	winners := g.WinnersUserIDs
 	if len(winners) == 0 {
-		entries, err := s.db.ListParticipantsForDraw(ctx, g.ID)
+		// Верифицированный список: отписавшиеся от каналов розыгрыша
+		// дисквалифицируются перед жеребьёвкой (подписка была при участии,
+		// но к итогам часть участников уже отписывается).
+		entries, err := s.db.ListParticipantsForDrawVerified(ctx, g.ID)
 		if err != nil {
 			return revert("list participants", err)
 		}

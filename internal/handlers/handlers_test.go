@@ -409,6 +409,10 @@ func TestFSM_FullCreateFlow_Scheduled(t *testing.T) {
 
 	// 12) Сообщение победителям — пропустить.
 	click(util.CBFSMSkip)
+	require.Equal(t, fsm.StepReferral, curStep())
+
+	// 12.5) Рефералка — «Без рефералки».
+	click(util.CBFSMOption + "referral_off")
 	require.Equal(t, fsm.StepResultsLoc, curStep())
 
 	// 13) Итоги — «В исходном посте» → перепрыгнуть results_text.

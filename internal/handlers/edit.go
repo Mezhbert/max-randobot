@@ -604,8 +604,8 @@ func (b *Bot) pickExtraWinner(ctx context.Context, uid, gid int64) {
 		return
 	}
 
-	// Участники, не являющиеся текущими победителями.
-	tickets, err := b.db.ListParticipantsForDraw(ctx, g.ID)
+	// Участники, не являющиеся текущими победителями (отписавшиеся исключены).
+	tickets, err := b.db.ListParticipantsForDrawVerified(ctx, g.ID)
 	if err != nil {
 		_ = b.api.SendText(ctx, uid, "⚠️ Ошибка загрузки участников.")
 		return

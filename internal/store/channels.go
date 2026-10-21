@@ -178,3 +178,50 @@ func (s *Store) MarkUnsubscribedByChat(ctx context.Context, userID, chatID int64
 	`, userID, chatID)
 	return err
 }
+
+// ChannelDayStat — вступления/отписки в канале за один день (динамика).
+type ChannelDayStat struct {
+	Day   string // «15.10»
+	Joins int
+	Unsubs int
+}
+
+// ChannelDynamics — динамика канала за последние days дней: вступления и
+// отписки по дням (по журналу подписок; органика + UTM вместе).
+func (s *Store) ChannelDynamics(ctx context.Context, channelID int64, days int) ([]ChannelDayStat, error) {
+	if days <= 0 || days > 90 {
+		days = 14
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT to_char(d.day, 'DD.MM'),
+		       COUNT(DISTINCT j.user_id),
+		       COUNT(DISTINCT u.user_id)
+		FROM generate_series(
+		    (now() AT TIME ZONE 'Europe/Moscow')::date - make_interval(days => $2-1),
+		    (now() AT TIME ZONE 'Europe/Moscow')::date,
+		    interval '1 day'
+		) d(day)
+		LEFT JOIN subscriptions_log j
+		  ON j.channel_id = $1
+		 AND (j.subscribed_at AT TIME ZONE 'Europe/Moscow')::date = d.day
+		LEFT JOIN subscriptions_log u
+		  ON u.channel_id = $1
+		 AND u.unsubscribed_at IS NOT NULL
+		 AND (u.unsubscribed_at AT TIME ZONE 'Europe/Moscow')::date = d.day
+		GROUP BY d.day
+		ORDER BY d.day
+	`, channelID, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []ChannelDayStat
+	for rows.Next() {
+		var r ChannelDayStat
+		if err := rows.Scan(&r.Day, &r.Joins, &r.Unsubs); err != nil {
+			return nil, err
+		}
+		res = append(res, r)
+	}
+	return res, rows.Err()
+}

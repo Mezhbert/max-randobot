@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"time"
 )
 
@@ -9,12 +11,13 @@ import (
 type GiveawayStats struct {
 	ParticipantsTotal int            // всего участников
 	JoinsByDay        map[string]int // «02.01" → кол-во присоединившихся
-	JoinsByHour       map[int]int    // час (0-23) → кол-во (для всплесков)
 	NoUsername        int            // участники без username (возможные боты)
 	Bots              int            // участники-боты (is_bot)
 	FreshAccounts     int            // аккаунты младше 3 дней на момент join
 	Unsubscribed      int            // отписались от каналов после участия
-	Bursts            []string       // найденные всплески (описания)
+	Bursts            []string       // найденные всплески (день+час — N)
+
+	joinsBySlot map[string]int // «02.01 15ч» → кол-во (для всплесков)
 }
 
 // GiveawayParticipantStats собирает статистику участников розыгрыша:
@@ -23,7 +26,7 @@ type GiveawayStats struct {
 func (s *Store) GiveawayParticipantStats(ctx context.Context, giveawayID int64) (GiveawayStats, error) {
 	st := GiveawayStats{
 		JoinsByDay:  map[string]int{},
-		JoinsByHour: map[int]int{},
+		joinsBySlot: map[string]int{},
 	}
 
 	// Основная выборка: время присоединения, username, свежесть аккаунта.
@@ -49,8 +52,12 @@ func (s *Store) GiveawayParticipantStats(ctx context.Context, giveawayID int64) 
 		}
 		st.ParticipantsTotal++
 		msk := joinedAt.In(MoscowLocationForStats())
-		st.JoinsByDay[msk.Format("02.01")]++
-		st.JoinsByHour[msk.Hour()]++
+		day := msk.Format("02.01")
+		st.JoinsByDay[day]++
+		// Слот день+час: всплеск честно считается внутри одного часа одного
+		// дня (агрегация «по часу без даты» склеивала разные дни в фантомы).
+		slot := day + " " + msk.Format("15") + "ч"
+		st.joinsBySlot[slot]++
 		if username == "" {
 			st.NoUsername++
 		}
@@ -75,12 +82,13 @@ func (s *Store) GiveawayParticipantStats(ctx context.Context, giveawayID int64) 
 		st.Unsubscribed = 0
 	}
 
-	// Эвристика всплесков: >5 присоединений в один час.
-	for hour, n := range st.JoinsByHour {
+	// Эвристика всплесков: ≥5 присоединений в течение одного часа одного дня.
+	for slot, n := range st.joinsBySlot {
 		if n >= 5 {
-			st.Bursts = append(st.Bursts, time.Date(0, 0, 0, hour, 0, 0, 0, time.UTC).Format("15:04"))
+			st.Bursts = append(st.Bursts, fmt.Sprintf("%s — %d", slot, n))
 		}
 	}
+	sort.Strings(st.Bursts)
 
 	return st, nil
 }

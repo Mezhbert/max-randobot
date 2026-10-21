@@ -71,6 +71,20 @@ func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload str
 		b.onParticipate(ctx, userID, idStr, "")
 		return
 	}
+	// Реферальная ссылка друга (ref_<code>): фиксируем приглашение — +1 билет
+	// инвайтеру начисляется, когда приглашённый станет участником.
+	if strings.HasPrefix(payload, "ref_") {
+		code := strings.TrimPrefix(payload, "ref_")
+		if link, err := b.db.GetReferralLinkByCode(ctx, code); err == nil {
+			if err := b.db.SaveReferralInvite(ctx, link.GiveawayID, link.UserID, userID); err != nil {
+				b.log.Debug("referral invite", "err", err, "code", code)
+			} else {
+				b.log.Info("referral invite", "giveaway", link.GiveawayID, "inviter", link.UserID, "invitee", userID)
+			}
+		}
+		b.sendStartScreen(ctx, userID)
+		return
+	}
 	// UTM-диплинк.
 	code := strings.TrimPrefix(payload, utmPayloadPrefix)
 	if code == "" || code == payload {
@@ -443,4 +457,50 @@ func ifEmpty(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// showChannelDynamics — динамика подписчиков канала по дням (органика + UTM).
+func (b *Bot) showChannelDynamics(ctx context.Context, uid int64, p string) {
+	idStr := strings.TrimPrefix(p, util.CBUTMDyn)
+	chID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return
+	}
+	ch, err := b.db.GetChannel(ctx, chID, uid)
+	if err != nil {
+		_ = b.api.SendText(ctx, uid, "Канал не найден.")
+		return
+	}
+	stats, err := b.db.ChannelDynamics(ctx, chID, 14)
+	if err != nil {
+		b.log.Warn("channel dynamics", "err", err, "channel", chID)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось загрузить динамику. Попробуйте позже.")
+		return
+	}
+
+	var totJ, totU int
+	maxN := 1
+	for _, d := range stats {
+		totJ += d.Joins
+		totU += d.Unsubs
+		if d.Joins > maxN {
+			maxN = d.Joins
+		}
+	}
+	var sb strings.Builder
+	title := ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))
+	sb.WriteString(fmt.Sprintf("📈 Динамика «%s» (14 дней, МСК):\n\n", title))
+	for _, d := range stats {
+		bar := strings.Repeat("█", (d.Joins*10)/maxN)
+		if bar == "" && d.Joins > 0 {
+			bar = "▏"
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s +%d", d.Day, bar, d.Joins))
+		if d.Unsubs > 0 {
+			sb.WriteString(fmt.Sprintf(" (−%d)", d.Unsubs))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("\nИтого: +%d вступили, −%d отписались, итог %d", totJ, totU, totJ-totU))
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), util.ChannelUTMKeyboard(chID))
 }

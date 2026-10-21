@@ -247,6 +247,16 @@ func kbForStep(step string, g store.Giveaway) *model.Keyboard {
 			AddCallBack("← Назад", util.CBFSMBack).
 			AddCallBack("✖ Отменить", util.CBFSMCancel)
 		return kb
+	case fsm.StepReferral:
+		kb := model.NewKeyboard()
+		kb.AddRow().
+			AddCallBack("✅ Включить (+1 билет за друга)", util.CBFSMOption+"referral_on").
+			AddCallBack("❌ Без рефералки", util.CBFSMOption+"referral_off")
+		kb.AddRow().
+			AddCallBack("💡", util.CBFSMHint).
+			AddCallBack("← Назад", util.CBFSMBack).
+			AddCallBack("✖ Отменить", util.CBFSMCancel)
+		return kb
 	case fsm.StepCaptcha:
 		kb := model.NewKeyboard()
 		kb.AddRow().

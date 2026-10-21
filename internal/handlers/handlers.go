@@ -34,6 +34,8 @@ type Bot struct {
 	dedup        *dedup.Deduplicator                            // опционально; nil — без дедупликации
 	pendingMu    sync.Mutex                                     // защита pendingStarts
 	pendingStarts map[int64]string                              // user_id → payload диплинка (до доставки bot_started в Handle)
+	partMu       sync.Mutex                                     // защита partClicks (троттл «Участвовать»)
+	partClicks   map[int64]int64                                // user_id → unix последнего клика участия
 }
 
 // New создаёт обработчика.
@@ -50,6 +52,7 @@ func New(api maxapi.BotAPI, db *store.Store, log *slog.Logger) *Bot {
 		log:          log,
 		lastCounters: make(map[int64]int64),
 		pendingStarts: make(map[int64]string),
+		partClicks:   make(map[int64]int64),
 	}
 }
 
@@ -158,11 +161,40 @@ func (b *Bot) Handle(ctx context.Context, u model.Update) {
 // стартовый экран не шлём (шум: следующим сообщением бот скажет, что делать —
 // капча/регистрация). Обычный /start — информативный экран с меню.
 func (b *Bot) onBotStarted(ctx context.Context, u model.Update) {
+	// Повторный старт снова разрешает боту писать (bot_stopped снимал флаг).
+	_ = b.db.SetFlagInBase(ctx, u.UserID, true)
+
 	if p := b.takePendingStart(u.UserID); p != "" {
 		b.onBotStartedPayload(ctx, u.UserID, p)
 		return
 	}
+	// Капча ждала начала диалога (юзер пришёл с кнопки участия, бот не мог
+	// писать) — отправляем её сразу, без ввода /start и без стартового экрана.
+	if b.resumeCaptchaAfterStart(ctx, u.UserID) {
+		return
+	}
 	b.sendStartScreen(ctx, u.UserID)
+}
+
+// resumeCaptchaAfterStart — у юзера была «отложенная» капча: диалог открыт,
+// теперь бот может писать. true — капча отправлена.
+func (b *Bot) resumeCaptchaAfterStart(ctx context.Context, userID int64) bool {
+	sess, err := b.db.GetSessionPayload(ctx, userID)
+	if err != nil || sess.State != store.SessionCaptchaWaitStart {
+		return false
+	}
+	gidF, _ := sess.Payload["giveaway_id"].(float64)
+	gid := int64(gidF)
+	g, err := b.db.GetGiveawayAny(ctx, gid)
+	if err != nil || g.Status != store.StatusActive {
+		_ = b.db.ClearSession(ctx, userID)
+		return false
+	}
+	if err := b.startCaptchaChallenge(ctx, userID, gid); err != nil {
+		_ = b.db.ClearSession(ctx, userID)
+		return false
+	}
+	return true
 }
 
 // SetPendingStart запоминает payload диплинка до доставки апдейта в Handle.

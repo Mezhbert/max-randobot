@@ -5,6 +5,8 @@ package handlers_test
 // участники (удаление), UTM без канала, экранирование итогов.
 
 import (
+	"errors"
+	"regexp"
 	"context"
 	"strconv"
 	"strings"
@@ -978,7 +980,7 @@ func TestDraft_ResumeStaleStep(t *testing.T) {
 
 	_, err := s.Pool().Exec(ctx, `
 		INSERT INTO giveaways (owner_user_id, name, post_text, status, draft_step)
-		VALUES ($1, 'Старый', 'текст', 'draft', 'referral')
+		VALUES ($1, 'Старый', 'текст', 'draft', 'promotion')
 	`, uid)
 	require.NoError(t, err)
 	gws, err := s.ListGiveaways(ctx, uid, store.StatusDraft)
@@ -1168,6 +1170,7 @@ func TestFSM_PublishNow_ConfirmSetsFreshTime(t *testing.T) {
 	send(util.FormatMoscowTime(time.Now().Add(time.Hour))) // итоги через час
 	send("1")                                              // победители
 	click(util.CBFSMSkip)                                  // сообщение победителям
+	click(util.CBFSMOption + "referral_off")               // рефералка — выкл
 	click(util.CBFSMOption + "results_original")
 	click(util.CBFSMOption + "captcha_none")
 
@@ -1184,4 +1187,185 @@ func TestFSM_PublishNow_ConfirmSetsFreshTime(t *testing.T) {
 	assert.NotEqual(t, store.StatusDraft, got.Status, "после Принять — не draft")
 	require.NotNil(t, got.PublishAt, "Confirm должен выставить publish_at=now")
 	assert.WithinDuration(t, time.Now(), *got.PublishAt, time.Minute)
+}
+
+// ---------- P0: капча юзеру без стартованного диалога ----------
+
+// TestParticipate_CaptchaWaitStart_AutoResume — бот не может писать юзеру
+// (SendImage падает): вместо «чёрной дыры» — сессия wait_start, а при первом
+// bot_started капча приходит САМА, без /start и без стартового экрана.
+func TestParticipate_CaptchaWaitStart_AutoResume(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6901
+	testutil.EnsureUser(t, s, uid, "visitor")
+
+	gid := seedActiveGiveaway(t, s, uid, "all", false)
+
+	// Бот не может писать (у мока SendImage делит ошибку с SendText).
+	mock.SendTextErr = errors.New("forbidden: dialog not started")
+	b.Handle(ctx, callbackUpdate(uid, util.CBParticipate+strconv.FormatInt(gid, 10)))
+
+	var st string
+	var payload map[string]any
+	sess, err := s.GetSessionPayload(ctx, uid)
+	require.NoError(t, err)
+	st, payload = sess.State, sess.Payload
+	assert.Equal(t, store.SessionCaptchaWaitStart, st, "интент капчи запомнен")
+	gotGid, _ := payload["giveaway_id"].(float64)
+	assert.Equal(t, float64(gid), gotGid)
+
+	// Юзер открывает бота (Начать) — бот теперь может писать: капча сама.
+	mock.SendTextErr = nil
+	b.Handle(ctx, botStartedUpdate(uid))
+
+	sent := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && r.Method == "SendImage" {
+			sent = true
+		}
+	}
+	assert.True(t, sent, "капча должна прийти при первом старте бота автоматически")
+	sess, err = s.GetSessionPayload(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, store.SessionCaptchaVerify, sess.State, "сессия перешла в режим ввода цифр")
+}
+
+// ---------- Реферальная система ----------
+
+// TestReferral_CreditAndLimit — полный цикл: участник получает личную ссылку,
+// друг стартует по ней бота и участвует → инвайтеру +1 билет; лимит 1
+// исчерпывается вторым другом.
+func TestReferral_CreditAndLimit(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const inviter, friend1, friend2 = 6911, 6912, 6913
+	testutil.EnsureUser(t, s, inviter, "inviter")
+	testutil.EnsureUser(t, s, friend1, "f1")
+	testutil.EnsureUser(t, s, friend2, "f2")
+
+	gid := seedActiveGiveaway(t, s, inviter, "none", true) // referral on, limit 1
+	_, _ = s.Pool().Exec(ctx, `UPDATE giveaways SET referral_limit=1 WHERE id=$1`, gid)
+
+	// Инвайтер участвует → получает личную ref-ссылку.
+	b.Handle(ctx, callbackUpdate(inviter, util.CBParticipate+strconv.FormatInt(gid, 10)))
+	code := ""
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == inviter {
+			if m := regexp.MustCompile(`ref_([0-9a-f]+)`).FindStringSubmatch(r.Text); m != nil {
+				code = m[1]
+			}
+		}
+	}
+	require.NotEmpty(t, code, "участнику должна прийти личная ref-ссылка")
+
+	// Друг1 стартует бота по ссылке и участвует → инвайтеру +1 билет.
+	b.SetPendingStart(friend1, "ref_"+code)
+	b.Handle(ctx, botStartedUpdate(friend1))
+	b.Handle(ctx, callbackUpdate(friend1, util.CBParticipate+strconv.FormatInt(gid, 10)))
+	pi, err := s.GetParticipant(ctx, gid, inviter)
+	require.NoError(t, err)
+	assert.Equal(t, 2, pi.Tickets, "+1 билет за первого друга")
+
+	// Друг2 — лимит (1) исчерпан: билета больше нет.
+	b.SetPendingStart(friend2, "ref_"+code)
+	b.Handle(ctx, botStartedUpdate(friend2))
+	b.Handle(ctx, callbackUpdate(friend2, util.CBParticipate+strconv.FormatInt(gid, 10)))
+	pi, err = s.GetParticipant(ctx, gid, inviter)
+	require.NoError(t, err)
+	assert.Equal(t, 2, pi.Tickets, "лимит приглашений исчерпан — билет не растёт")
+}
+
+// ---------- Жеребьёвка без отписавшихся ----------
+
+// TestDraw_ExcludesUnsubscribed — отписавшийся от канала розыгрыша участник
+// не попадает в список для выбора победителей.
+func TestDraw_ExcludesUnsubscribed(t *testing.T) {
+	_, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const owner, u1, u2 = 6921, 6922, 6923
+	testutil.EnsureUser(t, s, owner, "own")
+	testutil.EnsureUser(t, s, u1, "u1")
+	testutil.EnsureUser(t, s, u2, "u2")
+
+	g, ch := setupActiveGiveawayWithChannel(t, s, owner)
+	for _, u := range []int64{u1, u2} {
+		p, err := s.AddParticipant(ctx, store.Participant{GiveawayID: g.ID, UserID: u, Tickets: 1, CaptchaPassed: true})
+		require.NoError(t, err)
+		require.NoError(t, s.AddSubscriptionLog(ctx, p.ID, g.ID, ch.ID, u, "post"))
+	}
+	// u1 отписался.
+	_, err := s.Pool().Exec(ctx, `
+		UPDATE subscriptions_log SET unsubscribed_at=now()
+		WHERE giveaway_id=$1 AND user_id=$2`, g.ID, u1)
+	require.NoError(t, err)
+
+	list, err := s.ListParticipantsForDrawVerified(ctx, g.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 1, "отписавшийся исключён из жеребьёвки")
+	assert.Equal(t, int64(u2), list[0].UserID)
+}
+
+// ---------- Копия розыгрыша и дефолты ----------
+
+// TestCopyGiveaway — «Создать копию» завершённого: черновик с тем же контентом,
+// имя с суффиксом, шаг — первый.
+func TestCopyGiveaway(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6931
+	testutil.EnsureUser(t, s, uid, "owner")
+
+	src := seedActiveGiveaway(t, s, uid, "none", false)
+	_, err := s.Pool().Exec(ctx, `UPDATE giveaways SET name='Оригинал', post_text='Пост X', button_text='Жми', status='finished' WHERE id=$1`, src)
+	require.NoError(t, err)
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBGwCopy+strconv.FormatInt(src, 10)))
+
+	draft, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, "Оригинал (копия)", draft.Name)
+	assert.Equal(t, "Пост X", draft.PostText)
+	assert.Equal(t, "Жми", draft.ButtonText)
+	assert.Equal(t, fsm.StepName, draft.DraftStep)
+	assert.Equal(t, store.StatusDraft, draft.Status)
+}
+
+// TestStartDraft_DefaultsFromLast — новый черновик наследует настройки
+// последнего созданного розыгрыша (кнопка/капча/рефералка/каналы).
+func TestStartDraft_DefaultsFromLast(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6941
+	testutil.EnsureUser(t, s, uid, "owner")
+
+	gid := seedActiveGiveaway(t, s, uid, "all", true)
+	_, err := s.Pool().Exec(ctx, `UPDATE giveaways SET button_text='Жми' WHERE id=$1`, gid)
+	require.NoError(t, err)
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
+	draft, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, "Жми", draft.ButtonText)
+	assert.Equal(t, store.CaptchaAll, draft.CaptchaMode)
+	assert.True(t, draft.ReferralEnabled)
+}
+
+// seedActiveGiveaway — активный розыгрыш без каналов (для участия).
+func seedActiveGiveaway(t *testing.T, s *store.Store, owner int64, captcha string, referral bool) int64 {
+	t.Helper()
+	var id int64
+	err := s.Pool().QueryRow(context.Background(), `
+		INSERT INTO giveaways (owner_user_id, name, post_text, button_text, status,
+			finish_mode, finish_participants_count, winners_count, captcha_mode, referral_enabled)
+		VALUES ($1, 'T', 'пост', 'Участвовать', 'active', 'count', 1000, 1, $2, $3)
+		RETURNING id
+	`, owner, captcha, referral).Scan(&id)
+	require.NoError(t, err)
+	return id
 }

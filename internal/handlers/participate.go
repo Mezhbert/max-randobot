@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/maxbot/giveawaybot/internal/util"
+	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
 
 // onParticipate — обработка нажатия "Участвовать" под постом розыгрыша.
@@ -16,12 +17,23 @@ import (
 // ВАЖНО: AnswerCallback вызывается в КОНЦЕ, после отправки сообщения в диалог —
 // иначе alert блокирует авто-открытие диалога при SendText/SendImage.
 func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, callbackID string) {
+	answered := false
 	defer func() {
-		// Снимаем часики в самом конце — после всех отправок.
-		if callbackID != "" {
+		// Снимаем часики в самом конце — после всех отправок (если уже ответили
+		// осмысленным уведомлением — второго пустого не шлём).
+		if callbackID != "" && !answered {
 			b.api.AnswerCallback(ctx, callbackID, "")
 		}
 	}()
+
+	// Анти-спам: не чаще раза в 3с (каждый клик = проверка подписок через API).
+	if !b.partClickAllow(userID) {
+		if callbackID != "" {
+			answered = true
+			b.api.AnswerCallback(ctx, callbackID, "Не так часто 🙂 Попробуйте через пару секунд")
+		}
+		return
+	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -65,9 +77,20 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 
 	// Капча: если включена — картинка в чате (сообщение откроет диалог).
 	if b.needCaptcha(g) {
-		// НЕ шлём AnswerCallback (alert) заранее — сообщение с капчей
-		// откроет диалог с ботом лучше алерта.
-		b.startCaptchaChallenge(ctx, userID, g.ID)
+		if err := b.startCaptchaChallenge(ctx, userID, g.ID); err != nil {
+			// Бот не может писать юзеру (диалог не начинался) — раньше «чёрная
+			// дыра»: клик есть, капчи и объяснения нет. Теперь: тост-инструкция
+			// + запомненный интент — при первом старте бота капча придёт САМА
+			// (resumeCaptchaAfterStart), юзеру не нужно ничего вводить.
+			b.log.Debug("captcha send failed (юзер не начинал диалог?)", "err", err, "user", userID)
+			if callbackID != "" {
+				answered = true
+				b.api.AnswerCallback(ctx, callbackID,
+					"🤖 Откройте чат с ботом и нажмите «Начать» — капча придёт сразу")
+			}
+			_ = b.db.SetSessionPayload(ctx, userID, store.SessionCaptchaWaitStart,
+				map[string]any{"giveaway_id": float64(g.ID)})
+		}
 		return
 	}
 
@@ -84,18 +107,21 @@ func (b *Bot) needCaptcha(g store.Giveaway) bool {
 // startCaptchaChallenge — капча при участии, полностью в чате бота:
 // картинка с цифрами (диалог открывается самой кнопкой-ссылкой участия),
 // ответ вводится сообщением (SessionCaptchaVerify).
-func (b *Bot) startCaptchaChallenge(ctx context.Context, userID, giveawayID int64) {
+func (b *Bot) startCaptchaChallenge(ctx context.Context, userID, giveawayID int64) error {
 	pngData, err := b.captcha.Generate(userID)
 	if err != nil {
 		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка генерации капчи. Попробуйте ещё раз.")
-		return
+		return err
 	}
-	// Запоминаем, для какого розыгрыша ждём ответ.
+	// Картинка капчи — отправка в диалог открывает его. Сессию ставим только
+	// при успешной доставке (иначе юзер без диалога зависает с «истёкшей» капчей).
+	if err := b.api.SendImage(ctx, userID, pngData, "🤖 Введите цифры с картинки, чтобы участвовать:"); err != nil {
+		return err
+	}
 	_ = b.db.SetSessionPayload(ctx, userID, store.SessionCaptchaVerify, map[string]any{
 		"giveaway_id": giveawayID,
 	})
-	// Картинка капчи — отправка в диалог открывает его.
-	_ = b.api.SendImage(ctx, userID, pngData, "🤖 Введите цифры с картинки, чтобы участвовать:")
+	return nil
 }
 
 // handleCaptchaVerifyInput проверяет ответ капчи. Возвращает true если ввод
@@ -159,6 +185,15 @@ func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giv
 		_ = b.db.AddSubscriptionLog(ctx, p.ID, g.ID, cid, userID, "post")
 	}
 
+	// Рефералка: приглашённый пришёл по ссылке друга → +1 билет инвайтеру
+	// (в пределах лимита) и уведомление.
+	if g.ReferralEnabled {
+		if inviter, ok, err := b.db.ReferralCreditIfNeeded(ctx, g.ID, userID); err == nil && ok {
+			_ = b.api.SendText(ctx, inviter,
+				"🤝 По вашей ссылке присоединился друг — +1 билет в розыгрыше!")
+		}
+	}
+
 	// Обновляем счётчик участников в кнопке поста (троттлинг 10с на розыгрыш).
 	gCopy := g
 	b.updateCounterThrottled(ctx, &gCopy)
@@ -170,6 +205,45 @@ func (b *Bot) registerParticipant(ctx context.Context, userID int64, g store.Giv
 		_ = b.api.SendText(ctx, userID,
 			fmt.Sprintf("🎉 Вы участвуете в розыгрыше «%s»! Удачи!", g.Name))
 	}
+	// Личная ссылка для приглашения друзей (рефералка включена у розыгрыша).
+	if g.ReferralEnabled {
+		b.sendInviteLink(ctx, userID, g)
+	}
+}
+
+// sendInviteLink — личная реферальная ссылка участника (+1 билет за друга).
+func (b *Bot) sendInviteLink(ctx context.Context, userID int64, g store.Giveaway) {
+	code := util.RandomCode(10)
+	if _, err := b.db.EnsureReferralLink(ctx, g.ID, userID, code); err != nil {
+		b.log.Warn("referral link", "err", err, "user", userID, "giveaway", g.ID)
+		return
+	}
+	botName := b.botUsername
+	if botName == "" {
+		botName = "ВАШ_БОТ"
+	}
+	link := fmt.Sprintf("https://max.ru/%s/start/ref_%s", botName, code)
+	kb := model.NewKeyboard()
+	kb.AddRow().AddLink("🤝 Пригласить друзей (+1 билет)", link)
+	_, _ = b.api.SendTextWithKeyboard(ctx, userID,
+		"🤝 Приглашайте друзей по личной ссылке:\n\n"+link+
+			"\n\nЗа каждого друга, который станет участником — +1 билет вам (больше билетов = выше шанс победы).",
+		kb)
+}
+
+// partClickAllow — троттл кнопки «Участвовать»: не чаще раза в 3 секунды.
+func (b *Bot) partClickAllow(userID int64) bool {
+	b.partMu.Lock()
+	defer b.partMu.Unlock()
+	now := time.Now().Unix()
+	if last, ok := b.partClicks[userID]; ok && now-last < 3 {
+		return false
+	}
+	b.partClicks[userID] = now
+	if len(b.partClicks) > 10000 {
+		b.partClicks = make(map[int64]int64)
+	}
+	return true
 }
 
 // updateCounterThrottled обновляет счётчик в постах не чаще раза в 10 секунд

@@ -28,6 +28,7 @@ const (
 	CBGwList         = "gw_list"
 	CBGwOpen         = "gw_open:" // + giveaway_id
 	CBGwCancel       = "gw_cancel:"
+	CBGwCopy         = "gw_copy:" // создать копию завершённого розыгрыша
 	CBGwDelete       = "gw_delete:"
 	CBGwEdit         = "gw_edit:"                    // продолжить создание/редактировать
 	CBGwEditField    = "gw_ef:"                      // + field:giveaway_id (меню редактирования поля)
@@ -57,6 +58,7 @@ const (
 	CBChannelUTM  = "ch_utm:"  // + channel_id — меню UTM конкретного канала
 	CBUTMCreate   = "utm_new:" // + channel_id — начать создание UTM-ссылки
 	CBUTMStats    = "utm_st:"  // + channel_id — показать статистику UTM
+	CBUTMDyn      = "utm_dyn:" // + channel_id — динамика подписчиков канала
 	CBUTMExport   = "utm_exp:" // + channel_id — экспорт CSV
 
 	// FSM создания
@@ -326,7 +328,9 @@ func ChannelUTMKeyboard(channelID int64) *model.Keyboard {
 	id := strconv.FormatInt(channelID, 10)
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("🔗 Создать UTM-ссылку", CBUTMCreate+id)
-	kb.AddRow().AddCallBack("📊 Аналитика UTM", CBUTMStats+id)
+	kb.AddRow().
+		AddCallBack("📊 Аналитика UTM", CBUTMStats+id).
+		AddCallBack("📈 Динамика канала", CBUTMDyn+id)
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb
 }

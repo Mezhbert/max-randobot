@@ -14,7 +14,7 @@ func TestOrderedStepsContainsAll(t *testing.T) {
 		StepSubChannels, StepPubChannels,
 		StepPublishMode, StepPublishAt,
 		StepFinishMode, StepFinishAt, StepFinishCount,
-		StepWinners, StepWinnersMsg, StepResultsLoc, StepResultsText,
+		StepWinners, StepWinnersMsg, StepReferral, StepResultsLoc, StepResultsText,
 		StepCaptcha, StepPreview,
 	}
 	assert.Equal(t, want, orderedSteps)
@@ -50,6 +50,7 @@ func TestNextStep(t *testing.T) {
 func TestPrevStep(t *testing.T) {
 	assert.Equal(t, StepPostText, PrevStep(StepMedia))
 	assert.Equal(t, StepResultsLoc, PrevStep(StepResultsText))
+	assert.Equal(t, StepReferral, PrevStep(StepResultsLoc))
 	assert.Equal(t, "", PrevStep(StepName), "до первого шага нет предыдущего")
 }
 

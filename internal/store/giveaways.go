@@ -118,6 +118,7 @@ var fieldWhitelist = map[string]bool{
 	"publish_at": true, "finish_at": true, "finish_mode": true, "finish_participants_count": true,
 	"winners_count": true, "winners_message": true,
 	"captcha_mode": true,
+	"referral_enabled": true, "referral_limit": true,
 	"draft_step": true, "channel_select_mid": true, "publish_now": true,
 }
 
@@ -320,6 +321,97 @@ func (s *Store) DeleteGiveaway(ctx context.Context, id, ownerUserID int64) error
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ListParticipantsForDrawVerified — участники для ЖЕРЕБЬЁВКИ: из общего
+// списка исключаются отписавшиеся от каналов розыгрыша (subscriptions_log с
+// unsubscribed_at). Подписка проверяется при участии, но к моменту итогов
+// часть участников отписывается — честный розыгрыш их дисквалифицирует.
+func (s *Store) ListParticipantsForDrawVerified(ctx context.Context, giveawayID int64) ([]ParticipantTicket, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT p.user_id, p.tickets FROM participants p
+		WHERE p.giveaway_id=$1
+		  AND NOT EXISTS (
+		      SELECT 1 FROM subscriptions_log sl
+		      WHERE sl.giveaway_id=$1 AND sl.user_id=p.user_id AND sl.unsubscribed_at IS NOT NULL
+		  )
+		ORDER BY p.id
+	`, giveawayID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []ParticipantTicket
+	for rows.Next() {
+		var p ParticipantTicket
+		if err := rows.Scan(&p.UserID, &p.Tickets); err != nil {
+			return nil, err
+		}
+		res = append(res, p)
+	}
+	return res, rows.Err()
+}
+
+// CreateDraftFromGiveaway — «Создать копию»: новый черновик с настройками
+// источника (контент/каналы/режимы). Даты и publish_now не копируются.
+func (s *Store) CreateDraftFromGiveaway(ctx context.Context, ownerUserID int64, src Giveaway) (Giveaway, error) {
+	var g Giveaway
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO giveaways (
+			owner_user_id, name, post_text, post_format, media_tokens, button_text,
+			subscribe_channel_ids, publish_channel_ids,
+			results_in_original_post, results_post_text,
+			finish_mode, finish_participants_count, winners_count, winners_message,
+			captcha_mode, referral_enabled, referral_limit,
+			draft_step, status
+		) VALUES (
+			$1,
+			CASE WHEN $2::text = '' THEN 'Копия розыгрыша' ELSE $2 || ' (копия)' END,
+			$3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+			$18, 'draft'::giveaway_status
+		)
+		RETURNING `+giveawayCols+`
+	`, ownerUserID, src.Name, src.PostText, src.PostFormat, src.mediaTokensRaw, src.ButtonText,
+		src.SubscribeChannelIDs, src.PublishChannelIDs,
+		src.ResultsInOriginalPost, src.ResultsPostText,
+		src.FinishMode, src.FinishParticipantsCount, src.WinnersCount, src.WinnersMessage,
+		src.CaptchaMode, src.ReferralEnabled, src.ReferralLimit,
+		"name",
+	).Scan(scanDest(&g)...)
+	if err != nil {
+		return g, err
+	}
+	g.finalizeScan()
+	return g, nil
+}
+
+// ApplyLastGiveawayDefaults — новому черновику проставляются дефолты из
+// последнего СОЗДАННОГО розыгрыша юзера (каналы публикации, капча, кнопка,
+// рефералка): повторяющиеся розыгрыши собираются за меньшее число шагов.
+func (s *Store) ApplyLastGiveawayDefaults(ctx context.Context, ownerUserID, newGiveawayID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE giveaways g_new
+		SET publish_channel_ids = COALESCE(g_last.publish_channel_ids, '{}'),
+		    captcha_mode        = COALESCE(g_last.captcha_mode, 'none'),
+		    button_text         = COALESCE(NULLIF(g_last.button_text, ''), 'участвовать'),
+		    referral_enabled    = COALESCE(g_last.referral_enabled, FALSE)
+		FROM (
+		    SELECT * FROM giveaways
+		    WHERE owner_user_id=$1 AND status NOT IN ('draft')
+		    ORDER BY updated_at DESC LIMIT 1
+		) g_last
+		WHERE g_new.id=$2
+	`, ownerUserID, newGiveawayID)
+	return err
+}
+
+// DeleteDraftsOlderThan — чистка заброшенных черновиков (TTL).
+// Именованные тоже: 30 дней без движения = заброшен.
+func (s *Store) DeleteDraftsOlderThan(ctx context.Context, olderThan time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM giveaways WHERE status='draft' AND updated_at < $1
+	`, olderThan)
+	return err
 }
 
 // ScheduledReady — запланированные розыгрыши, у которых наступило publish_at.
