@@ -88,8 +88,53 @@ func (b *Bot) onBotStartedPayload(ctx context.Context, userID int64, payload str
 	if err := b.db.UTMRecordClick(ctx, link.ID, userID); err != nil {
 		b.log.Warn("utm record click", "err", err)
 	}
-	// Диалог только что открылся ссылкой — без экрана юзер висел бы в пустом чате.
+	// Диалог только что открылся ссылкой. Ссылка, привязанная к каналу, должна
+	// приводить посетителя В КАНАЛ (кнопка-ссылка на канал), а не в меню бота —
+	// иначе воронка обрывается в чате бота и подписка не случается.
+	if link.ChannelID != 0 {
+		b.sendUTMChannelScreen(ctx, userID, link)
+		return
+	}
 	b.sendStartScreen(ctx, userID)
+}
+
+// sendUTMChannelScreen — экран для посетителя, пришедшего по трекинг-ссылке
+// канала: кнопки ведут на КОНКРЕТНЫЙ ПОСТ (если пост-источник — ссылка)
+// и/или на сам канал. Диплинк технически
+// открывает диалог с ботом (в MAX только так боту сообщается клик — прямые
+// ссылки каналов payload не несут), но «оседать» посетитель должен в канале.
+// Клик уже засчитан в onBotStartedPayload; подписка атрибутируется по
+// user_added (бот админ в канале).
+func (b *Bot) sendUTMChannelScreen(ctx context.Context, userID int64, link store.UTMLink) {
+	ch, err := b.db.GetChannel(ctx, link.ChannelID, link.OwnerUserID)
+	if err != nil {
+		// Канал удалён у владельца — показываем обычный стартовый экран.
+		b.sendStartScreen(ctx, userID)
+		return
+	}
+	title := ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))
+	channelURL := util.ChannelURL(ch.Link)
+	// Пост-источник-ссылка: посетитель идёт на КОНКРЕТНЫЙ ПОСТ, не на канал.
+	postURL := ""
+	if ref := strings.TrimSpace(link.PostRef); util.IsHTTPURL(ref) {
+		postURL = ref
+	}
+
+	if channelURL != "" || postURL != "" {
+		action := "Откройте канал и подпишитесь — кнопка ниже 👇"
+		if postURL != "" {
+			action = "Откройте пост и подпишитесь на канал — кнопки ниже 👇"
+		}
+		_, _ = b.api.SendTextWithKeyboard(ctx, userID,
+			fmt.Sprintf("👋 Привет!\n\nВы пришли по ссылке на канал «%s».\n%s", title, action),
+			util.ChannelEntryKeyboard(title, channelURL, postURL))
+		return
+	}
+	// Приватный канал без публичной ссылки и без поста: кнопки невозможны.
+	_, _ = b.api.SendTextWithKeyboard(ctx, userID,
+		fmt.Sprintf("👋 Привет!\n\nВы пришли по ссылке на канал «%s».\n"+
+			"Найдите его в поиске MAX по названию и подпишитесь.", title),
+		util.BackKeyboard())
 }
 
 // showUTMMenu — меню конкретного канала: генерация UTM / аналитика.
@@ -264,11 +309,26 @@ func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRe
 			util.BackKeyboard())
 		return
 	}
+
+	// Показываем, куда ведёт ссылка: канал-назначение и его прямая ссылка.
+	channelLine := ""
+	if ch, err := b.db.GetChannel(ctx, chID, uid); err == nil {
+		title := ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))
+		if url := util.ChannelURL(ch.Link); url != "" {
+			channelLine = fmt.Sprintf("\n📢 Ведёт на канал: «%s» — %s", title, url)
+		} else {
+			channelLine = fmt.Sprintf("\n📢 Ведёт на канал: «%s» (приватный)", title)
+		}
+	}
+	postHint := ""
+	if util.IsHTTPURL(strings.TrimSpace(postRef)) {
+		postHint = " (пост-источник — ссылка: посетитель сразу откроет именно этот пост)"
+	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\nИсточник: %s%s\n\n"+
-			"Размещайте эту ссылку где угодно — каждый переход и подписка будут "+
-			"учтены в аналитике этого канала.",
-			link, source, postLine),
+		fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s%s\n\nИсточник: %s%s\n\n"+
+			"Размещайте её где угодно: клик учитывается мгновенно, а посетитель "+
+			"сразу получает кнопку на этот канал%s.",
+			link, channelLine, source, postLine, postHint),
 		util.ChannelUTMKeyboard(chID))
 }
 

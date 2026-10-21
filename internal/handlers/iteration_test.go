@@ -348,6 +348,201 @@ func TestUTM_SkipPost(t *testing.T) {
 	assert.Equal(t, "", all[0].PostRef, "пропуск поста → пустой post_ref")
 }
 
+// ---------- UTM: клик должен приводить в канал, а не упираться в бота ----------
+
+// botStartedUpdate — update bot_started (как при клике по диплинку).
+func botStartedUpdate(userID int64) model.Update {
+	return model.Update{
+		UpdateType: model.UpdateBotStarted,
+		UserID:     userID,
+		User:       &model.User{UserID: userID, FirstName: "visitor"},
+	}
+}
+
+// TestUTM_ChannelClick_ShowsChannelButton — посетитель кликнул трекинг-ссылку
+// КАНАЛА: вместо главного меню бота он получает экран канала с кнопкой-ССЫЛКОЙ
+// на сам канал. Диплинк на бота — единственный в MAX способ узнать о клике,
+// но воронка не должна обрываться в чате бота.
+func TestUTM_ChannelClick_ShowsChannelButton(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const owner, visitor = 6701, 6702
+	testutil.EnsureUser(t, s, owner, "owner")
+	testutil.EnsureUser(t, s, visitor, "visitor")
+
+	ch, err := s.AddChannel(ctx, store.Channel{
+		OwnerUserID: owner, ChatID: -670200, Title: "Мой канал",
+		Link: "mychannel", IsPublic: true, IsBotAdmin: true,
+	})
+	require.NoError(t, err)
+
+	// Владелец создаёт UTM-ссылку канала через билдер.
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
+	b.Handle(ctx, msgUpdate(owner, "Реклама"))
+	b.Handle(ctx, msgUpdate(owner, "Пост"))
+
+	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+
+	// Владельцу показано, куда ведёт ссылка: прямая ссылка на канал.
+	ownerSeesChannel := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == owner && strings.Contains(r.Text, "https://max.ru/mychannel") {
+			ownerSeesChannel = true
+		}
+	}
+	assert.True(t, ownerSeesChannel, "в сообщении о созданной ссылке должен быть URL канала")
+
+	// Посетитель кликает диплинк: bot_started с payload utm_<code>.
+	b.SetPendingStart(visitor, "utm_"+stats[0].Code)
+	b.Handle(ctx, botStartedUpdate(visitor))
+
+	sawChannelScreen, hasChannelLink := false, false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID != visitor {
+			continue
+		}
+		if strings.Contains(r.Text, "Мой канал") {
+			sawChannelScreen = true
+		}
+		for _, btn := range r.Buttons {
+			if btn.Type == model.ButtonLink && btn.URL == "https://max.ru/mychannel" {
+				hasChannelLink = true
+			}
+		}
+	}
+	assert.True(t, sawChannelScreen, "посетитель должен увидеть экран с названием канала")
+	assert.True(t, hasChannelLink, "у посетителя должна быть кнопка-ссылка на канал")
+
+	// Клик засчитан.
+	stats, err = s.ListUTMStats(ctx, owner, ch.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), stats[0].Clicks, "клик по диплинку должен засчитаться")
+}
+
+// TestUTM_PostRefURL_LeadsToPost — пост-источник-ССЫЛКА: посетитель получает
+// кнопку на конкретный пост (первой), плюс кнопку подписки на канал.
+func TestUTM_PostRefURL_LeadsToPost(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const owner, visitor = 6711, 6712
+	testutil.EnsureUser(t, s, owner, "owner")
+	testutil.EnsureUser(t, s, visitor, "visitor")
+
+	ch, err := s.AddChannel(ctx, store.Channel{
+		OwnerUserID: owner, ChatID: -671200, Title: "Постовый",
+		Link: "postovy", IsPublic: true, IsBotAdmin: true,
+	})
+	require.NoError(t, err)
+
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
+	b.Handle(ctx, msgUpdate(owner, "Реклама"))
+	b.Handle(ctx, msgUpdate(owner, "https://max.ru/postovy/42"))
+
+	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+
+	// Клик по диплинку.
+	code := stats[0].Code
+	b.SetPendingStart(visitor, "utm_"+code)
+	b.Handle(ctx, botStartedUpdate(visitor))
+
+	sawPost, sawChannel := false, false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID != visitor {
+			continue
+		}
+		for _, btn := range r.Buttons {
+			if btn.URL == "https://max.ru/postovy/42" {
+				sawPost = true
+			}
+			if btn.URL == "https://max.ru/postovy" {
+				sawChannel = true
+			}
+		}
+	}
+	assert.True(t, sawPost, "у посетителя должна быть кнопка на конкретный пост")
+	assert.True(t, sawChannel, "и кнопка подписки на канал")
+}
+
+// TestUTM_PrivateChannel_NoLinkButton — приватный канал (без публичной ссылки):
+// экран с названием есть, link-кнопки нет.
+func TestUTM_PrivateChannel_NoLinkButton(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const owner, visitor = 6711, 6712
+	testutil.EnsureUser(t, s, owner, "owner")
+	testutil.EnsureUser(t, s, visitor, "visitor")
+
+	ch, err := s.AddChannel(ctx, store.Channel{
+		OwnerUserID: owner, ChatID: -671200, Title: "Секретный канал", IsBotAdmin: true,
+	})
+	require.NoError(t, err)
+
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
+	b.Handle(ctx, msgUpdate(owner, "Реклама"))
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipPost))
+
+	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+
+	b.SetPendingStart(visitor, "utm_"+stats[0].Code)
+	b.Handle(ctx, botStartedUpdate(visitor))
+
+	sawName, hasAnyLink := false, false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID != visitor {
+			continue
+		}
+		if strings.Contains(r.Text, "Секретный канал") {
+			sawName = true
+		}
+		for _, btn := range r.Buttons {
+			if btn.Type == model.ButtonLink {
+				hasAnyLink = true
+			}
+		}
+	}
+	assert.True(t, sawName, "название канала должно показываться")
+	assert.False(t, hasAnyLink, "у приватного канала не может быть link-кнопки")
+}
+
+// TestUTM_QuickClick_ShowsStartMenu — быстрая ссылка (без канала): клик даёт
+// обычный стартовый экран бота.
+func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const owner, visitor = 6721, 6722
+	testutil.EnsureUser(t, s, owner, "owner")
+	testutil.EnsureUser(t, s, visitor, "visitor")
+
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMQuickCreate))
+	b.Handle(ctx, msgUpdate(owner, "Реклама"))
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipPost))
+
+	all, err := s.ListUTMStatsAll(ctx, owner)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+
+	b.SetPendingStart(visitor, "utm_"+all[0].Code)
+	b.Handle(ctx, botStartedUpdate(visitor))
+
+	sawStart := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == visitor && strings.Contains(r.Text, "Бот розыгрышей") {
+			sawStart = true
+		}
+	}
+	assert.True(t, sawStart, "быстрая ссылка без канала → стартовый экран бота")
+}
+
 // ---------- Итоги: экранирование ----------
 
 // TestResults_EscapeNames — имена со скобками не ломают markdown-упоминания.

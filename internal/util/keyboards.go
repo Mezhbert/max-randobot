@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
@@ -346,4 +347,43 @@ func RandomCode(n int) string {
 	b := make([]byte, n/2+1)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)[:n]
+}
+
+// ChannelURL — абсолютный URL публичного канала по его link из MAX API
+// (link приходит как username/слаг, но на всякий случай допускаем и полный
+// URL). Пустая строка — канала без публичной ссылки (приватный).
+func ChannelURL(link string) string {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return ""
+	}
+	if IsHTTPURL(link) {
+		return link
+	}
+	return "https://max.ru/" + strings.TrimPrefix(link, "@")
+}
+
+// IsHTTPURL — полный http(s)-адрес (пост-источник-ссылка ведёт посетителя
+// на конкретный пост, а не просто на канал).
+func IsHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// ChannelEntryKeyboard — экран посетителя, пришедшего по трекинг-ссылке.
+// Приоритет кнопки: КОНКРЕТНЫЙ ПОСТ (если пост-источник — ссылка), затем
+// подписка на сам канал; + возврат в меню бота.
+func ChannelEntryKeyboard(channelTitle, channelURL, postURL string) *model.Keyboard {
+	kb := model.NewKeyboard()
+	if postURL != "" {
+		kb.AddRow().AddLink("📄 Открыть пост", postURL)
+	}
+	if channelURL != "" {
+		label := "📢 Подписаться на канал"
+		if channelTitle != "" {
+			label = "📢 Подписаться на «" + channelTitle + "»"
+		}
+		kb.AddRow().AddLink(label, channelURL)
+	}
+	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
+	return kb
 }

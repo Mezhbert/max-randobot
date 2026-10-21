@@ -77,6 +77,7 @@ type SendRecord struct {
 	Text     string
 	Format   model.TextFormat
 	HasKb    bool
+	Buttons  []*model.Button // кнопки inline-клавиатуры (плоско; nil — без клавиатуры)
 }
 
 // EditRecord — зафиксированный вызов EditChatText.
@@ -125,7 +126,13 @@ func (m *MockBotAPI) SendText(ctx context.Context, userID int64, text string) er
 func (m *MockBotAPI) SendTextWithKeyboard(ctx context.Context, userID int64, text string, kb *model.Keyboard) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Sends = append(m.Sends, SendRecord{Method: "SendTextWithKeyboard", UserID: userID, Text: text, HasKb: true})
+	rec := SendRecord{Method: "SendTextWithKeyboard", UserID: userID, Text: text, HasKb: kb != nil}
+	if kb != nil {
+		for _, row := range kb.Build().Payload.Buttons {
+			rec.Buttons = append(rec.Buttons, row...)
+		}
+	}
+	m.Sends = append(m.Sends, rec)
 	if m.SendTextErr != nil {
 		return "", m.SendTextErr
 	}
