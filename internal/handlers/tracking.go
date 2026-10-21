@@ -167,15 +167,26 @@ func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
 		conv = float64(totSignups) / float64(totClicks) * 100
 	}
 
+	// Прямая ссылка на канал (сразу в канал, без прослоек) — отдельно от
+	// трекинг-ссылок: переходы по ней бот посчитать НЕ может (Bot API не
+	// создаёт инвайт-ссылки и не видит вход по ссылке), зато юзер попадает
+	// в канал мгновенно. Инвайт-ссылки с подсчётом админ создаёт руками
+	// в настройках канала клиента MAX.
+	kb := util.ChannelUTMKeyboard(chID)
+	if url := util.ChannelURL(ch.Link); url != "" {
+		kb.AddRow().AddClipboard("📋 Прямая ссылка (без счётчика)", url)
+	}
+
 	text := fmt.Sprintf("📊 %s\n\n", title) +
 		fmt.Sprintf("Ссылок: %d\n", len(stats)) +
 		fmt.Sprintf("Кликов: %d\n", totClicks) +
 		fmt.Sprintf("Регистраций: %d\n", totSignups) +
 		fmt.Sprintf("Отписок: %d\n", totUnsubs) +
 		fmt.Sprintf("Конверсия: %.1f%%\n\n", conv) +
-		"UTM-трекинг источников подписчиков."
+		"Трекинг-ссылка ведёт через бота (клик+подписка считаются, один тап до канала).\n" +
+		"Прямая ссылка — сразу в канал, но переходы не считаются."
 
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, util.ChannelUTMKeyboard(chID))
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
 }
 
 // startQuickUTM — быстрая трекинг-ссылка БЕЗ привязки к каналу (из меню
