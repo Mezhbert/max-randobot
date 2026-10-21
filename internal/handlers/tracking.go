@@ -321,25 +321,30 @@ func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRe
 		return
 	}
 
-	// Показываем, куда ведёт ссылка: канал-назначение и его прямая ссылка.
-	channelLine := ""
+	// Канальная ссылка: владелец получает ОБЕ ссылки с честными ярлыками —
+	// прямая (сразу в канал, но без счётчика) и с счётчиком (клик считается,
+	// посетитель видит одну кнопку в канал/пост). Прямая — первой: это и есть
+	// «ссылка на канал», которую просили разместить.
+	title, directURL := "", ""
 	if ch, err := b.db.GetChannel(ctx, chID, uid); err == nil {
-		title := ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))
-		if url := util.ChannelURL(ch.Link); url != "" {
-			channelLine = fmt.Sprintf("\n📢 Ведёт на канал: «%s» — %s", title, url)
-		} else {
-			channelLine = fmt.Sprintf("\n📢 Ведёт на канал: «%s» (приватный)", title)
-		}
+		title = ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))
+		directURL = util.ChannelURL(ch.Link)
 	}
-	postHint := ""
+	directBlock := "_(канал приватный — прямой ссылки нет)_"
+	if directURL != "" {
+		directBlock = directURL
+	}
+	visitorBtn := fmt.Sprintf("кнопку подписки на «%s»", title)
 	if util.IsHTTPURL(strings.TrimSpace(postRef)) {
-		postHint = " (пост-источник — ссылка: посетитель сразу откроет именно этот пост)"
+		visitorBtn = fmt.Sprintf("кнопку «Открыть пост» и подписки на «%s»", title)
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s%s\n\nИсточник: %s%s\n\n"+
-			"Размещайте её где угодно: клик учитывается мгновенно, а посетитель "+
-			"сразу получает кнопку на этот канал%s.",
-			link, channelLine, source, postLine, postHint),
+		fmt.Sprintf("✅ Готово — ссылки для «%s»:\n\n"+
+			"⚡ Прямая, сразу в канал (переходы НЕ считаются):\n%s\n\n"+
+			"📊 С счётчиком (клики/подписки/отписки — в аналитике):\n%s\n"+
+			"Посетитель увидит одну кнопку %s — и в канал.\n\n"+
+			"Источник: %s%s",
+			title, directBlock, link, visitorBtn, source, postLine),
 		util.ChannelUTMKeyboard(chID))
 }
 
