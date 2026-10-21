@@ -70,6 +70,24 @@ func (s *Store) UTMRecordClick(ctx context.Context, utmLinkID, userID int64) err
 	return tx.Commit(ctx)
 }
 
+// RecordAnonymousClick — клик по бесшовной ссылке (/r/<code>): HTTP-редирект
+// не знает user_id (юзер не проходил через бот), поэтому пишем user_id=0.
+// Клики инкрементятся в общей таблице — видны в той же аналитике.
+func (s *Store) RecordAnonymousClick(ctx context.Context, utmLinkID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx, `UPDATE utm_links SET clicks = clicks + 1 WHERE id=$1`, utmLinkID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO utm_clicks (utm_link_id, user_id) VALUES ($1, 0)`, utmLinkID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // UTMAccountSignup — юзер вступил в канал; если есть атрибуция к UTM — инкремент signups.
 // Возвращает UTM-ссылку, которой приписана подписка (или zero-value, если нет атрибуции).
 func (s *Store) UTMAccountSignup(ctx context.Context, userID, channelID int64) (UTMLink, bool, error) {

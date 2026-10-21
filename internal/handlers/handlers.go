@@ -27,6 +27,7 @@ type Bot struct {
 	log          *slog.Logger
 	botUsername  string // публичное имя бота (для диплинков UTM/участия)
 	helpURL      string // публичный URL справки (/app/help.html) для link-кнопки
+	publicURL    string // публичный HTTPS-домен бота — база бесшовных /r/-ссылок
 	counterUpd   func(ctx context.Context, g *store.Giveaway) // обновление счётчика участников в постах (сеттится из main, опционально)
 	publishNow   func(ctx context.Context, giveawayID int64) // немедленная публикация после Принять (сеттится из main)
 	lastCounters map[int64]int64                                // giveaway_id → unix-time последнего обновления счётчика (троттлинг)
@@ -63,6 +64,14 @@ func (b *Bot) SetUsername(name string) {
 func (b *Bot) SetHelpURL(url string) {
 	if url != "" {
 		b.helpURL = url
+	}
+}
+
+// SetPublicURL задаёт публичный домен (WEBHOOK_URL) — для бесшовных
+// трекинг-ссылок вида https://<домен>/r/<code>.
+func (b *Bot) SetPublicURL(url string) {
+	if url != "" {
+		b.publicURL = strings.TrimRight(url, "/")
 	}
 }
 

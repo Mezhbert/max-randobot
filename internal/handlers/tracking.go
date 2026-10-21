@@ -321,30 +321,33 @@ func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRe
 		return
 	}
 
-	// Канальная ссылка: владелец получает ОБЕ ссылки с честными ярлыками —
-	// прямая (сразу в канал, но без счётчика) и с счётчиком (клик считается,
-	// посетитель видит одну кнопку в канал/пост). Прямая — первой: это и есть
-	// «ссылка на канал», которую просили разместить.
+	// Канальная ссылка: главный вариант — БЕСШОВНАЯ /r/<code> на нашем домене
+	// (клик считается на редиректе, юзер сразу в канале/на посте). Прямая —
+	// для случаев, когда домен бота светить не хочется. Диплинк — для точной
+	// атрибуции «кто именно подписался».
 	title, directURL := "", ""
 	if ch, err := b.db.GetChannel(ctx, chID, uid); err == nil {
 		title = ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))
 		directURL = util.ChannelURL(ch.Link)
 	}
-	directBlock := "_(канал приватный — прямой ссылки нет)_"
-	if directURL != "" {
-		directBlock = directURL
+
+	mainLink := link // диплинк-фолбэк (если публичный домен бота неизвестен)
+	if b.publicURL != "" {
+		mainLink = b.publicURL + "/r/" + code
 	}
-	visitorBtn := fmt.Sprintf("кнопку подписки на «%s»", title)
-	if util.IsHTTPURL(strings.TrimSpace(postRef)) {
-		visitorBtn = fmt.Sprintf("кнопку «Открыть пост» и подписки на «%s»", title)
+	notes := "Клик → мгновенный переход в канал/на пост, клики считаются."
+	if postURL := strings.TrimSpace(postRef); util.IsHTTPURL(postURL) {
+		notes = "Клик → мгновенный переход на конкретный пост, клики считаются."
 	}
+
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		fmt.Sprintf("✅ Готово — ссылки для «%s»:\n\n"+
-			"⚡ Прямая, сразу в канал (переходы НЕ считаются):\n%s\n\n"+
-			"📊 С счётчиком (клики/подписки/отписки — в аналитике):\n%s\n"+
-			"Посетитель увидит одну кнопку %s — и в канал.\n\n"+
+		fmt.Sprintf("✅ Ссылка для «%s» готова:\n\n"+
+			"⚡ %s\n%s\n\n"+
+			"Альтернативы:\n"+
+			"• Прямая на канал (домен бота не светится, клики НЕ считаются): %s\n"+
+			"• С точной атрибуцией подписок (кто именно вступил): %s\n\n"+
 			"Источник: %s%s",
-			title, directBlock, link, visitorBtn, source, postLine),
+			title, mainLink, notes, ifEmpty(directURL, "—"), link, source, postLine),
 		util.ChannelUTMKeyboard(chID))
 }
 

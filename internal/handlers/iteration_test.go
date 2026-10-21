@@ -438,6 +438,7 @@ func TestUTM_PostRefURL_LeadsToPost(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	b.SetPublicURL("https://bot.example.com")
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
 	b.Handle(ctx, msgUpdate(owner, "Реклама"))
 	b.Handle(ctx, msgUpdate(owner, "https://max.ru/postovy/42"))
@@ -445,6 +446,15 @@ func TestUTM_PostRefURL_LeadsToPost(t *testing.T) {
 	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
 	require.NoError(t, err)
 	require.Len(t, stats, 1)
+
+	// Владельцу выдана БЕСШОВНАЯ ссылка на домене бота: /r/<code>.
+	seamless := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == owner && strings.Contains(r.Text, "https://bot.example.com/r/"+stats[0].Code) {
+			seamless = true
+		}
+	}
+	assert.True(t, seamless, "главной ссылкой должна быть бесшовная /r/<code> на домене бота")
 
 	// Клик по диплинку.
 	code := stats[0].Code

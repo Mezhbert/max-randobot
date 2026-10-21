@@ -79,6 +79,7 @@ func main() {
 	bot.SetCounterUpdater(sch.UpdateParticipantCounter)
 	bot.SetPublishNow(sch.PublishGiveawayNow)
 	bot.SetHelpURL(cfg.WebhookURL + "/app/help.html")
+	bot.SetPublicURL(cfg.WebhookURL)
 
 	schedCtx, schedStop := context.WithCancel(context.Background())
 	defer schedStop()
@@ -169,6 +170,8 @@ func main() {
 	})
 	// Мини-апп: только главный экран с описанием (+ справка для «Поддержка»).
 	mux.Handle("/app/", webapp.Handler())
+	// Бесшовные трекинг-ссылки: /r/<code> → клик + 302 на канал/пост.
+	mux.Handle("/r/", webapp.RedirectHandler(db, slog.Default()))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
