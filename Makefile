@@ -14,6 +14,12 @@ DOCKER_RUN := docker run --rm -v "$(PWD):/src" -w /src \
 help: ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
+deploy-up: ## Поднять прод-стек на сервере (postgres+bot+caddy, авто-TLS)
+	DOMAIN=$${DOMAIN:?DOMAIN=bot.example.com} docker compose -f docker-compose.prod.yml up -d --build
+
+deploy-update: ## Обновить бота на сервере: git pull + пересборка + рестарт
+	./scripts/update.sh
+
 build: ## Собрать бинарники бота и cron
 	go build -o $(BOT_BIN) ./cmd/bot
 	go build -o $(CRON_BIN) ./cmd/cron
