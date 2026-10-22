@@ -1369,3 +1369,50 @@ func seedActiveGiveaway(t *testing.T, s *store.Store, owner int64, captcha strin
 	require.NoError(t, err)
 	return id
 }
+
+// TestPubChannels_LiveAdminCheck — кэш is_bot_admin протух (бота кикнули/
+// сменился токен): «Далее» проверяет админство ЖИВЫМ запросом и блокирует
+// розыгрыш в мёртвом канале, обновляя флаг в БД.
+func TestPubChannels_LiveAdminCheck(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6951
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	// Канал с ПРОТУХШИМ флагом admin=true, реально бота там нет.
+	ch, err := s.AddChannel(ctx, store.Channel{
+		OwnerUserID: uid, ChatID: -6951000, Title: "Мёртвый", IsBotAdmin: true,
+	})
+	require.NoError(t, err)
+	mock.IsBotAdminMap = map[int64]bool{-6951000: false}
+
+	// Черновик на шаге pub_channels с выбранным мёртвым каналом.
+	var gid int64
+	err = s.Pool().QueryRow(ctx, `
+		INSERT INTO giveaways (owner_user_id, name, post_text, button_text,
+			publish_channel_ids, status, draft_step)
+		VALUES ($1,'T','текст','Участвовать',ARRAY[$2]::bigint[],'draft','pub_channels')
+		RETURNING id
+	`, uid, ch.ID).Scan(&gid)
+	require.NoError(t, err)
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBFSMOption+"next"))
+
+	// Шаг НЕ сдвинулся, юзер получил объяснение, флаг в БД обновлён.
+	gg, err := s.GetGiveawayAny(ctx, gid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepPubChannels, gg.DraftStep, "переход заблокирован")
+	blocked := false
+	flagFixed := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Бот не админ в каналах: Мёртвый") {
+			blocked = true
+		}
+	}
+	fresh, err := s.GetChannel(ctx, ch.ID, uid)
+	require.NoError(t, err)
+	flagFixed = !fresh.IsBotAdmin
+	assert.True(t, blocked, "юзер должен получить список мёртвых каналов")
+	assert.True(t, flagFixed, "протухший флаг должен обновиться на live-значение")
+}

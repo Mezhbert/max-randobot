@@ -129,6 +129,11 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 		mid, err := s.api.SendToChat(ctx, ch.ChatID, g.PostText, attachments, format)
 		if err != nil {
 			s.log.Warn("publish to channel", "channel", ch.ChatID, "err", err)
+			// Канал недоступен боту (кикнут/новый бот) — снимаем флаг админства,
+			// чтобы мёртвый канал не попадал в следующие розыгрыши.
+			if strings.Contains(err.Error(), "chat.not.found") || strings.Contains(err.Error(), "chat.denied") {
+				_ = s.db.SetChannelAdminByChat(ctx, ch.ChatID, false)
+			}
 			continue
 		}
 		// Закрепляем пост — чтобы кнопка участия была видна в закрепе.

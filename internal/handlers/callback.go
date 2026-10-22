@@ -208,19 +208,30 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 					"⚠️ Выберите хотя бы один канал публикации (отметьте ✅) — без него пост некуда публиковать.")
 				return
 			}
-			// Проверяем админство бота в выбранных каналах.
+			// Проверяем админство бота в выбранных каналах — ЖИВЫМ запросом,
+			// не кэшем: флаг is_bot_admin в БД может протухнуть (бота кикнули,
+			// сменился токен = новый бот без админства). Ретраи публикации в
+			// мёртвый канал — именно эта дыра (chat.not.found в scheduler).
 			chs, err := b.db.ChannelsByIDs(ctx, uid, g.PublishChannelIDs)
 			if err == nil {
 				var bad []string
 				for _, c := range chs {
-					if !c.IsBotAdmin {
-						bad = append(bad, c.Title)
+					live, err := b.api.IsBotAdminInChat(ctx, c.ChatID)
+					if live != c.IsBotAdmin {
+						_ = b.db.SetChannelAdminFlag(ctx, c.ID, live) // кэш → правда
+					}
+					if err != nil || !live {
+						title := c.Title
+						if title == "" {
+							title = fmt.Sprintf("канал #%d", c.ChatID)
+						}
+						bad = append(bad, title)
 					}
 				}
 				if len(bad) > 0 {
 					_ = b.api.SendText(ctx, uid,
 						"⚠️ Бот не админ в каналах: "+strings.Join(bad, ", ")+
-							". Уберите их или обновите каналы в «Мои каналы → 🔄».")
+							".\nДобавьте бота админом в канал и передобавьте его в «Мои каналы ➕» (перешлите пост из канала).")
 					return
 				}
 			}
