@@ -151,9 +151,31 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 	}
 
 	if !publishedAny {
+		// Кап ретраев: без него кикнутый из канала бот генерил бесконечный
+		// цикл попыток (логи забиты, API-квота жгётся). После 10 неудач —
+		// cancelled + объяснение владельцу.
+		if n, err := s.db.IncPublishAttempts(ctx, g.ID); err == nil && n >= 10 {
+			_ = s.db.SetStatus(ctx, g.ID, store.StatusCancelled)
+			s.log.Error("publish giveaway: попытки исчерпаны — cancelled", "id", g.ID, "attempts", n)
+			if g.OwnerUserID != 0 {
+				_ = s.api.SendText(ctx, g.OwnerUserID,
+					"⚠️ Не удалось опубликовать розыгрыш «"+ifEmptyG(g.Name)+"»: бот не имеет доступа к каналам публикации "+
+						"(возможно, бота удалили из админов).\n\n"+
+						"Розыгрыш отменён. Проверьте админство бота в канале и создайте розыгрыш заново.")
+			}
+			return fmt.Errorf("publish: попытки исчерпаны: no channel published")
+		}
 		return revert("ни один канал не принял пост", fmt.Errorf("no channel published"))
 	}
 	return s.db.MarkPublished(ctx, g.ID)
+}
+
+// ifEmptyG — имя розыгрыша для сообщений (без пустоты).
+func ifEmptyG(s string) string {
+	if s == "" {
+		return "без названия"
+	}
+	return s
 }
 
 // UpdateParticipantCounter обновляет кнопку «Участвовать (N)» в опубликованных

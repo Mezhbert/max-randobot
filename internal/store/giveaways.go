@@ -323,6 +323,17 @@ func (s *Store) DeleteGiveaway(ctx context.Context, id, ownerUserID int64) error
 	return nil
 }
 
+// IncPublishAttempts — +1 к счётчику неудачных публикаций; возвращает новое
+// значение (для решения о парковке розыгрыша после N ретраев).
+func (s *Store) IncPublishAttempts(ctx context.Context, id int64) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		UPDATE giveaways SET publish_attempts = publish_attempts + 1, updated_at=now()
+		WHERE id=$1 RETURNING publish_attempts
+	`, id).Scan(&n)
+	return n, err
+}
+
 // ListParticipantsForDrawVerified — участники для ЖЕРЕБЬЁВКИ: из общего
 // списка исключаются отписавшиеся от каналов розыгрыша (subscriptions_log с
 // unsubscribed_at). Подписка проверяется при участии, но к моменту итогов
@@ -513,7 +524,7 @@ const giveawayCols = `id, owner_user_id, name, post_text, post_format, media_tok
 	publish_at, finish_at, finish_mode, finish_participants_count, winners_count, winners_message,
 	referral_enabled, referral_limit, captcha_mode, captcha_percent, promotion_enabled,
 	draft_step, status, publish_message_ids, results_message_ids, winners_user_ids,
-	winners_notified_user_ids, results_published, channel_select_mid, publish_now, created_at, updated_at`
+	winners_notified_user_ids, results_published, channel_select_mid, publish_now, publish_attempts, created_at, updated_at`
 
 // giveawayColNames — имена колонок в том же порядке, что giveawayCols.
 // Используется giveawayColsAlias для подстановки алиаса в JOIN'ах.
@@ -523,7 +534,7 @@ var giveawayColNames = []string{
 	"publish_at", "finish_at", "finish_mode", "finish_participants_count", "winners_count", "winners_message",
 	"referral_enabled", "referral_limit", "captcha_mode", "captcha_percent", "promotion_enabled",
 	"draft_step", "status", "publish_message_ids", "results_message_ids", "winners_user_ids",
-	"winners_notified_user_ids", "results_published", "channel_select_mid", "publish_now", "created_at", "updated_at",
+	"winners_notified_user_ids", "results_published", "channel_select_mid", "publish_now", "publish_attempts", "created_at", "updated_at",
 }
 
 func giveawayColsAlias(alias string) string {
@@ -572,7 +583,7 @@ func scanDest(g *Giveaway) []any {
 		&g.publishAt, &g.finishAt, &g.FinishMode, &g.FinishParticipantsCount, &g.WinnersCount, &g.WinnersMessage,
 		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
 		&g.draftStep, &g.Status, &g.publishMsgs, &g.resultsMsgs, &g.WinnersUserIDs,
-		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.PublishNow, &g.CreatedAt, &g.UpdatedAt,
+		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.PublishNow, &g.PublishAttempts, &g.CreatedAt, &g.UpdatedAt,
 	}
 }
 

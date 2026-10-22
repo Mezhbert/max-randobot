@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -268,4 +269,50 @@ func countResultsPosts(m *testutil.MockBotAPI, chatID int64) int {
 		}
 	}
 	return n
+}
+
+// TestPublish_RetryCapCancelsAfter10Failures — недоступный канал (SendToChat
+// падает): после 10 попыток розыгрыш cancelled + владелец уведомлён,
+// а не бесконечный цикл ретраев.
+func TestPublish_RetryCapCancelsAfter10Failures(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	mock := testutil.NewMock()
+	sch := New(mock, s, nil)
+	ctx := context.Background()
+
+	g, _ := setupScheduledGiveaway(t, s, 5010)
+
+	// Канал недоступен (бот кикнут): SendToChat всегда падает.
+	mock.SendToChatMID = func(chatID int64) (string, error) {
+		return "", errors.New("chat.not.found")
+	}
+
+	for i := 0; i < 9; i++ {
+		_ = sch.PublishPending(ctx)
+	}
+	after9, err := s.GetGiveawayAny(ctx, g.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusScheduled, after9.Status, "до 10 попыток — всё ещё scheduled")
+	assert.Equal(t, 9, after9.PublishAttempts)
+
+	_ = sch.PublishPending(ctx) // 10-я
+	after10, err := s.GetGiveawayAny(ctx, g.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelled, after10.Status, "после 10 неудач — cancelled")
+	assert.Equal(t, 10, after10.PublishAttempts)
+
+	notified := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == g.OwnerUserID && strings.Contains(r.Text, "Не удалось опубликовать") {
+			notified = true
+		}
+	}
+	assert.True(t, notified, "владелец должен получить объяснение")
+
+	// Дальше тикер молчит: больше не scheduled.
+	_ = sch.PublishPending(ctx)
+	after11, err := s.GetGiveawayAny(ctx, g.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 10, after11.PublishAttempts, "после cancel счётчик не растёт")
 }

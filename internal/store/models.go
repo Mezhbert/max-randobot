@@ -95,6 +95,7 @@ type Giveaway struct {
 	ResultsPublished       bool    // итоги уже опубликованы (обе ветки: edit поста / отдельный пост)
 	ChannelSelectMID       string // mid сообщения выбора каналов (для edit-in-place тоггла)
 	PublishNow             bool   // «Опубликовать сразу»: publish_at = now в момент Принять
+	PublishAttempts        int    // неудачные попытки публикации (после 10 — cancel+уведомление)
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 
