@@ -75,7 +75,8 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 		return
 	}
 
-	// Капча: если включена — картинка в чате (сообщение откроет диалог).
+	// Капча: если включена — картинка + текст-подсказка в чате (текст
+	// открывает диалог на клиентах, где картинка этого не делает).
 	if b.needCaptcha(g) {
 		if err := b.startCaptchaChallenge(ctx, userID, g.ID); err != nil {
 			// Бот не может писать юзеру (диалог не начинался) — раньше «чёрная
@@ -90,8 +91,13 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 			}
 			_ = b.db.SetSessionPayload(ctx, userID, store.SessionCaptchaWaitStart,
 				map[string]any{"giveaway_id": float64(g.ID)})
+			return
 		}
-		return
+		// Капча доставлена — тост ведёт в чат (у кого диалог не открылся сам).
+		if callbackID != "" {
+			answered = true
+			b.api.AnswerCallback(ctx, callbackID, "🤖 Капча пришла в чат с ботом — откройте его 👆")
+		}
 	}
 
 	// Без капчи — регистрируем сразу; карточка «Вы участвуете» откроет диалог.
@@ -113,11 +119,14 @@ func (b *Bot) startCaptchaChallenge(ctx context.Context, userID, giveawayID int6
 		_ = b.api.SendText(ctx, userID, "⚠️ Ошибка генерации капчи. Попробуйте ещё раз.")
 		return err
 	}
-	// Картинка капчи — отправка в диалог открывает его. Сессию ставим только
-	// при успешной доставке (иначе юзер без диалога зависает с «истёкшей» капчей).
-	if err := b.api.SendImage(ctx, userID, pngData, "🤖 Введите цифры с картинки, чтобы участвовать:"); err != nil {
+	// Картинка капчи. SendImage у части клиентов НЕ открывает диалог сама
+	// (текстовые сообщения открывают/скроллят, картинки — нет: подтверждено
+	// живым тестом). Поэтому следом летит ТЕКСТ-подсказка: она открывает чат
+	// и показывает пуш с внятным текстом — капча остаётся прямо над ней.
+	if err := b.api.SendImage(ctx, userID, pngData, "🤖 Капча для участия:"); err != nil {
 		return err
 	}
+	_ = b.api.SendText(ctx, userID, "🤖 Введите цифры с картинки чуть выше 👆 — сообщением в ответ")
 	_ = b.db.SetSessionPayload(ctx, userID, store.SessionCaptchaVerify, map[string]any{
 		"giveaway_id": giveawayID,
 	})
