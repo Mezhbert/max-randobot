@@ -430,18 +430,44 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		b.toggleChannelSelection(ctx, uid, p)
 
 	case strings.HasPrefix(p, util.CBUTMSkipPost):
-		// Билдер трекинг-ссылки: пропустить пост-источник.
+		// Билдер трекинг-ссылки: пропустить пост-источник → сразу стоимость.
 		sess, err := b.db.GetSessionPayload(ctx, uid)
 		if err != nil || sess.State != store.SessionUTMCreate {
 			return
 		}
 		source, _ := sess.Payload["source"].(string)
 		chIDf, _ := sess.Payload["channel_id"].(float64)
-		b.finishUTMLink(ctx, uid, int64(chIDf), source, "")
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
+			"channel_id": chIDf, "stage": "cost", "source": source, "post_ref": "",
+		})
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"💰 Стоимость выхода (необязательно).\n\n"+
+				"Сколько заплачено за размещение (₽)? Посчитаем CPA — цену подписчика. Можно пропустить.",
+			util.CostKeyboard())
+
+	case strings.HasPrefix(p, util.CBUTMSkipCost):
+		sess, err := b.db.GetSessionPayload(ctx, uid)
+		if err != nil || sess.State != store.SessionUTMCreate {
+			return
+		}
+		source, _ := sess.Payload["source"].(string)
+		postRef, _ := sess.Payload["post_ref"].(string)
+		chIDf, _ := sess.Payload["channel_id"].(float64)
+		b.finishUTMLink(ctx, uid, int64(chIDf), source, postRef, 0)
 
 	case strings.HasPrefix(p, util.CBChannelUTM):
 		// Выбор канала для генерации UTM-ссылки
 		b.showUTMMenu(ctx, uid, p)
+
+	case strings.HasPrefix(p, util.CBUTMQuickLink):
+		// Простая ссылка одним тапом: без вопросов, source = «Простая <дата>».
+		// Пришло/ушло считается; UTM-детализация — через билдер.
+		idStr := strings.TrimPrefix(p, util.CBUTMQuickLink)
+		chID, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return
+		}
+		b.createSimpleUTMLink(ctx, uid, chID)
 
 	case strings.HasPrefix(p, util.CBUTMCreate):
 		// Начать создание UTM-ссылки на канал

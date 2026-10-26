@@ -12,6 +12,7 @@ type UTMLink struct {
 	Campaign    string // utm_campaign
 	PostRef     string // ссылка/название поста-источника
 	Code        string // код диплинка (без префикса utm_)
+	Cost        float64 // стоимость выхода (₽), для CPA
 	Clicks      int64
 	Signups     int64
 	Unsubs      int64
@@ -21,18 +22,18 @@ type UTMLink struct {
 // CreateUTMLink — генерация UTM-ссылки для отслеживания источника подписок.
 // channelID=0 → NULL (быстрая трекинг-ссылка без привязки к каналу).
 // Возвращает ID созданной/обновлённой записи. code — БЕЗ префикса "utm_".
-func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64, source, medium, campaign, postRef, code string) (int64, error) {
+func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64, source, medium, campaign, postRef, code string, cost float64) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO utm_links (owner_user_id, channel_id, source, medium, campaign, post_ref, code)
-		VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7)
+		INSERT INTO utm_links (owner_user_id, channel_id, source, medium, campaign, post_ref, code, cost)
+		VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (code) DO UPDATE
 		  SET source = EXCLUDED.source,
 		      medium = EXCLUDED.medium,
 		      campaign = EXCLUDED.campaign,
 		      post_ref = EXCLUDED.post_ref
 		RETURNING id
-	`, ownerUserID, channelID, source, medium, campaign, postRef, code).Scan(&id)
+	`, ownerUserID, channelID, source, medium, campaign, postRef, code, cost).Scan(&id)
 	return id, err
 }
 
@@ -40,9 +41,9 @@ func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64,
 func (s *Store) GetUTMLinkByCode(ctx context.Context, code string) (UTMLink, error) {
 	var u UTMLink
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign, post_ref, code, clicks, signups, COALESCE(enabled,true)
+		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign, post_ref, code, cost, clicks, signups, COALESCE(enabled,true)
 		FROM utm_links WHERE code=$1
-	`, code).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Clicks, &u.Signups, &u.Enabled)
+	`, code).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Cost, &u.Clicks, &u.Signups, &u.Enabled)
 	return u, wrapNotFound(err)
 }
 
@@ -127,6 +128,7 @@ type UTMStat struct {
 	Campaign string
 	PostRef  string
 	Code     string
+	Cost     float64
 	Clicks   int64
 	Signups  int64
 	Unsubs   int64
@@ -135,7 +137,7 @@ type UTMStat struct {
 // ListUTMStats — все UTM-ссылки по каналу (с расширенной статистикой).
 func (s *Store) ListUTMStats(ctx context.Context, ownerUserID, channelID int64) ([]UTMStat, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, source, medium, campaign, post_ref, code, clicks, signups, COALESCE(unsubs,0)
+		SELECT id, source, medium, campaign, post_ref, code, cost, clicks, signups, COALESCE(unsubs,0)
 		FROM utm_links
 		WHERE owner_user_id=$1 AND channel_id=$2
 		ORDER BY created_at DESC
@@ -147,7 +149,7 @@ func (s *Store) ListUTMStats(ctx context.Context, ownerUserID, channelID int64) 
 	var res []UTMStat
 	for rows.Next() {
 		var u UTMStat
-		if err := rows.Scan(&u.ID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
+		if err := rows.Scan(&u.ID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Cost, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
 			return nil, err
 		}
 		res = append(res, u)
@@ -158,7 +160,7 @@ func (s *Store) ListUTMStats(ctx context.Context, ownerUserID, channelID int64) 
 // ListUTMStatsAll — все UTM-ссылки владельца по всем каналам (сводный отчёт).
 func (s *Store) ListUTMStatsAll(ctx context.Context, ownerUserID int64) ([]UTMStat, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, source, medium, campaign, post_ref, code, clicks, signups, COALESCE(unsubs,0)
+		SELECT id, source, medium, campaign, post_ref, code, cost, clicks, signups, COALESCE(unsubs,0)
 		FROM utm_links
 		WHERE owner_user_id=$1
 		ORDER BY created_at DESC
@@ -170,7 +172,7 @@ func (s *Store) ListUTMStatsAll(ctx context.Context, ownerUserID int64) ([]UTMSt
 	var res []UTMStat
 	for rows.Next() {
 		var u UTMStat
-		if err := rows.Scan(&u.ID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
+		if err := rows.Scan(&u.ID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Cost, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
 			return nil, err
 		}
 		res = append(res, u)

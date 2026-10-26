@@ -44,7 +44,9 @@ const (
 
 	// UTM-трекинг (общее)
 	CBUTMQuickCreate = "utm_quick"      // быстрая трекинг-ссылка без канала
+	CBUTMQuickLink   = "utm_fast:"     // + channel_id — простая ссылка одним тапом
 	CBUTMSkipPost    = "utm_post_skip" // билдер ссылки: пропустить пост-источник
+	CBUTMSkipCost    = "utm_cost_skip" // билдер ссылки: без стоимости
 
 	// Каналы
 	CBChannelAdd       = "ch_add"
@@ -315,6 +317,14 @@ func CancelKeyboard() *model.Keyboard {
 	return kb
 }
 
+// CostKeyboard — шаг билдера: стоимость выхода (пропуск/отмена).
+func CostKeyboard() *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("⏭ Без стоимости", CBUTMSkipCost)
+	kb.AddRow().AddCallBack("✖ Отмена", CBMainMenu)
+	return kb
+}
+
 // PostRefKeyboard — шаг билдера трекинг-ссылки: пост-источник (пропуск/отмена).
 func PostRefKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
@@ -327,10 +337,11 @@ func PostRefKeyboard() *model.Keyboard {
 func ChannelUTMKeyboard(channelID int64) *model.Keyboard {
 	id := strconv.FormatInt(channelID, 10)
 	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("🔗 Создать UTM-ссылку", CBUTMCreate+id)
+	kb.AddRow().AddCallBack("⚡ Простая ссылка", CBUTMQuickLink+id)
+	kb.AddRow().AddCallBack("🎛 Билдер (UTM/пост/стоимость)", CBUTMCreate+id)
 	kb.AddRow().
-		AddCallBack("📊 Аналитика UTM", CBUTMStats+id).
-		AddCallBack("📈 Динамика канала", CBUTMDyn+id)
+		AddCallBack("📊 Аналитика", CBUTMStats+id).
+		AddCallBack("📈 Динамика", CBUTMDyn+id)
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb
 }

@@ -317,6 +317,7 @@ func TestUTM_QuickNoChannel(t *testing.T) {
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
 	b.Handle(ctx, msgUpdate(uid, "Реклама у Петрова"))  // шаг 1: источник
 	b.Handle(ctx, msgUpdate(uid, "Пост в TG от 15.10")) // шаг 2: пост-источник
+	b.Handle(ctx, msgUpdate(uid, "1500"))               // шаг 3: стоимость
 
 	all, err := s.ListUTMStatsAll(ctx, uid)
 	require.NoError(t, err)
@@ -325,6 +326,7 @@ func TestUTM_QuickNoChannel(t *testing.T) {
 		if l.Source == "Реклама у Петрова" {
 			found = true
 			assert.Equal(t, "Пост в TG от 15.10", l.PostRef, "пост-источник должен сохраниться")
+			assert.InDelta(t, 1500.0, l.Cost, 0.01, "стоимость должна сохраниться")
 		}
 	}
 	assert.True(t, found, "быстрая UTM-ссылка должна создаться без канала")
@@ -342,12 +344,14 @@ func TestUTM_SkipPost(t *testing.T) {
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
 	b.Handle(ctx, msgUpdate(uid, "Сторис"))
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipPost))
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipCost))
 
 	all, err := s.ListUTMStatsAll(ctx, uid)
 	require.NoError(t, err)
 	require.Len(t, all, 1)
 	assert.Equal(t, "Сторис", all[0].Source)
 	assert.Equal(t, "", all[0].PostRef, "пропуск поста → пустой post_ref")
+	assert.InDelta(t, 0.0, all[0].Cost, 0.01)
 }
 
 // ---------- UTM: клик должен приводить в канал, а не упираться в бота ----------
@@ -383,6 +387,7 @@ func TestUTM_ChannelClick_ShowsChannelButton(t *testing.T) {
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
 	b.Handle(ctx, msgUpdate(owner, "Реклама"))
 	b.Handle(ctx, msgUpdate(owner, "Пост"))
+	b.Handle(ctx, msgUpdate(owner, "300")) // стоимость
 
 	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
 	require.NoError(t, err)
@@ -444,6 +449,7 @@ func TestUTM_PostRefURL_LeadsToPost(t *testing.T) {
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
 	b.Handle(ctx, msgUpdate(owner, "Реклама"))
 	b.Handle(ctx, msgUpdate(owner, "https://max.ru/postovy/42"))
+	b.Handle(ctx, msgUpdate(owner, "500")) // стоимость
 
 	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
 	require.NoError(t, err)
@@ -499,6 +505,7 @@ func TestUTM_PrivateChannel_NoLinkButton(t *testing.T) {
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
 	b.Handle(ctx, msgUpdate(owner, "Реклама"))
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipPost))
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipCost))
 
 	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
 	require.NoError(t, err)
@@ -538,6 +545,7 @@ func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMQuickCreate))
 	b.Handle(ctx, msgUpdate(owner, "Реклама"))
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipPost))
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipCost))
 
 	all, err := s.ListUTMStatsAll(ctx, owner)
 	require.NoError(t, err)

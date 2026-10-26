@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/maxbot/giveawaybot/internal/util"
@@ -151,6 +152,14 @@ func (b *Bot) sendUTMChannelScreen(ctx context.Context, userID int64, link store
 		util.BackKeyboard())
 }
 
+// costOf — стоимость из сессии билдера (0 если не вводили).
+func costOf(sess store.UserSession) float64 {
+	if c, ok := sess.Payload["cost"].(float64); ok {
+		return c
+	}
+	return 0
+}
+
 // showUTMMenu — меню конкретного канала: генерация UTM / аналитика.
 func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
 	idStr := strings.TrimPrefix(p, util.CBChannelUTM)
@@ -194,11 +203,11 @@ func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
 	text := fmt.Sprintf("📊 %s\n\n", title) +
 		fmt.Sprintf("Ссылок: %d\n", len(stats)) +
 		fmt.Sprintf("Кликов: %d\n", totClicks) +
-		fmt.Sprintf("Регистраций: %d\n", totSignups) +
+		fmt.Sprintf("Подписок: %d\n", totSignups) +
 		fmt.Sprintf("Отписок: %d\n", totUnsubs) +
 		fmt.Sprintf("Конверсия: %.1f%%\n\n", conv) +
-		"Трекинг-ссылка ведёт через бота (клик+подписка считаются, один тап до канала).\n" +
-		"Прямая ссылка — сразу в канал, но переходы не считаются."
+		"⚡ Ссылки бесшовные: юзер кликает → короткая заставка → сразу канал/пост.\n" +
+		"Клик и подписка засчитываются с его id (мини-апп)."
 
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
 }
@@ -245,12 +254,12 @@ func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 		util.CancelKeyboard())
 }
 
-// handleUTMCreateInput — билдер трекинг-ссылки, два шага:
+// handleUTMCreateInput — билдер трекинг-ссылки, три шага:
 //  1. название источника (откуда идёт трафик в целом);
-//  2. пост-источник (ссылка на конкретный пост/сторис, где будет размещена
-//     ссылка) — в аналитике и CSV видно, какой пост привёл подписчиков.
+//  2. пост-источник (ссылка на конкретный пост/сторис);
+//  3. стоимость выхода в ₽ (для CPA) — можно пропустить.
 //
-// Сессия payload: {channel_id, stage: "source"|"post", source}.
+// Сессия payload: {channel_id, stage: "source"|"post"|"cost", source, post_ref}.
 func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) bool {
 	sess, err := b.db.GetSessionPayload(ctx, uid)
 	if err != nil || sess.State != store.SessionUTMCreate {
@@ -266,6 +275,24 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 	chIDf2, _ := chIDf.(float64)
 	chID := int64(chIDf2)
 	stage, _ := sess.Payload["stage"].(string)
+
+	// Шаг 3: стоимость выхода (₽) — для CPA; пустой ввод = пропустить.
+	if stage == "cost" {
+		costText := strings.TrimSpace(strings.Replace(text, ",", ".", 1))
+		cost := 0.0
+		if costText != "" {
+			var err error
+			cost, err = strconv.ParseFloat(costText, 64)
+			if err != nil || cost < 0 || cost > 10000000 {
+				_ = b.api.SendText(ctx, uid, "⚠️ Введите число (рубли, можно с копейками) или нажмите «⏭ Без стоимости».")
+				return true
+			}
+		}
+		source, _ := sess.Payload["source"].(string)
+		postRef, _ := sess.Payload["post_ref"].(string)
+		b.finishUTMLink(ctx, uid, chID, source, postRef, cost)
+		return true
+	}
 
 	if stage != "post" {
 		// Шаг 1: название источника.
@@ -291,22 +318,31 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 		return true
 	}
 
-	// Шаг 2: пост-источник (пустой ввод трактуем как пропуск).
+	// Шаг 2: пост-источник (пустой ввод трактуем как пропуск) → шаг стоимости.
 	source, _ := sess.Payload["source"].(string)
 	postRef := strings.TrimSpace(text)
 	if err := util.ValidatePostRef(postRef); err != nil {
 		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
 		return true
 	}
-	b.finishUTMLink(ctx, uid, chID, source, postRef)
+	if err := b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
+		"channel_id": chIDf2, "stage": "cost", "source": source, "post_ref": postRef,
+	}); err != nil {
+		b.log.Warn("utm: set session", "err", err, "user", uid)
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		"💰 Стоимость выхода (необязательно).\n\n"+
+			"Сколько заплачено за размещение этой ссылки (₽)? В аналитике посчитается "+
+			"CPA — цена подписчика. Можно пропустить.",
+		util.CostKeyboard())
 	return true
 }
 
 // finishUTMLink — финал билдера: создаёт ссылку и показывает результат.
 // Вызывается из шага «пост» и по кнопке «⏭ Без поста-источника».
-func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRef string) {
+func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRef string, cost float64) {
 	code := util.RandomCode(10)
-	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "referral", source, postRef, code); err != nil {
+	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "referral", source, postRef, code, cost); err != nil {
 		b.log.Warn("utm: create link", "err", err, "user", uid, "channel", chID)
 		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось создать ссылку. Попробуйте позже.")
 		return
@@ -315,10 +351,12 @@ func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRe
 
 	botName := b.botUsername
 	if botName == "" {
-		b.log.Warn("botUsername не задан — UTM-диплинк будет нерабочим", "user", uid)
+		b.log.Warn("botUsername не задан — ссылка будет нерабочей", "user", uid)
 		botName = "ВАШ_БОТ"
 	}
-	link := fmt.Sprintf("https://max.ru/%s/start/%s%s", botName, utmPayloadPrefix, code)
+	// Бесшовная ссылка: открывает мини-апп (без чата бота!), сервер
+	// идентифицирует юзера по init_data и ведёт его в канал/пост.
+	link := fmt.Sprintf("https://max.ru/%s?startapp=u_%s", botName, code)
 
 	postLine := ""
 	if postRef != "" {
@@ -411,15 +449,19 @@ func (b *Bot) exportUTMCSV(ctx context.Context, uid int64, p string) {
 		return
 	}
 	var csv strings.Builder
-	csv.WriteString("source,medium,campaign,post_ref,code,clicks,signups,unsubs,conversion_percent\n")
+	csv.WriteString("source,medium,campaign,post_ref,code,cost_rub,cpa_rub,clicks,signups,unsubs,conversion_percent\n")
 	for _, s := range stats {
 		conv := 0.0
 		if s.Clicks > 0 {
 			conv = float64(s.Signups) / float64(s.Clicks) * 100
 		}
-		fmt.Fprintf(&csv, "%s,%s,%s,%s,%s,%d,%d,%d,%.2f\n",
+		cpa := 0.0
+		if s.Cost > 0 && s.Signups > 0 {
+			cpa = s.Cost / float64(s.Signups)
+		}
+		fmt.Fprintf(&csv, "%s,%s,%s,%s,%s,%.2f,%.2f,%d,%d,%d,%.2f\n",
 			csvEscape(s.Source), csvEscape(s.Medium), csvEscape(s.Campaign),
-			csvEscape(s.PostRef), s.Code, s.Clicks, s.Signups, s.Unsubs, conv)
+			csvEscape(s.PostRef), s.Code, s.Cost, cpa, s.Clicks, s.Signups, s.Unsubs, conv)
 	}
 
 	// Загружаем CSV как файл и отправляем.
@@ -503,4 +545,15 @@ func (b *Bot) showChannelDynamics(ctx context.Context, uid int64, p string) {
 	}
 	sb.WriteString(fmt.Sprintf("\nИтого: +%d вступили, −%d отписались, итог %d", totJ, totU, totJ-totU))
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), util.ChannelUTMKeyboard(chID))
+}
+
+// createSimpleUTMLink — «⚡ Простая ссылка»: без опроса, source = «Простая <дата>».
+// Считает пришло/ушло; UTM-детализация (источник/пост/стоимость) — в билдере.
+func (b *Bot) createSimpleUTMLink(ctx context.Context, uid, chID int64) {
+	if _, err := b.db.GetChannel(ctx, chID, uid); err != nil {
+		_ = b.api.SendText(ctx, uid, "Канал не найден.")
+		return
+	}
+	source := "Простая " + time.Now().In(util.MoscowLocation()).Format("02.01")
+	b.finishUTMLink(ctx, uid, chID, source, "", 0)
 }

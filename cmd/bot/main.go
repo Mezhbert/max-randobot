@@ -173,8 +173,11 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		api.Metrics().WritePrometheus(w)
 	})
-	// Мини-апп: только главный экран с описанием (+ справка для «Поддержка»).
-	mux.Handle("/app/", webapp.Handler())
+	// Мини-апп: трекинг-редиректор (startapp=u_<code>) + статика.
+	mux.Handle("/app/", webapp.Handler(&webapp.Deps{
+		DB:       db,
+		BotToken: cfg.BotToken,
+	}, slog.Default()))
 	// Бесшовные трекинг-ссылки: /r/<code> → клик + 302 на канал/пост.
 	mux.Handle("/r/", webapp.RedirectHandler(db, slog.Default()))
 
