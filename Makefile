@@ -1,4 +1,4 @@
-.PHONY: build run-linux down logs test test-unit test-integration test-store vet clean tunnel help
+.PHONY: build run-linux down logs caddy-logs test test-unit test-integration test-store vet clean tunnel help
 
 BOT_BIN := bin/giveawaybot-bot
 CRON_BIN := bin/giveawaybot-cron
@@ -36,6 +36,9 @@ down: ## Остановить docker-compose
 
 logs: ## Логи бота (docker)
 	docker compose -f docker-compose.prod.yml logs -f bot
+
+caddy-logs: ## Логи Caddy (выпуск/продление сертификата, прокси)
+	docker compose -f docker-compose.prod.yml logs -f caddy
 
 up: ## Полный docker-compose стек (postgres+bot)
 	docker compose -f docker-compose.prod.yml up -d --build
