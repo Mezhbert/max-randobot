@@ -237,6 +237,27 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		b.sendMainMenu(ctx, uid, "Главное меню:")
 		return
 	}
+	// /stop — явная остановка активного действия: отменить создание
+	// (эквивалент кнопки «✖ Отменить»), сбросить висящую сессию
+	// (добавление канала/капча/UTM/редактура) и вернуться в меню.
+	if text == "/stop" {
+		msg := "⏹ Нечего останавливать."
+		if g, err := b.db.GetDraftGiveaway(ctx, uid); err == nil {
+			_ = b.engine.Abandon(ctx, g.ID)
+			// Черновик без названия — мусор, удаляем (как в «✖ Отменить»).
+			if g.Name != "" {
+				msg = "⏹ Создание остановлено. Черновик сохранён в «Мои розыгрыши → Черновики»."
+			} else {
+				_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
+				msg = "⏹ Создание остановлено."
+			}
+		} else if session, _ := b.db.GetSession(ctx, uid); session != "" {
+			msg = "⏹ Действие сброшено."
+		}
+		_ = b.db.ClearSession(ctx, uid)
+		b.sendMainMenu(ctx, uid, msg)
+		return
+	}
 
 	// Состояние юзера вне FSM (добавление канала и т.п.) — приоритет.
 	session, _ := b.db.GetSession(ctx, uid)
@@ -374,6 +395,7 @@ func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 
 Команды:
 /menu — главное меню
+/stop — остановить создание и сбросить состояние
 
 Выберите действие 👇`
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
