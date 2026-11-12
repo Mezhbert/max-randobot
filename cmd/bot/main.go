@@ -108,6 +108,8 @@ func main() {
 			r := bot.ParticipateFromApp(giveawayID, userID)
 			return webapp.ParticipateResult{Ok: r.Ok, Err: r.Err, Notifiable: r.Notifiable}
 		},
+		// Первичная проверка подписки в момент клика по трекинг-ссылке.
+		CheckSubscriber: api.IsSubscriber,
 	}
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -233,7 +235,6 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler, db *store.Store
 	// CheckUnsubs дергает API MAX за каждого участника активных розыгрышей.
 	// Удержание трекинг-ссылок — раз в сутки (перепроверка подписчиков ссылок).
 	lastSlow := time.Time{}
-	lastRetention := time.Time{}
 	slowTick := func() {
 		if time.Since(lastSlow) < 10*time.Minute {
 			return
@@ -248,17 +249,6 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler, db *store.Store
 			slog.Debug("drafts ttl cleanup", "err", err)
 		}
 	}
-	retentionTick := func() {
-		if time.Since(lastRetention) < 20*time.Hour {
-			return
-		}
-		lastRetention = time.Now()
-		c, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-		if err := sch.CheckUTMRetention(c); err != nil {
-			slog.Warn("scheduler CheckUTMRetention", "err", err)
-		}
-	}
 
 	tick := func() {
 		c, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -270,7 +260,6 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler, db *store.Store
 			slog.Warn("scheduler FinishPending", "err", err)
 		}
 		slowTick()
-		retentionTick()
 	}
 	tick()
 

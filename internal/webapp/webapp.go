@@ -17,6 +17,7 @@
 package webapp
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -51,6 +52,83 @@ type Deps struct {
 	// Participate — участие из мини-аппа (полный пайплайн: статус → подписки
 	// → регистрация, без сообщений от бота). Реализация в handlers.
 	Participate func(giveawayID, userID int64) ParticipateResult
+
+	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
+	// (maxapi.IsSubscriber). Первичная проверка в момент клика по
+	// трекинг-ссылке: уже-участники фиксируются сразу (user_added для них не
+	// придёт). nil — проверка отключена.
+	CheckSubscriber func(ctx context.Context, chatID, userID int64) (bool, error)
+}
+
+// ---------- очередь первичных проверок (клик → уже-участник?) ----------
+//
+// Клик по трекинг-ссылке не должен ждать проверки подписки (юзер ждёт
+// редирект) — проверка уходит в очередь и выполняется фоновыми воркерами.
+// Подписки/отписки дальше трекаются событиями user_added/user_removed.
+
+type clickCheckTask struct {
+	linkID, userID int64
+}
+
+var (
+	clickChecks       = make(chan clickCheckTask, 256)
+	clickWorkersOnce  bool
+	clickWorkersDeps  *Deps
+	clickWorkersLog   *slog.Logger
+)
+
+// enqueueClickCheck — поставить первичную проверку в очередь (неблокирующе;
+// переполнение = пропускаем: событие user_added всё равно закроет кейс).
+func enqueueClickCheck(linkID, userID int64) {
+	select {
+	case clickChecks <- clickCheckTask{linkID: linkID, userID: userID}:
+	default:
+	}
+}
+
+// runClickWorkers — фоновые воркеры очереди (стартуют один раз на процесс).
+func runClickWorkers(d *Deps, log *slog.Logger) {
+	if clickWorkersOnce || d.CheckSubscriber == nil {
+		return
+	}
+	clickWorkersOnce = true
+	clickWorkersDeps, clickWorkersLog = d, log
+	for i := 0; i < 2; i++ {
+		go func() {
+			for t := range clickChecks {
+				clickCheck(t)
+			}
+		}()
+	}
+}
+
+// clickCheck — одна задача очереди: ссылка → канал → IsSubscriber → запись.
+func clickCheck(t clickCheckTask) {
+	d, log := clickWorkersDeps, clickWorkersLog
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	link, err := d.DB.GetUTMLinkByID(ctx, t.linkID)
+	if err != nil || link.ChannelID == 0 {
+		return
+	}
+	ch, err := d.DB.GetChannel(ctx, link.ChannelID, link.OwnerUserID)
+	if err != nil {
+		return
+	}
+	sub, err := d.CheckSubscriber(ctx, ch.ChatID, t.userID)
+	if err != nil {
+		if log != nil {
+			log.Debug("click check", "err", err, "user", t.userID)
+		}
+		return
+	}
+	if sub {
+		// Уже участник: фиксируем сразу, отдельным флагом
+		// («уже были участниками на момент клика» — своя метрика).
+		if err := d.DB.UpsertUTMSubscriberAtClick(ctx, t.linkID, t.userID, ch.ChatID); err != nil && log != nil {
+			log.Debug("click check save", "err", err)
+		}
+	}
 }
 
 // CaptchaService — минимальный интерфейс капчи (совместим с internal/captcha).
@@ -83,6 +161,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 	if log == nil {
 		log = slog.Default()
 	}
+	runClickWorkers(d, log)
 	mux := http.NewServeMux()
 
 	// Статика мини-аппа.
@@ -160,6 +239,9 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			if err := d.DB.UTMRecordClick(r.Context(), link.ID, userID); err != nil {
 				log.Warn("track click", "err", err, "code", req.Code)
 			}
+			// Первичная проверка «уже участник?» — в очередь (редирект не
+			// ждёт); подписка/отписка дальше — событиями вебхука.
+			enqueueClickCheck(link.ID, userID)
 		} else {
 			if err := d.DB.RecordAnonymousClick(r.Context(), link.ID); err != nil {
 				log.Warn("track anon click", "err", err, "code", req.Code)

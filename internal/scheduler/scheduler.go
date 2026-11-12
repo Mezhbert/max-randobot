@@ -513,35 +513,3 @@ func (s *Scheduler) CheckUnsubs(ctx context.Context) error {
 	return nil
 }
 
-// CheckUTMRetention — суточная проверка удержания трекинг-ссылок (миграция
-// 0014): бот, будучи админом канала, перепроверяет каждого атрибутированного
-// юзера «подписан ли сейчас». Ловит тихие отписки и ДОБИРАЕТ уже-состоящих
-// на момент клика (владелец канала и т.п. — user_added для них не приходит).
-// Работает по ссылкам моложе 14 дней (или с законченным <14д розыгрышем).
-func (s *Scheduler) CheckUTMRetention(ctx context.Context) error {
-	work, err := s.db.ListUTMRetentionWork(ctx, 300)
-	if err != nil {
-		return err
-	}
-	checked, subs, unsubs := 0, 0, 0
-	for _, it := range work {
-		ok, err := s.api.IsSubscriber(ctx, it.ChatID, it.UserID)
-		if err != nil {
-			continue // канал недоступен — попробуем в следующий суточный прогон
-		}
-		if err := s.db.ApplyUTMRetentionCheck(ctx, it, ok); err != nil {
-			s.log.Debug("utm retention apply", "err", err, "link", it.LinkID, "user", it.UserID)
-			continue
-		}
-		checked++
-		if ok {
-			subs++
-		} else if it.HasRow {
-			unsubs++
-		}
-	}
-	if checked > 0 {
-		s.log.Info("utm retention", "checked", checked, "subscribed", subs, "unsubscribed", unsubs)
-	}
-	return nil
-}

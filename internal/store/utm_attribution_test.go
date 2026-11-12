@@ -122,9 +122,9 @@ func TestUTM_Retention(t *testing.T) {
 	assert.Equal(t, 2, r.RetainedAfterGiveaway, "на момент итогов держались u2 и u3")
 }
 
-// TestUTM_RetentionPoll — суточный поллинг: добор уже-состоящих и фиксация
-// тихих отписок.
-func TestUTM_RetentionPoll(t *testing.T) {
+// TestUTM_ClickMembership — первичная проверка в момент клика: уже-участник
+// канала фиксируется сразу с флагом (user_added для него не придёт никогда).
+func TestUTM_ClickMembership(t *testing.T) {
 	s, cleanup := newTestStore(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -135,31 +135,27 @@ func TestUTM_RetentionPoll(t *testing.T) {
 	ch, err := s.AddChannel(ctx, Channel{OwnerUserID: owner, ChatID: -300, Title: "Ch", IsBotAdmin: true})
 	require.NoError(t, err)
 
-	linkID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Опрос", "referral", "Опрос",
-		"", "", "", "pollcode1", 0, 0)
+	linkID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Проверка", "referral", "Проверка",
+		"", "", "", "clickcode1", 0, 0)
 	require.NoError(t, err)
-	require.NoError(t, s.UTMRecordClick(ctx, linkID, clicker))
 
-	// Работа поллинга: юзер атрибутирован, записи нет.
-	work, err := s.ListUTMRetentionWork(ctx, 100)
+	// Клик; очередь проверила — юзер УЖЕ участник канала.
+	require.NoError(t, s.UpsertUTMSubscriberAtClick(ctx, linkID, clicker, ch.ChatID))
+	ret, err := s.GetUTMLinkRetention(ctx, linkID)
 	require.NoError(t, err)
-	require.Len(t, work, 1, "кликнувший без записи — кандидат на проверку")
-	assert.Equal(t, linkID, work[0].LinkID)
-	assert.Equal(t, clicker, work[0].UserID)
-	assert.Equal(t, int64(-300), work[0].ChatID)
-	assert.False(t, work[0].HasRow)
+	assert.Equal(t, 1, ret.Subscribed, "уже-участник зафиксирован сразу")
+	assert.Equal(t, 1, ret.WasMemberAtClick, "флаг «уже был участником на момент клика»")
 
-	// Поллинг нашёл подписку (уже-состоящий, user_added не приходил).
-	require.NoError(t, s.ApplyUTMRetentionCheck(ctx, work[0], true))
-	r, err := s.GetUTMLinkRetention(ctx, linkID)
+	// Повторная запись (например, пришёл user_added) не мутирует флаг/дату.
+	require.NoError(t, s.UpsertUTMSubscriber(ctx, linkID, clicker, ch.ChatID))
+	ret, err = s.GetUTMLinkRetention(ctx, linkID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, r.Subscribed, "уже-состоящий добран поллингом")
-	assert.Equal(t, 1, r.StillIn)
+	assert.Equal(t, 1, ret.Subscribed)
+	assert.Equal(t, 1, ret.WasMemberAtClick)
 
-	// Через день поллинг увидел отписку.
-	require.NoError(t, s.ApplyUTMRetentionCheck(ctx, work[0], false))
-	r, err = s.GetUTMLinkRetention(ctx, linkID)
+	// GetUTMLinkByID — путь воркера очереди.
+	l, err := s.GetUTMLinkByID(ctx, linkID)
 	require.NoError(t, err)
-	assert.Equal(t, 0, r.StillIn, "тихая отписка зафиксирована")
-	assert.Equal(t, 1, r.Subscribed)
+	assert.Equal(t, "clickcode1", l.Code)
+	assert.Equal(t, ch.ID, l.ChannelID)
 }

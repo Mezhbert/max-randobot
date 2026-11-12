@@ -174,7 +174,7 @@ stateDiagram-v2
 | Трекинг-клик | `utm_links` | `users` (upsert), `utm_clicks`, `utm_links.clicks`, `user_utm_attribution` |
 | Подписка в канале | `user_utm_attribution` | `utm_links.signups`, `subscriptions_log`, `utm_subscribers` (retention) |
 | Отписка | `user_utm_attribution` | `utm_links.unsubs`, `subscriptions_log.unsubscribed_at`, `utm_subscribers.unsubscribed_at`, `giveaway`-дисквалификация |
-| Суточный поллинг удержания | `user_utm_attribution` × `utm_subscribers` | `utm_subscribers` (добавление уже-состоящих, фиксация тихих отписок) |
+| **Первичная проверка клика** (очередь) | `utm_links`, `channels` | `utm_subscribers` (was_subscribed_at_click=true — уже-участники) |
 | Рефералка | `referral_links`, `referral_invites` | `referral_links`, `referral_invites`, `participants.tickets` |
 | Редактура | `giveaways` | `giveaways` (точечные колонки, live-обновление постов) |
 | Аналитика/CSV | `participants`, `subscriptions_log`, `utm_links`, `utm_clicks` | — |

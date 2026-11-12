@@ -2,10 +2,16 @@ package webapp
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"testing"
 
 	"github.com/maxbot/giveawaybot/internal/store"
@@ -143,3 +149,64 @@ func TestGiveawayAPI_PublicData(t *testing.T) {
 
 // itoa — обёртка для краткости в тестах.
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// TestTrackAPI_ClickMembershipCheck — клик по трекинг-ссылке: первичная
+// проверка «уже участник?» уходит в очередь и фиксирует уже-состоящего
+// (user_added для него не придёт никогда) с отдельным флагом.
+func TestTrackAPI_ClickMembershipCheck(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, s.UpsertUser(ctx, store.User{UserID: 1, FirstName: "Owner"}))
+	require.NoError(t, s.UpsertUser(ctx, store.User{UserID: 42, FirstName: "Кликер"}))
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: 1, ChatID: -424242, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+	linkID, err := s.CreateUTMLink(ctx, 1, ch.ID, "Проверка", "referral", "Проверка",
+		"", "", "", "clickcheck", 0, 0)
+	require.NoError(t, err)
+
+	// Валидная подпись init_data по формуле SDK: данные — параметры,
+	// отсортированные и склеенные \n (без url-кодирования), ключ —
+	// HMAC_SHA256("WebAppData", token).
+	token := "test-token"
+	parts := []string{"auth_date=1", `user={"id":42}`}
+	sort.Strings(parts)
+	dataCheck := strings.Join(parts, "\n")
+	secret := hmac.New(sha256.New, []byte("WebAppData"))
+	secret.Write([]byte(token))
+	sign := hmac.New(sha256.New, secret.Sum(nil))
+	sign.Write([]byte(dataCheck))
+	initData := "auth_date=1&hash=" + hex.EncodeToString(sign.Sum(nil)) +
+		"&user=" + url.QueryEscape(`{"id":42}`)
+
+	d := &Deps{
+		DB:       s,
+		BotToken: token,
+		// Очередь считает юзера 42 УЖЕ участником канала.
+		CheckSubscriber: func(c context.Context, chatID, userID int64) (bool, error) {
+			return userID == 42, nil
+		},
+	}
+	h := Handler(d, nil)
+
+	req := httptest.NewRequest("POST", "/app/api/track",
+		strings.NewReader(`{"init_data":"`+initData+`","code":"clickcheck"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Очередь асинхронна — ждём запись подписчика (≤3с).
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		ret, err := s.GetUTMLinkRetention(ctx, linkID)
+		require.NoError(t, err)
+		if ret.Subscribed == 1 {
+			assert.Equal(t, 1, ret.WasMemberAtClick, "уже-участник помечен отдельным флагом")
+			assert.Equal(t, 1, ret.StillIn)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("уже-участник не зафиксирован очередью за 3с")
+}

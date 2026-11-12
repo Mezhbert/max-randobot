@@ -47,6 +47,20 @@ func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64,
 	return id, err
 }
 
+// GetUTMLinkByID — ссылка по внутреннему id (для очереди первичных проверок).
+func (s *Store) GetUTMLinkByID(ctx context.Context, id int64) (UTMLink, error) {
+	var u UTMLink
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign,
+		       utm_term, utm_content, COALESCE(giveaway_id,0), post_ref, code, cost,
+		       clicks, signups, COALESCE(unsubs,0), COALESCE(enabled,true)
+		FROM utm_links WHERE id=$1
+	`, id).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign,
+		&u.UTMTerm, &u.UTMContent, &u.GiveawayID, &u.PostRef, &u.Code, &u.Cost,
+		&u.Clicks, &u.Signups, &u.Unsubs, &u.Enabled)
+	return u, wrapNotFound(err)
+}
+
 // GetUTMLinkByCode — найти UTM-ссылку по коду диплинка (code без префикса).
 func (s *Store) GetUTMLinkByCode(ctx context.Context, code string) (UTMLink, error) {
 	var u UTMLink
@@ -279,67 +293,15 @@ func (s *Store) MarkUTMUnsubscribedByUser(ctx context.Context, userID, chatID in
 	return err
 }
 
-// UTMRentionWorkItem — строка работы для суточного поллинга: проверить,
-// подписан ли юзер на канал ссылки прямо сейчас.
-type UTMRentionWorkItem struct {
-	LinkID  int64
-	UserID  int64
-	ChatID  int64
-	HasRow  bool // уже есть запись подписчика (иначе — потенциальный добор)
-}
-
-// ListUTMRetentionWork — работа для суточного поллинга удержания: ссылки
-// моложе 14 дней (или с законченным <14д назад розыгрышем), по каждому
-// атрибутированному юзеру: либо записи нет (добор уже-состоящих), либо
-// запись жива и сегодня не проверялась. Лимит — защита от rps.
-func (s *Store) ListUTMRetentionWork(ctx context.Context, limit int) ([]UTMRentionWorkItem, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT ul.id, a.user_id, c.chat_id,
-		       (us.id IS NOT NULL) AS has_row
-		FROM utm_links ul
-		JOIN user_utm_attribution a ON a.utm_link_id = ul.id
-		JOIN channels c ON c.id = ul.channel_id
-		LEFT JOIN utm_subscribers us
-		       ON us.utm_link_id = ul.id AND us.user_id = a.user_id
-		LEFT JOIN giveaways g ON g.id = ul.giveaway_id
-		WHERE ul.created_at > now() - interval '14 days'
-		   OR (g.status = 'finished' AND g.updated_at > now() - interval '14 days')
-		ORDER BY ul.id, a.user_id
-		LIMIT $1
-	`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var res []UTMRentionWorkItem
-	for rows.Next() {
-		var it UTMRentionWorkItem
-		if err := rows.Scan(&it.LinkID, &it.UserID, &it.ChatID, &it.HasRow); err != nil {
-			return nil, err
-		}
-		res = append(res, it)
-	}
-	return res, rows.Err()
-}
-
-// ApplyUTMRetentionCheck — результат суточной проверки IsSubscriber:
-// subscribed=true → запись-подписчик (добор уже-состоящих: подписка с момента
-// атрибуции); false → отписка (если запись была).
-func (s *Store) ApplyUTMRetentionCheck(ctx context.Context, it UTMRentionWorkItem, subscribed bool) error {
-	if subscribed {
-		_, err := s.pool.Exec(ctx, `
-			INSERT INTO utm_subscribers (utm_link_id, user_id, chat_id, subscribed_at, last_checked_at)
-			VALUES ($1, $2, $3, now(), now())
-			ON CONFLICT (utm_link_id, user_id)
-			  DO UPDATE SET last_checked_at = now()
-		`, it.LinkID, it.UserID, it.ChatID)
-		return err
-	}
+// UpsertUTMSubscriberAtClick — первичная проверка в момент клика: юзер уже
+// УЧАСТНИК канала (user_added для него не придёт никогда). Фиксируем сразу
+// отдельным флагом — метрика «уже были участниками на момент клика».
+func (s *Store) UpsertUTMSubscriberAtClick(ctx context.Context, utmLinkID, userID, chatID int64) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE utm_subscribers
-		SET unsubscribed_at = COALESCE(unsubscribed_at, now()), last_checked_at = now()
-		WHERE utm_link_id = $1 AND user_id = $2 AND unsubscribed_at IS NULL
-	`, it.LinkID, it.UserID)
+		INSERT INTO utm_subscribers (utm_link_id, user_id, chat_id, subscribed_at, last_checked_at, was_subscribed_at_click)
+		VALUES ($1, $2, $3, now(), now(), TRUE)
+		ON CONFLICT (utm_link_id, user_id) DO NOTHING
+	`, utmLinkID, userID, chatID)
 	return err
 }
 
@@ -349,6 +311,7 @@ func (s *Store) ApplyUTMRetentionCheck(ctx context.Context, it UTMRentionWorkIte
 type UTMLinkRetention struct {
 	Subscribed    int // всего подписавшихся (обнаруженных)
 	StillIn       int // подписаны сейчас
+	WasMemberAtClick int // уже были участниками канала в момент клика
 	Retained1d    int
 	Retained3d    int
 	Retained7d    int
@@ -365,12 +328,13 @@ func (s *Store) GetUTMLinkRetention(ctx context.Context, utmLinkID int64) (UTMLi
 		SELECT
 		  COUNT(*),
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL),
+		  COUNT(*) FILTER (WHERE was_subscribed_at_click),
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '1 day'),
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '3 days'),
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '7 days'),
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '14 days')
 		FROM utm_subscribers WHERE utm_link_id = $1
-	`, utmLinkID).Scan(&r.Subscribed, &r.StillIn, &r.Retained1d, &r.Retained3d, &r.Retained7d, &r.Retained14d)
+	`, utmLinkID).Scan(&r.Subscribed, &r.StillIn, &r.WasMemberAtClick, &r.Retained1d, &r.Retained3d, &r.Retained7d, &r.Retained14d)
 	if err != nil {
 		return r, err
 	}
