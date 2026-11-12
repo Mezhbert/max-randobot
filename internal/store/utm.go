@@ -41,9 +41,9 @@ func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64,
 func (s *Store) GetUTMLinkByCode(ctx context.Context, code string) (UTMLink, error) {
 	var u UTMLink
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign, post_ref, code, cost, clicks, signups, COALESCE(enabled,true)
+		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign, post_ref, code, cost, clicks, signups, COALESCE(unsubs,0), COALESCE(enabled,true)
 		FROM utm_links WHERE code=$1
-	`, code).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Cost, &u.Clicks, &u.Signups, &u.Enabled)
+	`, code).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Cost, &u.Clicks, &u.Signups, &u.Unsubs, &u.Enabled)
 	return u, wrapNotFound(err)
 }
 
@@ -89,17 +89,23 @@ func (s *Store) RecordAnonymousClick(ctx context.Context, utmLinkID int64) error
 	return tx.Commit(ctx)
 }
 
-// UTMAccountSignup — юзер вступил в канал; если есть атрибуция к UTM — инкремент signups.
+// UTMAccountSignup — юзер вступил в канал (по CHAT_ID MAX); если есть
+// атрибуция к UTM-ссылке на этот канал — инкремент signups.
 // Возвращает UTM-ссылку, которой приписана подписка (или zero-value, если нет атрибуции).
-func (s *Store) UTMAccountSignup(ctx context.Context, userID, channelID int64) (UTMLink, bool, error) {
+//
+// ВАЖНО: сравнение через JOIN channels по chat_id — utm_links.channel_id это
+// ВНУТРЕННИЙ id канала (BIGSERIAL), а webhook приносит chat_id MAX (напр.
+// -74970071115840). Раньше сравнивались напрямую → подписки/отписки по
+// трекинг-ссылкам НИКОГДА не атрибутировались (клики считались, signups — нет).
+func (s *Store) UTMAccountSignup(ctx context.Context, userID, chatID int64) (UTMLink, bool, error) {
 	var u UTMLink
-	// Ищем атрибуцию юзера, и проверяем что она ведёт на этот же канал.
 	err := s.pool.QueryRow(ctx, `
 		SELECT ul.id, COALESCE(ul.owner_user_id,0), COALESCE(ul.channel_id,0), ul.source, ul.medium, ul.campaign, ul.post_ref, ul.code, ul.clicks, ul.signups, COALESCE(ul.enabled,true)
 		FROM user_utm_attribution a
 		JOIN utm_links ul ON ul.id = a.utm_link_id
-		WHERE a.user_id=$1 AND ul.channel_id=$2
-	`, userID, channelID).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Clicks, &u.Signups, &u.Enabled)
+		JOIN channels c ON c.id = ul.channel_id
+		WHERE a.user_id=$1 AND c.chat_id=$2
+	`, userID, chatID).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign, &u.PostRef, &u.Code, &u.Clicks, &u.Signups, &u.Enabled)
 	if err != nil {
 		return u, false, nil // нет атрибуции — органик
 	}
@@ -107,16 +113,18 @@ func (s *Store) UTMAccountSignup(ctx context.Context, userID, channelID int64) (
 	return u, true, err
 }
 
-// UTMAccountUnsub — юзер отписался; инкремент unsubs если была атрибуция.
-func (s *Store) UTMAccountUnsub(ctx context.Context, userID, channelID int64) error {
+// UTMAccountUnsub — юзер отписался (по CHAT_ID MAX); инкремент unsubs если
+// была атрибуция (см. комментарий UTMAccountSignup про chat_id).
+func (s *Store) UTMAccountUnsub(ctx context.Context, userID, chatID int64) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE utm_links SET unsubs = unsubs + 1
 		WHERE id IN (
 		  SELECT a.utm_link_id FROM user_utm_attribution a
 		  JOIN utm_links ul ON ul.id = a.utm_link_id
-		  WHERE a.user_id=$1 AND ul.channel_id=$2
+		  JOIN channels c ON c.id = ul.channel_id
+		  WHERE a.user_id=$1 AND c.chat_id=$2
 		)
-	`, userID, channelID)
+	`, userID, chatID)
 	return err
 }
 

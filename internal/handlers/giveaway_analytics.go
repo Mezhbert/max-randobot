@@ -124,7 +124,10 @@ func (b *Bot) showGiveawayAnalytics(ctx context.Context, uid, gid int64) {
 
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, sb.String(), kb)
 }
-// каждого — анти-накрутка).
+
+// showGiveawayParticipants — список участников розыгрыша с пометками
+// (бот/без username/победитель) и кнопками удаления накруток (победителя и
+// завершённый розыгрыш трогать нельзя; каждого — анти-накрутка).
 func (b *Bot) showGiveawayParticipants(ctx context.Context, uid, gid int64) {
 	g, err := b.db.GetGiveaway(ctx, gid, uid)
 	if err != nil {
