@@ -196,6 +196,14 @@ func TestFSM_BackSkipsConditionalSteps(t *testing.T) {
 
 	// Вперёд снова: publish_at всё ещё «только что» → снова finish_mode.
 	click(util.CBFSMOption + "publish_later")
+	// P1-регрессия: publish_now → Назад → publish_later обязан СБРОСИТЬ флаг
+	// «сразу» и показать шаг даты (раньше шаг молча скипался, а Confirm
+	// публиковал розыгрыш немедленно — откат выбора режима был сломан).
+	gg, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.False(t, gg.PublishNow, "publish_later должен сбрасывать publish_now")
+	assert.Equal(t, fsm.StepPublishAt, curStep(),
+		"после publish_later шаг publish_at должен ПОКАЗЫВАТЬСЯ (не скипаться)")
 	// publish_later ведёт на ввод даты — вводим будущую.
 	send(util.FormatMoscowTime(time.Now().Add(48 * time.Hour)))
 	require.Equal(t, fsm.StepFinishMode, curStep())
@@ -1376,6 +1384,44 @@ func seedActiveGiveaway(t *testing.T, s *store.Store, owner int64, captcha strin
 	`, owner, captcha, referral).Scan(&id)
 	require.NoError(t, err)
 	return id
+}
+
+// TestParticipate_CaptchaGatesRegistration — P3: при включённой капче клик
+// «Участвовать» отправляет картинку, но НЕ регистрирует участника. Раньше
+// registerParticipant вызывался сразу после отправки капчи — юзер становился
+// участником до ввода кода, а верный ответ ловил «Вы уже участвуете!».
+func TestParticipate_CaptchaGatesRegistration(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6961
+	testutil.EnsureUser(t, s, uid, "player")
+
+	gid := seedActiveGiveaway(t, s, uid, store.CaptchaAll, false)
+
+	// Клик «Участвовать» (callback part:<id>).
+	b.Handle(ctx, callbackUpdate(uid, util.CBParticipate+strconv.FormatInt(gid, 10)))
+
+	// Капча отправлена картинкой в чат.
+	captchaSent := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Капча для участия") {
+			captchaSent = true
+		}
+	}
+	assert.True(t, captchaSent, "капча должна прийти картинкой в чат")
+
+	// ГЛАВНОЕ: участник ещё НЕ зарегистрирован — регистрация только после
+	// верного ответа (handleCaptchaVerifyInput).
+	n, err := s.CountParticipant(ctx, gid, uid)
+	require.NoError(t, err)
+	assert.Zero(t, n, "юзер НЕ должен становиться участником до ввода капчи")
+
+	// Неверный ответ — участник по-прежнему не зарегистрирован.
+	b.Handle(ctx, msgUpdate(uid, "0000"))
+	n, err = s.CountParticipant(ctx, gid, uid)
+	require.NoError(t, err)
+	assert.Zero(t, n, "неверный ответ капчи не должен регистрировать участника")
 }
 
 // TestPubChannels_LiveAdminCheck — кэш is_bot_admin протух (бота кикнули/

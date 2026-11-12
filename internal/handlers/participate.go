@@ -98,6 +98,11 @@ func (b *Bot) onParticipate(ctx context.Context, userID int64, idStr string, cal
 			answered = true
 			b.api.AnswerCallback(ctx, callbackID, "🤖 Капча пришла в чат с ботом — откройте его 👆")
 		}
+		// P3: участник регистрируется ТОЛЬКО после верного ответа на капчу
+		// (handleCaptchaVerifyInput → registerParticipant). Раньше здесь
+		// падения в registerParticipant не было — юзер становился участником
+		// ещё ДО ввода капчи, а его верный ответ ловил «Вы уже участвуете!».
+		return
 	}
 
 	// Без капчи — регистрируем сразу; карточка «Вы участвуете» откроет диалог.

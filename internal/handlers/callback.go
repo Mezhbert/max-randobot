@@ -125,9 +125,22 @@ func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callba
 		}
 
 	case p == util.CBFSMBack:
-		prev, _ := b.engine.GoBack(ctx, g.ID, g.DraftStep, g)
+		// Ошибки БД раньше глотались: showStep рисовался по zero-value
+		// giveaway (пустой шаг, «мёртвая» клавиатура) — теперь честно
+		// остаёмся на текущем шаге с сообщением.
+		prev, err := b.engine.GoBack(ctx, g.ID, g.DraftStep, g)
+		if err != nil {
+			b.log.Warn("go back", "err", err, "id", g.ID, "user", uid)
+			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось вернуться. Попробуйте ещё раз.")
+			return
+		}
 		// перечитываем, чтобы актуальные данные
-		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
+		gg, err := b.db.GetGiveawayAny(ctx, g.ID)
+		if err != nil {
+			b.log.Warn("go back: refetch", "err", err, "id", g.ID, "user", uid)
+			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось вернуться. Попробуйте ещё раз.")
+			return
+		}
 		b.showStep(ctx, uid, gg, prev)
 
 	case p == util.CBFSMSkip:
@@ -248,7 +261,13 @@ func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key
 
 	case "publish_later":
 		// «По времени» — следующий шаг publish_at (ввод даты).
-		b.advance(ctx, uid, g.ID, g.DraftStep)
+		// Сбрасываем флаг «сразу»: он мог остаться от предыдущего выбора
+		// «Опубликовать сразу» → юзер вернулся Назад → переключил режим.
+		// Без сброса StepSkipped навсегда пропускал шаг даты, а Confirm
+		// молча публиковал розыгрыш немедленно (ломка отката, P1).
+		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_now", false)
+		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
+		b.advance(ctx, uid, g.ID, gg.DraftStep)
 
 	case "finish_time":
 		// «По времени» — движок пропустит finish_count по finish_mode.

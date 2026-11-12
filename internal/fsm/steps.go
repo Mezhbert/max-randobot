@@ -2,8 +2,6 @@
 package fsm
 
 import (
-	"time"
-
 	"github.com/maxbot/giveawaybot/internal/store"
 )
 
@@ -67,8 +65,11 @@ const FirstStep = StepName
 func StepSkipped(g store.Giveaway, step string) bool {
 	switch step {
 	case StepPublishAt:
-		// Режим «сразу» (флаг) или publish_at уже наступил (выставлен ранее).
-		return g.PublishNow || (g.PublishAt != nil && !g.PublishAt.After(time.Now()))
+		// Пропускается ТОЛЬКО в режиме «Опубликовать сразу». Протухший
+		// (прошлый) publish_at больше не пропускает шаг: иначе юзер,
+		// задавший дату и вернувшийся к ней позже, навсегда терял доступ
+		// к вводу даты — и Назад, и Далее проскакивали мимо шага (P1).
+		return g.PublishNow
 	case StepFinishCount:
 		return g.FinishMode != "count"
 	case StepFinishAt:
