@@ -87,12 +87,13 @@ const (
 // MAX не позволяет менять (обрезает) — ключевые разделы полноширинными рядами.
 func MainMenuKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
-	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
-	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
+	kb.AddRow().
+		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
+		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().
 		AddCallBack("🔗 Трекинг", CBUTMQuickCreate).
 		AddCallBack("📊 Аналитика", CBAnalytics)
+	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
 	kb.AddRow().
 		AddCallBack("🎟 Мои участия", CBMyParticipations).
 		AddCallBack("🆘 Поддержка", CBSupport)
@@ -104,12 +105,13 @@ func MainMenuKeyboard() *model.Keyboard {
 func MainMenuWithDraftKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("📝 Продолжить черновик", CBGwList)
-	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
-	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
-	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
+	kb.AddRow().
+		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
+		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().
 		AddCallBack("🔗 Трекинг", CBUTMQuickCreate).
 		AddCallBack("📊 Аналитика", CBAnalytics)
+	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
 	kb.AddRow().
 		AddCallBack("🎟 Мои участия", CBMyParticipations).
 		AddCallBack("🆘 Поддержка", CBSupport)
