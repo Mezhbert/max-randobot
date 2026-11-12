@@ -219,16 +219,14 @@ func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string) {
 		b.showAnalyticsGiveaways(ctx, uid)
 	default:
 		kb := model.NewKeyboard()
-		kb.AddRow().AddCallBack("📈 Создать трекинг-ссылку", util.CBUTMQuickCreate)
 		kb.AddRow().AddCallBack("🎁 Розыгрыши", util.CBAnalyticsTab+"giveaways")
-		kb.AddRow().AddCallBack("📢 Каналы (UTM-источники)", util.CBAnalyticsTab+"channels")
+		kb.AddRow().AddCallBack("📢 Каналы (трекинг-ссылки)", util.CBAnalyticsTab+"channels")
 		kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"📊 Аналитика\n\n"+
-				"• Трекинг-ссылка — своя ссылка на каждую закупку: видно, сколько "+
-				"переходов и подписчиков принесла каждая\n"+
-				"• Розыгрыши — статистика участников по конкретному розыгрышу\n"+
-				"• Каналы — UTM-аналитика по каналам, где бот админ", kb)
+			"📊 Аналитика — сводка по вашим данным\n\n"+
+				"• Розыгрыши — участники, динамика, отток, подозрительный трафик\n"+
+				"• Каналы — клики/подписки/отписки/CPA по трекинг-ссылкам\n\n"+
+				"Создание трекинг-ссылок — кнопка «📈 Трекинг» в главном меню.", kb)
 	}
 }
 
