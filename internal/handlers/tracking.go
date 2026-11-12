@@ -219,7 +219,7 @@ func (b *Bot) startQuickUTM(ctx context.Context, uid int64) {
 	channels, err := b.db.ListChannels(ctx, uid)
 	if err != nil || len(channels) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"📈 Трекинг\n\nСначала добавьте канал в «Мои каналы» — куда должна вести ссылка.",
+			"🔗 Трекинг\n\nСначала добавьте канал в «Мои каналы» — куда должна вести ссылка.",
 			util.BackKeyboard())
 		return
 	}
@@ -231,7 +231,7 @@ func (b *Bot) startQuickUTM(ctx context.Context, uid int64) {
 	}
 	if len(admin) == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"📈 Трекинг\n\nНет каналов, где бот админ. Сначала добавьте бота админом в канал.",
+			"🔗 Трекинг\n\nНет каналов, где бот админ. Сначала добавьте бота админом в канал.",
 			util.BackKeyboard())
 		return
 	}
@@ -242,7 +242,7 @@ func (b *Bot) startQuickUTM(ctx context.Context, uid int64) {
 	}
 	kb.AddRow().AddCallBack("✖ Отмена", util.CBMainMenu)
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"📈 Трекинг — быстрая ссылка\n\nВыберите канал, на который будет вести ссылка:",
+		"🔗 Трекинг — быстрая ссылка\n\nВыберите канал, на который будет вести ссылка:",
 		kb)
 }
 

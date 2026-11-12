@@ -91,7 +91,7 @@ func MainMenuKeyboard() *model.Keyboard {
 	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
 	kb.AddRow().
-		AddCallBack("📈 Трекинг", CBUTMQuickCreate).
+		AddCallBack("🔗 Трекинг", CBUTMQuickCreate).
 		AddCallBack("📊 Аналитика", CBAnalytics)
 	kb.AddRow().
 		AddCallBack("🎟 Мои участия", CBMyParticipations).
@@ -108,7 +108,7 @@ func MainMenuWithDraftKeyboard() *model.Keyboard {
 	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
 	kb.AddRow().
-		AddCallBack("📈 Трекинг", CBUTMQuickCreate).
+		AddCallBack("🔗 Трекинг", CBUTMQuickCreate).
 		AddCallBack("📊 Аналитика", CBAnalytics)
 	kb.AddRow().
 		AddCallBack("🎟 Мои участия", CBMyParticipations).
@@ -125,7 +125,7 @@ func MainMenuWithDraftKeyboard() *model.Keyboard {
 // (проверено живым API-запросом). Меню — inline.
 var replyMenuTexts = []string{
 	"🎁 Создать розыгрыш",
-	"📈 Трекинг",
+	"🔗 Трекинг",
 	"📢 Мои каналы",
 	"📋 Мои розыгрыши",
 	"📊 Аналитика",
@@ -139,7 +139,7 @@ func ReplyPayloadByText(text string) string {
 	switch text {
 	case "🎁 Создать розыгрыш":
 		return CBCreateGiveaway
-	case "📈 Трекинг":
+	case "🔗 Трекинг":
 		return CBUTMQuickCreate
 	case "📢 Мои каналы":
 		return CBMyChannels
