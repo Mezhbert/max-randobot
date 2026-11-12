@@ -90,8 +90,9 @@ func MainMenuKeyboard() *model.Keyboard {
 	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
 	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
-	kb.AddRow().AddCallBack("📈 Трекинг", CBUTMQuickCreate)
-	kb.AddRow().AddCallBack("📊 Аналитика", CBAnalytics)
+	kb.AddRow().
+		AddCallBack("📈 Трекинг", CBUTMQuickCreate).
+		AddCallBack("📊 Аналитика", CBAnalytics)
 	kb.AddRow().
 		AddCallBack("🎟 Мои участия", CBMyParticipations).
 		AddCallBack("🆘 Поддержка", CBSupport)
@@ -106,8 +107,9 @@ func MainMenuWithDraftKeyboard() *model.Keyboard {
 	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
 	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
-	kb.AddRow().AddCallBack("📈 Трекинг", CBUTMQuickCreate)
-	kb.AddRow().AddCallBack("📊 Аналитика", CBAnalytics)
+	kb.AddRow().
+		AddCallBack("📈 Трекинг", CBUTMQuickCreate).
+		AddCallBack("📊 Аналитика", CBAnalytics)
 	kb.AddRow().
 		AddCallBack("🎟 Мои участия", CBMyParticipations).
 		AddCallBack("🆘 Поддержка", CBSupport)
