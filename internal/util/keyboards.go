@@ -92,10 +92,10 @@ const (
 func MainMenuKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().
-		AddCallBack("Создать розыгрыш", CBCreateGiveaway).
-		AddCallBack("Мои розыгрыши", CBMyGiveaways)
+		AddCallBack("Создать 🎲", CBCreateGiveaway).
+		AddCallBack("Трекинг 🔗", CBUTMQuickCreate)
 	kb.AddRow().
-		AddCallBack("Трекинг", CBUTMQuickCreate).
+		AddCallBack("Мои розыгрыши", CBMyGiveaways).
 		AddCallBack("Аналитика", CBAnalytics)
 	kb.AddRow().AddCallBack("Мои каналы", CBMyChannels)
 	kb.AddRow().
@@ -108,12 +108,12 @@ func MainMenuKeyboard() *model.Keyboard {
 // (мануал §11: появляется, когда есть незаконченное создание).
 func MainMenuWithDraftKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("Продолжить черновик", CBGwList)
+	kb.AddRow().AddCallBack("Продолжить черновик 📝", CBGwList)
 	kb.AddRow().
-		AddCallBack("Создать розыгрыш", CBCreateGiveaway).
-		AddCallBack("Мои розыгрыши", CBMyGiveaways)
+		AddCallBack("Создать 🎲", CBCreateGiveaway).
+		AddCallBack("Трекинг 🔗", CBUTMQuickCreate)
 	kb.AddRow().
-		AddCallBack("Трекинг", CBUTMQuickCreate).
+		AddCallBack("Мои розыгрыши", CBMyGiveaways).
 		AddCallBack("Аналитика", CBAnalytics)
 	kb.AddRow().AddCallBack("Мои каналы", CBMyChannels)
 	kb.AddRow().
@@ -130,8 +130,8 @@ func MainMenuWithDraftKeyboard() *model.Keyboard {
 // работает: платформа принимает attachment (200 OK), но молча выкидывает его
 // (проверено живым API-запросом). Меню — inline.
 var replyMenuTexts = []string{
-	"Создать розыгрыш",
-	"Трекинг",
+	"Создать 🎲",
+	"Трекинг 🔗",
 	"Мои каналы",
 	"Мои розыгрыши",
 	"Аналитика",
@@ -143,9 +143,9 @@ var replyMenuTexts = []string{
 // кнопка меню). Fallback для текстовых сообщений.
 func ReplyPayloadByText(text string) string {
 	switch text {
-	case "Создать розыгрыш":
+	case "Создать 🎲":
 		return CBCreateGiveaway
-	case "Трекинг":
+	case "Трекинг 🔗":
 		return CBUTMQuickCreate
 	case "Мои каналы":
 		return CBMyChannels
@@ -159,6 +159,7 @@ func ReplyPayloadByText(text string) string {
 		return CBSupport
 	}
 	return ""
+
 }
 
 // NavKeyboard — 💡 / Назад / Отменить.
