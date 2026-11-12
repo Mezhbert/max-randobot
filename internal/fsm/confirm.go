@@ -35,11 +35,11 @@ func (e *Engine) Confirm(ctx context.Context, id int64) error {
 	return e.DB.PublishDraft(ctx, id)
 }
 
-// validate проверяет обязательные поля по ТЗ.
-// Итоги: finish_mode='time' требует FinishAt, 'count' требует FinishParticipantsCount.
+// validate проверяет обязательные поля (финальный гард после пошаговой
+// валидации: «Далее →» не пускает дальше с незаполненным шагом).
 func validate(g store.Giveaway) error {
-	if g.PostText == "" {
-		return &ValidationError{Msg: "не заполнен текст поста"}
+	if g.PostText == "" && len(g.MediaTokens) == 0 {
+		return &ValidationError{Msg: "не заполнен пост (текст или медиа)"}
 	}
 	if g.Name == "" {
 		return &ValidationError{Msg: "не заполнено название конкурса"}
@@ -50,37 +50,33 @@ func validate(g store.Giveaway) error {
 	if len(g.PublishChannelIDs) == 0 {
 		return &ValidationError{Msg: "не выбраны каналы публикации"}
 	}
-	if g.PublishAt == nil {
-		return &ValidationError{Msg: "не задана дата публикации"}
+	if !g.PublishNow && g.PublishAt == nil {
+		return &ValidationError{Msg: "не задано время публикации"}
 	}
 	// Проверка условия завершения в зависимости от режима.
 	if g.FinishMode == "count" {
-		if g.FinishParticipantsCount < 2 {
-			return &ValidationError{Msg: "не задано целевое число участников"}
+		if g.FinishParticipantsCount < 10 {
+			return &ValidationError{Msg: "целевое число участников — от 10"}
 		}
 	} else {
 		// Режим по времени (дефолт).
 		if g.FinishAt == nil {
 			return &ValidationError{Msg: "не задана дата подведения итогов"}
 		}
-		if !g.FinishAt.After(*g.PublishAt) {
+		if g.PublishAt != nil && !g.FinishAt.After(*g.PublishAt) {
 			return &ValidationError{Msg: fmt.Sprintf(
 				"дата итогов (%s) должна быть позже даты публикации (%s)",
-				g.FinishAt.UTC().Format("2006-01-02 15:04"), g.PublishAt.UTC().Format("2006-01-02 15:04"))}
+				g.FinishAt.In(util.MoscowLocation()).Format("02.01 15:04"),
+				g.PublishAt.In(util.MoscowLocation()).Format("02.01 15:04"))}
 		}
-		// «Близкие» даты отфильтрованы ещё на шаге ввода (запас 5 мин на
-		// оставшиеся шаги). Здесь — только защита от прошедшего времени:
-		// такое могло протухнуть, пока юзер смотрел предпросмотр.
+		// Протухшее время (смотрел предпросмотр слишком долго) — на исправление.
 		if g.FinishAt.Before(time.Now()) {
 			return &ValidationError{Msg: fmt.Sprintf(
-				"дата итогов (%s) уже прошла — нажмите «✏ Исправить» и введите новое время",
+				"дата итогов (%s) уже прошла — нажмите «✏️» у пункта «Итоги» и выберите новое время",
 				g.FinishAt.In(util.MoscowLocation()).Format("02.01.2006 15:04"))}
 		}
 	}
-	// Защита от случайного ввода прошедшего времени: публикация «в прошлом»
-	// сработала бы мгновенно (статус active), что выглядит как баг для юзера.
-	// Допускаем небольшой запас (1 мин) на случай медленной обработки.
-	if g.PublishAt.Before(time.Now().Add(-1 * time.Minute)) {
+	if g.PublishAt != nil && g.PublishAt.Before(time.Now().Add(-1*time.Minute)) && !g.PublishNow {
 		return &ValidationError{Msg: fmt.Sprintf(
 			"дата публикации (%s) уже прошла. Введите время в будущем",
 			g.PublishAt.In(util.MoscowLocation()).Format("02.01.2006 15:04"))}

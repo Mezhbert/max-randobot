@@ -16,6 +16,7 @@ const (
 	SessionEditField     = "edit_field"      // редактура поля розыгрыша (scheduled/active)
 	SessionEditMedia     = "edit_media"      // ввод новых медиа в редактуре
 	SessionCaptchaWaitStart = "captcha_wait_start" // юзер не начинал диалог: капча придёт при первом старте бота
+	SessionWizard          = "wizard"          // подэкраны мастера: {field: winners_message|results_post_text, return_to: check}
 )
 
 // UserSession — произвольное состояние юзера с контекстом (payload).

@@ -1,108 +1,79 @@
 // Package fsm — конечный автомат цепочки создания розыгрыша.
+// Интерфейс по мануалу RandoMaster_MAX (dev-notes/Claude-log): 10 шагов,
+// «Один шаг — одно сообщение», прогресс-бар, первый вариант предвыбран «✓».
 package fsm
 
 import (
 	"github.com/maxbot/giveawaybot/internal/store"
 )
 
-// Идентификаторы шагов FSM.
+// Идентификаторы шагов FSM (порядок = orderedSteps, = мануал §4).
 const (
-	StepPostText    = "post_text"
-	StepMedia       = "media"
-	StepName        = "name"
-	StepButtonText  = "button_text"
-	StepSubChannels = "sub_channels"
-	StepPubChannels = "pub_channels"
-	StepPublishMode = "publish_mode" // выбор: сразу / по времени
-	StepPublishAt   = "publish_at"
-	StepFinishMode  = "finish_mode" // выбор: по времени / по количеству
-	StepFinishAt    = "finish_at"
-	StepFinishCount = "finish_count" // кол-во участников для finish_mode=count
-	StepWinners     = "winners"
-	StepWinnersMsg  = "winners_msg"
-	StepReferral    = "referral" // приглашение друзей: +1 билет за каждого
-	StepResultsLoc  = "results_loc"
-	StepResultsText = "results_text"
-	StepCaptcha     = "captcha"
-	StepPreview     = "preview"
+	StepPost    = "post"    // 1: текст и/или медиа одним сообщением
+	StepChannel = "channel" // 2: канал публикации
+	StepName    = "name"    // 3: название (авто-варианты)
+	StepSubs    = "subs"    // 4: каналы подписки
+	StepButton  = "button"  // 5: текст кнопки участия
+	StepWinners = "winners" // 6: количество победителей
+	StepFinish  = "finish"  // 7: итоги (быстрые даты / календарь / по числу)
+	StepStart   = "start"   // 8: старт (сразу / час / завтра / дата)
+	StepExtras  = "extras"  // 9: капча / друзья / сообщение победителю / место итогов
+	StepCheck   = "check"   // 10: проверка (превью + сводка + правка пунктов)
 )
 
 // orderedSteps — упорядоченный список шагов (для переходов вперёд/назад).
-// Реферальная система и продвижение убраны (не входят в MVP-сценарий).
 var orderedSteps = []string{
+	StepPost,
+	StepChannel,
 	StepName,
-	StepPostText,
-	StepMedia,
-	StepButtonText,
-	StepSubChannels,
-	StepPubChannels,
-	StepPublishMode,
-	StepPublishAt,
-	StepFinishMode,
-	StepFinishAt,
-	StepFinishCount,
+	StepSubs,
+	StepButton,
 	StepWinners,
-	StepWinnersMsg,
-	StepReferral,
-	StepResultsLoc,
-	StepResultsText,
-	StepCaptcha,
-	StepPreview,
+	StepFinish,
+	StepStart,
+	StepExtras,
+	StepCheck,
 }
 
 // FirstStep — первый шаг цепочки.
-const FirstStep = StepName
+const FirstStep = StepPost
 
-// StepSkipped — нужно ли ПРОПУСТИТЬ шаг в зависимости от режима розыгрыша:
-//   - publish_at — пропускается при «Опубликовать сразу» (publish_at выставлен
-//     на now при выборе режима; шаг уже «выполнен» автоматом);
-//   - finish_count — пропускается при режиме «по времени»;
-//   - finish_at — пропускается при режиме «по количеству»;
-//   - results_text — пропускается при «итоги в исходном посте».
-//
-// Используется и при движении вперёд, и при «Назад» — чтобы навигация не
-// попадала на неактуальные шаги.
-func StepSkipped(g store.Giveaway, step string) bool {
-	switch step {
-	case StepPublishAt:
-		// Пропускается ТОЛЬКО в режиме «Опубликовать сразу». Протухший
-		// (прошлый) publish_at больше не пропускает шаг: иначе юзер,
-		// задавший дату и вернувшийся к ней позже, навсегда терял доступ
-		// к вводу даты — и Назад, и Далее проскакивали мимо шага (P1).
-		return g.PublishNow
-	case StepFinishCount:
-		return g.FinishMode != "count"
-	case StepFinishAt:
-		return g.FinishMode == "count"
-	case StepResultsText:
-		return g.ResultsInOriginalPost
-	}
-	return false
+// stepMeta — эмодзи и заголовок шага (для строки «Шаг N из 10 · Заголовок»).
+var stepMeta = map[string][2]string{
+	StepPost:    {"📝", "Пост"},
+	StepChannel: {"📣", "Канал"},
+	StepName:    {"🏷", "Название"},
+	StepSubs:    {"📢", "Подписки"},
+	StepButton:  {"🔘", "Кнопка"},
+	StepWinners: {"🏆", "Победители"},
+	StepFinish:  {"🏁", "Итоги"},
+	StepStart:   {"🚀", "Старт"},
+	StepExtras:  {"⚙️", "Доп. настройки"},
+	StepCheck:   {"✅", "Проверка"},
 }
 
-// optionalSteps — шаги, которые можно пропустить (кнопка "Пропустить").
-var optionalSteps = map[string]bool{
-	StepMedia:       true,
-	StepButtonText:  true, // дефолт "Участвовать"
-	StepWinnersMsg:  true,
-	StepResultsText: true, // дефолтный текст итогов при пустом
-	StepCaptcha:     true,
-}
+// StepEmoji/StepTitle — метаданные шага для рендера.
+func StepEmoji(step string) string { return stepMeta[step][0] }
+func StepTitle(step string) string { return stepMeta[step][1] }
+
+// StepSkipped — условный пропуск шага. В 10-шаговой схеме мануала условных
+// шагов нет (даты/календарь/счёт — подэкраны своих шагов), поэтому всегда
+// false. Функция сохранена: GoBack/GoNext используют её, а старые черновики
+// из БД с legacy-шагами сбрасываются на FirstStep в ResumeDraft.
+func StepSkipped(g store.Giveaway, step string) bool { return false }
+
+// optionalSteps — шаги, которые можно пропустить (в новой схеме «Далее →»
+// сам валидирует заполненность; пропуск как кнопка не нужен).
+var optionalSteps = map[string]bool{}
 
 // IsOptional — можно ли пропустить шаг.
 func IsOptional(step string) bool { return optionalSteps[step] }
 
-// buttonSteps — шаги, где ввод делается КНОПКАМИ (не текстом). Используется
-// для валидации: текст/форварды на таких шагах отклоняются с подсказкой.
+// buttonSteps — шаги, где ввод делается ТОЛЬКО кнопками (текст отклоняется
+// с подсказкой). У остальных шагов текст валиден («✍️ …»).
 var buttonSteps = map[string]bool{
-	StepReferral:    true,
-	StepSubChannels: true,
-	StepPubChannels: true,
-	StepPublishMode: true,
-	StepFinishMode:  true,
-	StepResultsLoc:  true,
-	StepCaptcha:     true,
-	StepPreview:     true,
+	StepSubs:  true, // выбор каналов тогглами
+	StepCheck: true, // правка пунктов/публикация
 }
 
 // IsButtonStep — выбор на этом шаге делается кнопками?
@@ -140,3 +111,21 @@ func StepNumber(step string) int {
 
 // TotalSteps — всего шагов в цепочке.
 func TotalSteps() int { return len(orderedSteps) }
+
+// ProgressBar — «▰▰▰▰▰▰▱▱▱▱»: n заполненных из total.
+func ProgressBar(n, total int) string {
+	if n > total {
+		n = total
+	}
+	if n < 0 {
+		n = 0
+	}
+	bar := ""
+	for i := 0; i < n; i++ {
+		bar += "▰"
+	}
+	for i := n; i < total; i++ {
+		bar += "▱"
+	}
+	return bar
+}

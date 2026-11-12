@@ -312,350 +312,294 @@ func TestParticipate_Idempotent_DoubleClick(t *testing.T) {
 }
 
 // =====================================================================
-// 3. FSM: полный флоу создания розыгрыша (13 шагов → scheduled).
+// 3. FSM: мастер по мануалу Claude-log (10 шагов → scheduled).
 // =====================================================================
 
-// TestFSM_FullCreateFlow_Scheduled — полный путь создания: текст поста →
-// skip медиа → название → skip кнопки → skip sub-каналы → выбор pub-канала →
-// даты → победители → skip сообщение → результаты в исходном посте (прыгает
-// results_text) → skip рефералы → skip капча → skip продвижение → Принять →
-// статус scheduled.
-func TestFSM_FullCreateFlow_Scheduled(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	const owner = 5000
-	testutil.EnsureUser(t, s, owner, "creator")
-
-	// Канал для публикации (бот админ).
-	ch, err := s.AddChannel(ctx, store.Channel{
-		OwnerUserID: owner, ChatID: 7001, Title: "Мой канал", Link: "l", IsPublic: true, IsBotAdmin: true,
-	})
-	require.NoError(t, err)
-
-	// Старт создания.
-	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
-	// Должны быть на шаге name (теперь первый шаг).
-	g, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-	require.Equal(t, fsm.StepName, g.DraftStep)
-	gid := g.ID
-
-	// Хелпер: отправить текст для текущего шага.
-	sendText := func(text string) {
-		t.Helper()
-		b.Handle(ctx, msgUpdate(owner, text))
-	}
-	// Хелпер: нажать callback.
-	click := func(payload string) {
-		t.Helper()
-		b.Handle(ctx, callbackUpdate(owner, payload))
-	}
-	// Хелпер: текущий шаг черновика.
-	curStep := func() string {
-		t.Helper()
-		gg, e := s.GetDraftGiveaway(ctx, owner)
-		require.NoError(t, e)
-		return gg.DraftStep
-	}
-
-	// 1) Название (теперь первый шаг).
-	sendText("Супер-конкурс")
-	require.Equal(t, fsm.StepPostText, curStep())
-
-	// 2) Текст поста.
-	sendText("Пост розыгрыша")
-	require.Equal(t, fsm.StepMedia, curStep())
-
-	// 3) Медиа — пропустить.
-	click(util.CBFSMSkip)
-	require.Equal(t, fsm.StepButtonText, curStep())
-
-	// 4) Текст кнопки — пропустить (дефолт «Участвовать»).
-	click(util.CBFSMSkip)
-	require.Equal(t, fsm.StepSubChannels, curStep())
-
-	// 5) Каналы для подписки — «Далее» без выбора.
-	click(util.CBFSMOption + "next")
-	require.Equal(t, fsm.StepPubChannels, curStep())
-
-	// 6) Канал публикации — выбираем тогглом, затем «Далее».
-	click("ch_toggle_pub:" + strconv.FormatInt(ch.ID, 10))
-	click(util.CBFSMOption + "next")
-	require.Equal(t, fsm.StepPublishMode, curStep())
-
-	// 7) Публикация — «По времени».
-	click(util.CBFSMOption + "publish_later")
-	require.Equal(t, fsm.StepPublishAt, curStep())
-
-	// 8) Дата публикации — в будущем (формат МСК).
-	pubAt := time.Now().Add(48 * time.Hour)
-	sendText(util.FormatMoscowTime(pubAt))
-	require.Equal(t, fsm.StepFinishMode, curStep())
-
-	// 9) Итоги — «По времени».
-	click(util.CBFSMOption + "finish_time")
-	require.Equal(t, fsm.StepFinishAt, curStep())
-
-	// 10) Дата итогов — ещё дальше.
-	finAt := time.Now().Add(7 * 24 * time.Hour)
-	sendText(util.FormatMoscowTime(finAt))
-	require.Equal(t, fsm.StepWinners, curStep())
-
-	// 11) Победители.
-	sendText("3")
-	require.Equal(t, fsm.StepWinnersMsg, curStep())
-
-	// 12) Сообщение победителям — пропустить.
-	click(util.CBFSMSkip)
-	require.Equal(t, fsm.StepReferral, curStep())
-
-	// 12.5) Рефералка — «Без рефералки».
-	click(util.CBFSMOption + "referral_off")
-	require.Equal(t, fsm.StepResultsLoc, curStep())
-
-	// 13) Итоги — «В исходном посте» → перепрыгнуть results_text.
-	click(util.CBFSMOption + "results_original")
-	require.Equal(t, fsm.StepCaptcha, curStep(),
-		"results_original должен перепрыгнуть шаг results_text к captcha")
-
-	// 14) Капча — «Нет».
-	click(util.CBFSMOption + "captcha_none")
-	require.Equal(t, fsm.StepPreview, curStep())
-
-	// Принять.
-	click(util.CBFSMConfirm)
-
-	// Статус — scheduled (publish_at в будущем).
-	got, err := s.GetGiveawayAny(ctx, gid)
-	require.NoError(t, err)
-	assert.Equal(t, store.StatusScheduled, got.Status, "после подтверждения — scheduled")
-	assert.Equal(t, 3, got.WinnersCount)
-	assert.Len(t, got.PublishChannelIDs, 1)
-	assert.Equal(t, ch.ID, got.PublishChannelIDs[0])
-	assert.True(t, got.ResultsInOriginalPost, "results_in_original_post должен быть TRUE")
-	assert.Equal(t, "time", got.FinishMode, "режим итогов — по времени")
-	// post_text сохранён.
-	assert.Equal(t, "Пост розыгрыша", got.PostText)
-	assert.Equal(t, "Супер-конкурс", got.Name)
+// wizardHelpers — общие хелперы мастера: быстрый прогон до нужного шага.
+// Дефолты StartDraft: кнопка/победители/итоги(завтра 21:00)/старт(сразу)/капча
+// предвыбраны — «Далее →» проносит их без вопросов.
+type wizardT struct {
+	t    *testing.T
+	b    *handlers.Bot
+	s    *store.Store
+	mock *testutil.MockBotAPI
+	uid  int64
+	ch   store.Channel
 }
 
-// TestFSM_PublishNow_SkipsDateStep — «Опубликовать сразу» пропускает ввод даты
-// и ставит ФЛАГ publish_now (publish_at будет выставлен на now в момент
-// «Принять» — не в момент выбора режима, иначе время «протухает»).
-func TestFSM_PublishNow_SkipsDateStep(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	const owner = 5005
-	testutil.EnsureUser(t, s, owner, "creator")
-	ch, err := s.AddChannel(ctx, store.Channel{
-		OwnerUserID: owner, ChatID: 7003, Title: "Канал", Link: "l", IsPublic: true, IsBotAdmin: true,
-	})
-	require.NoError(t, err)
-
-	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-
-	// Заполняем минимум и прыгаем на шаг режима публикации.
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "Fast"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "post_text", "Пост"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "button_text", "Участвовать"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_channel_ids", []int64{ch.ID}))
-	require.NoError(t, s.SetDraftStep(ctx, g.ID, fsm.StepPublishMode))
-
-	b.Handle(ctx, callbackUpdate(owner, util.CBFSMOption+"publish_now"))
-
-	// Шаг publish_at пропущен → сразу finish_mode.
-	gg, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-	assert.Equal(t, fsm.StepFinishMode, gg.DraftStep, "publish_now должен пропустить publish_at")
-
-	// Флаг установлен, publish_at ещё НЕТ (будет now в момент Принять).
-	assert.True(t, gg.PublishNow, "флаг publish_now установлен")
-	assert.Nil(t, gg.PublishAt, "publish_at не должен ставиться при выборе режима")
-}
-
-// TestFSM_FinishByCount — «По количеству участников» пропускает finish_at,
-// запрашивает число, валидирует.
-func TestFSM_FinishByCount(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	const owner = 5006
-	testutil.EnsureUser(t, s, owner, "creator")
-	ch, err := s.AddChannel(ctx, store.Channel{
-		OwnerUserID: owner, ChatID: 7004, Title: "Канал", Link: "l", IsPublic: true, IsBotAdmin: true,
-	})
-	require.NoError(t, err)
-
-	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "Count"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "post_text", "Пост"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "button_text", "Участвовать"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_channel_ids", []int64{ch.ID}))
-	pub := time.Now().Add(2 * time.Hour)
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_at", pub))
-	require.NoError(t, s.SetDraftStep(ctx, g.ID, fsm.StepFinishMode))
-
-	// «По количеству» — шаг finish_at пропускается, запрашивается число.
-	b.Handle(ctx, callbackUpdate(owner, util.CBFSMOption+"finish_count"))
-	gg, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-	assert.Equal(t, fsm.StepFinishCount, gg.DraftStep)
-	assert.Equal(t, "count", gg.FinishMode)
-
-	// Вводим число.
-	b.Handle(ctx, msgUpdate(owner, "100"))
-	g3, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-	assert.Equal(t, 100, g3.FinishParticipantsCount)
-	assert.Equal(t, fsm.StepWinners, g3.DraftStep)
-}
-
-// TestFSM_ResultsSeparate_AsksForResultsText — выбор «отдельным постом»
-// НЕ перепрыгивает шаг results_text (там запрашивается текст итогов).
-func TestFSM_ResultsSeparate_AsksForResultsText(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	const owner = 5001
-	testutil.EnsureUser(t, s, owner, "creator")
-
-	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-
-	// Переводим черновик сразу на шаг results_loc.
-	require.NoError(t, s.SetDraftStep(ctx, g.ID, fsm.StepResultsLoc))
-	g.DraftStep = fsm.StepResultsLoc
-
-	// Выбираем «отдельным постом».
-	b.Handle(ctx, callbackUpdate(owner, util.CBFSMOption+"results_separate"))
-
-	gg, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-	assert.Equal(t, fsm.StepResultsText, gg.DraftStep,
-		"results_separate должен привести на шаг results_text")
-	assert.False(t, gg.ResultsInOriginalPost, "results_in_original_post должен быть FALSE")
-}
-
-// TestFSM_Cancel_KeepsDraft — кнопка «Отменить» сохраняет именованный черновик
-// (доступен позже через «Мои розыгрыши»), сбрасывает шаг. Безымянный — удаляется.
-func TestFSM_Cancel_KeepsDraft(t *testing.T) {
+func newWizard(t *testing.T, uid int64) wizardT {
+	t.Helper()
 	b, s, mock, cleanup := newBot(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{
+		OwnerUserID: uid, ChatID: 7001, Title: "Мой канал", Link: "l", IsPublic: true, IsBotAdmin: true,
+	})
+	require.NoError(t, err)
+	return wizardT{t: t, b: b, s: s, mock: mock, uid: uid, ch: ch}
+}
+
+func (w wizardT) click(p string) { w.b.Handle(context.Background(), callbackUpdate(w.uid, p)) }
+func (w wizardT) send(text string) { w.b.Handle(context.Background(), msgUpdate(w.uid, text)) }
+func (w wizardT) step() string {
+	gg, e := w.s.GetDraftGiveaway(context.Background(), w.uid)
+	require.NoError(w.t, e)
+	return gg.DraftStep
+}
+func (w wizardT) draft() store.Giveaway {
+	gg, e := w.s.GetDraftGiveaway(context.Background(), w.uid)
+	require.NoError(w.t, e)
+	return gg
+}
+
+// runTo — прогнать мастера до шага step (включая его показ).
+func (w wizardT) runTo(step string) {
+	w.click(util.CBCreateGiveaway)
+	require.NotEmpty(w.t, w.step())
+	for i := 0; w.step() != step; i++ {
+		require.Less(w.t, i, 30, "runTo завис: шаг %s не достигается", step)
+		switch w.step() {
+		case fsm.StepPost:
+			if step == fsm.StepPost {
+				return
+			}
+			w.send("Текст поста розыгрыша")
+		case fsm.StepChannel:
+			w.click(util.CBFSMOption + "ch:" + strconv.FormatInt(w.ch.ID, 10))
+			w.click(util.CBFSMNext)
+		case fsm.StepName:
+			w.click(util.CBFSMOption + "name:0")
+			w.click(util.CBFSMNext)
+		default:
+			w.click(util.CBFSMNext)
+		}
+	}
+}
+
+// TestFSM_FullCreateFlow_Scheduled — полный путь по мануалу: пост → канал →
+// название (авто-вариант) → подписки (Далее) → кнопка/победители/итоги/старт
+// (дефолты, Далее-Далее) → доп. настройки → проверка → 🚀 Опубликовать.
+func TestFSM_FullCreateFlow_Scheduled(t *testing.T) {
+	w := newWizard(t, 5000)
 	ctx := context.Background()
 
-	const owner = 5002
-	testutil.EnsureUser(t, s, owner, "creator")
+	// Старт создания → шаг 1 «Пост».
+	w.click(util.CBCreateGiveaway)
+	require.Equal(w.t, fsm.StepPost, w.step())
+	gid := w.draft().ID
 
-	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, owner)
+	// 1) Пост текстом → сразу шаг 2.
+	w.send("Пост розыгрыша")
+	require.Equal(t, fsm.StepChannel, w.step())
+
+	// 2) Канал публикации: выбор морфит шаг («✓»), Далее → шаг 3.
+	w.click(util.CBFSMOption + "ch:" + strconv.FormatInt(w.ch.ID, 10))
+	require.Equal(t, fsm.StepChannel, w.step(), "выбор канала не переводит шаг")
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepName, w.step())
+
+	// 3) Название: авто-вариант + Далее.
+	w.click(util.CBFSMOption + "name:0")
+	g := w.draft()
+	require.NotEmpty(t, g.Name, "авто-вариант названия должен сохраниться")
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepSubs, w.step())
+
+	// 4) Подписки: канал публикации предвыбран 🔒, «Далее · выбрано 1».
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepButton, w.step())
+
+	// 5-8) Кнопка/победители/итоги/старт — дефолты предвыбраны.
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepWinners, w.step())
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepFinish, w.step())
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepStart, w.step())
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepExtras, w.step())
+
+	// 9) Доп. настройки: капча включена по дефолту (мануал) → Далее.
+	g = w.draft()
+	assert.Equal(t, store.CaptchaAll, g.CaptchaMode, "капча включена по умолчанию")
+	w.click(util.CBFSMNext)
+	require.Equal(t, fsm.StepCheck, w.step())
+
+	// Экран проверки: превью поста + сводка.
+	sawSummary := false
+	for _, r := range w.mock.SnapshotSends() {
+		if strings.Contains(r.Text, "Информация о розыгрыше") {
+			sawSummary = true
+		}
+	}
+	assert.True(t, sawSummary, "сводка на экране проверки")
+
+	// 10) 🚀 Опубликовать → scheduled (старт «сразу»: publish_at=now).
+	w.click(util.CBFSMConfirm)
+	got, err := w.s.GetGiveawayAny(ctx, gid)
 	require.NoError(t, err)
-	require.NotEmpty(t, g.DraftStep)
+	assert.Equal(t, store.StatusScheduled, got.Status)
+	assert.Equal(t, 1, got.WinnersCount, "дефолт: 1 победитель")
+	assert.Equal(t, "Участвовать", got.ButtonText)
+	assert.Equal(t, []int64{w.ch.ID}, got.PublishChannelIDs)
+	assert.Equal(t, []int64{w.ch.ID}, got.SubscribeChannelIDs, "канал публикации предвыбран в подписках")
+	assert.True(t, got.PublishNow, "дефолт: старт сразу")
+	assert.Equal(t, "time", got.FinishMode)
+	assert.NotNil(t, got.FinishAt, "дефолт: итоги завтра 21:00")
+	assert.Equal(t, "Пост розыгрыша", got.PostText)
+}
 
-	// Даём черновику имя — тогда Cancel сохранит его.
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "Мой черновик"))
+// TestFSM_FinishByCount — «👥 По числу участников»: цель вводится текстом на
+// том же шаге, минимум 10 (мануал).
+func TestFSM_FinishByCount(t *testing.T) {
+	w := newWizard(t, 5006)
+	w.runTo(fsm.StepFinish)
 
-	// Отмена.
-	b.Handle(ctx, callbackUpdate(owner, util.CBFSMCancel))
+	w.click(util.CBFSMOption + "fin_count")
+	g := w.draft()
+	assert.Equal(t, "count", g.FinishMode)
+	assert.Equal(t, 100, g.FinishParticipantsCount, "дефолт цели при включении режима")
+	assert.Equal(t, fsm.StepFinish, w.step(), "режим меняется на месте, без перехода")
 
-	// Статус — всё ещё draft, draft_step СОХРАНЁН (чтобы «Продолжить» началось с того же шага).
-	got, err := s.GetGiveawayAny(ctx, g.ID)
+	// Слишком мало — ошибка на месте (❌-морфинг), шаг не меняется.
+	w.send("5")
+	assert.Equal(t, fsm.StepFinish, w.step())
+
+	// Валидное число → сразу шаг 8.
+	w.send("150")
+	g = w.draft()
+	assert.Equal(t, 150, g.FinishParticipantsCount)
+	assert.Equal(t, fsm.StepStart, w.step())
+}
+
+// TestFSM_Extras_TogglesAndMessage — доп. настройки: переключатели морфят шаг,
+// ✉️ открывает подэкран, текст сохраняется и возвращает к настройкам.
+func TestFSM_Extras_TogglesAndMessage(t *testing.T) {
+	w := newWizard(t, 5007)
+	w.runTo(fsm.StepExtras)
+
+	// Капча: вкл → выкл.
+	w.click(util.CBFSMOption + "cap")
+	assert.Equal(t, store.CaptchaNone, w.draft().CaptchaMode)
+	// Друзья: выкл → вкл (лимит 10 по дефолту).
+	w.click(util.CBFSMOption + "fr")
+	g := w.draft()
+	assert.True(t, g.ReferralEnabled)
+	// Лимит 3.
+	w.click(util.CBFSMOption + "frlim:3")
+	assert.Equal(t, 3, w.draft().ReferralLimit)
+	assert.Equal(t, fsm.StepExtras, w.step(), "переключатели не переводят шаг")
+
+	// ✉️ Сообщение победителю: подэкран → текст → назад к настройкам.
+	w.click(util.CBFSMOption + "msg")
+	assert.Equal(t, fsm.StepExtras, w.step())
+	w.send("Пишите в личку за призом")
+	g = w.draft()
+	assert.Equal(t, "Пишите в личку за призом", g.WinnersMessage)
+	assert.Equal(t, fsm.StepExtras, w.step())
+
+	// Место итогов: отдельным постом → подэкран текста итогов.
+	w.click(util.CBFSMOption + "resloc")
+	assert.False(t, w.draft().ResultsInOriginalPost)
+	w.send("🏁 Наши победители")
+	assert.Equal(t, "🏁 Наши победители", w.draft().ResultsPostText)
+}
+
+// TestFSM_CancelConfirm_KeepsDraft — «✕ Отменить» показывает подтверждение,
+// «Да, выйти» сохраняет именованный черновик.
+func TestFSM_CancelConfirm_KeepsDraft(t *testing.T) {
+	w := newWizard(t, 5002)
+	w.click(util.CBCreateGiveaway)
+	require.NoError(t, w.s.UpdateGiveawayField(context.Background(), w.draft().ID, "name", "Мой черновик"))
+
+	// ✕ Отменить → экран подтверждения (морфинг, без нового сообщения).
+	w.click(util.CBFSMCancel)
+	sawConfirm := false
+	for _, r := range w.mock.SnapshotSends() {
+		if strings.Contains(r.Text, "Остановить создание") {
+			sawConfirm = true
+		}
+	}
+	assert.True(t, sawConfirm, "должен появиться экран подтверждения отмены")
+	assert.Equal(t, store.StatusDraft, w.draft().Status, "после ✕ черновик ещё жив")
+
+	// «Да, выйти» — черновик сохранён.
+	w.click(util.CBFSMExitYes)
+	got, err := w.s.GetGiveawayAny(context.Background(), w.draft().ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusDraft, got.Status)
-	assert.NotEmpty(t, got.DraftStep, "после отмены draft_step сохраняется для продолжения")
-
-	// Получил сообщение об отмене.
-	found := false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == owner && strings.Contains(r.Text, "отменено") {
-			found = true
-		}
-	}
-	assert.True(t, found, "должно быть сообщение об отмене")
+	assert.NotEmpty(t, got.DraftStep)
 }
 
-// TestFSM_ValidationFails_NoSchedule — подтверждение без обязательных полей
-// НЕ переводит в scheduled, а выдаёт ошибку валидации.
+// TestFSM_BackEditFromCheck — правка пункта с экрана проверки: fsm_edit
+// ведёт к шагу, «Далее» возвращает на проверку (return_to).
+func TestFSM_BackEditFromCheck(t *testing.T) {
+	w := newWizard(t, 5008)
+	w.runTo(fsm.StepCheck)
+
+	// Правка названия (шаг 3).
+	w.click(util.CBFSMEdit + fsm.StepName)
+	assert.Equal(t, fsm.StepName, w.step())
+	w.send("Новое имя")
+	assert.Equal(t, fsm.StepCheck, w.step(), "после правки — назад на проверку")
+	assert.Equal(t, "Новое имя", w.draft().Name)
+}
+
+// TestFSM_HintIsNotification — 💡 Справка отвечает УВЕДОМЛЕНИЕМ (≤150
+// символов), не новым сообщением (мануал §3).
+func TestFSM_HintIsNotification(t *testing.T) {
+	w := newWizard(t, 5009)
+	w.click(util.CBCreateGiveaway)
+	sendsBefore := len(w.mock.SnapshotSends())
+
+	w.click(util.CBFSMHint)
+
+	assert.Equal(t, sendsBefore, len(w.mock.SnapshotSends()), "нового сообщения быть не должно")
+	require.NotEmpty(t, w.mock.CallbackNotifs, "подсказка должна прийти уведомлением")
+	assert.Contains(t, w.mock.CallbackNotifs[len(w.mock.CallbackNotifs)-1], "символ")
+}
+
+// TestFSM_ValidationFails_NoSchedule — 🚀 с незаполненным постом не
+// публикует: уведомление об ошибке, статус draft.
 func TestFSM_ValidationFails_NoSchedule(t *testing.T) {
-	b, s, mock, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
+	w := newWizard(t, 5003)
+	w.click(util.CBCreateGiveaway)
+	g := w.draft()
+	require.NoError(t, w.s.SetDraftStep(context.Background(), g.ID, fsm.StepCheck))
 
-	const owner = 5003
-	testutil.EnsureUser(t, s, owner, "creator")
+	w.click(util.CBFSMConfirm)
 
-	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, owner)
+	got, err := w.s.GetGiveawayAny(context.Background(), g.ID)
 	require.NoError(t, err)
-
-	// Сразу переводим на preview без заполнения обязательных полей.
-	require.NoError(t, s.SetDraftStep(ctx, g.ID, fsm.StepPreview))
-
-	// Принять → должна сработать валидация (нет текста поста).
-	b.Handle(ctx, callbackUpdate(owner, util.CBFSMConfirm))
-
-	got, err := s.GetGiveawayAny(ctx, g.ID)
-	require.NoError(t, err)
-	assert.Equal(t, store.StatusDraft, got.Status, "не должен перейти в scheduled без обязательных полей")
-
-	// Пользователь получил сообщение об ошибке валидации.
-	found := false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == owner && strings.Contains(r.Text, "⚠️") {
-			found = true
-		}
-	}
-	assert.True(t, found, "должна быть ошибка валидации")
+	assert.Equal(t, store.StatusDraft, got.Status, "не должен опубликоваться без обязательных полей")
+	require.NotEmpty(t, w.mock.CallbackNotifs, "ошибка валидации — уведомлением")
+	assert.Contains(t, w.mock.CallbackNotifs[len(w.mock.CallbackNotifs)-1], "пост")
 }
 
-// TestFSM_Confirm_AlwaysScheduled — подтверждение всегда переводит в scheduled
-// (не active!), даже если publish_at «прямо сейчас». Scheduler сам опубликует.
-func TestFSM_Confirm_AlwaysScheduled(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
+// TestFSM_Confirm_ScheduledByTime — старт «по времени»: подтверждение →
+// scheduled с заданным publish_at.
+func TestFSM_Confirm_ScheduledByTime(t *testing.T) {
+	w := newWizard(t, 5004)
 	ctx := context.Background()
-
-	const owner = 5004
-	testutil.EnsureUser(t, s, owner, "creator")
-
-	ch, err := s.AddChannel(ctx, store.Channel{
-		OwnerUserID: owner, ChatID: 7002, Title: "Канал", Link: "l", IsPublic: true, IsBotAdmin: true,
-	})
-	require.NoError(t, err)
-
-	b.Handle(ctx, callbackUpdate(owner, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, owner)
-	require.NoError(t, err)
-
-	// Заполняем все обязательные поля, publish_at в будущем.
+	w.click(util.CBCreateGiveaway)
+	g := w.draft()
 	pub := time.Now().Add(2 * time.Hour)
-	fin := time.Now().Add(3 * time.Hour)
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "post_text", "Пост"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "К"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "button_text", "Участвовать"))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_channel_ids", []int64{ch.ID}))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "publish_at", pub))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "finish_at", fin))
-	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "winners_count", 1))
-	require.NoError(t, s.SetDraftStep(ctx, g.ID, fsm.StepPreview))
+	fin := time.Now().Add(26 * time.Hour)
+	for field, val := range map[string]any{
+		"post_text": "Пост", "name": "К", "button_text": "Участвовать",
+		"publish_channel_ids": []int64{w.ch.ID}, "publish_at": pub, "finish_at": fin,
+		"winners_count": 1, "publish_now": false,
+	} {
+		require.NoError(t, w.s.UpdateGiveawayField(ctx, g.ID, field, val))
+	}
+	require.NoError(t, w.s.SetDraftStep(ctx, g.ID, fsm.StepCheck))
 
-	// Принять.
-	b.Handle(ctx, callbackUpdate(owner, util.CBFSMConfirm))
+	w.click(util.CBFSMConfirm)
 
-	got, err := s.GetGiveawayAny(ctx, g.ID)
+	got, err := w.s.GetGiveawayAny(ctx, g.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusScheduled, got.Status, "подтверждение → всегда scheduled (не active)")
+	assert.Equal(t, store.StatusScheduled, got.Status, "подтверждение → scheduled (не active)")
 }
 
 // =====================================================================
@@ -676,7 +620,7 @@ func TestStart_SendsMainMenu(t *testing.T) {
 	// Должно быть отправлено хотя бы одно сообщение с клавиатурой.
 	hasMenu := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == 6000 && r.HasKb && strings.Contains(r.Text, "меню") {
+		if r.UserID == 6000 && r.HasKb && strings.Contains(r.Text, "RandoMaster") {
 			hasMenu = true
 		}
 	}

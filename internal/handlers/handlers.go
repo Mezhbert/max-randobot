@@ -4,6 +4,7 @@ package handlers
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -149,6 +150,11 @@ func (b *Bot) Handle(ctx context.Context, u model.Update) {
 				b.log.Debug("bot_added/removed: update channel flag", "chat", u.ChatID, "err", err)
 			}
 		}
+		// Юзер на экране «➕ Подключить канал»: привязываем канал и
+		// возвращаем к шагу мастера (мануал §5.3).
+		if u.UpdateType == model.UpdateBotAdded && u.ChatID != 0 && u.UserID != 0 {
+			b.onBotAddedConnectChannel(ctx, u.UserID, u.ChatID)
+		}
 	case model.UpdateMessageEdited, model.UpdateMessageRemoved:
 		// пока не используется
 	default:
@@ -270,6 +276,11 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		if b.handleCaptchaVerifyInput(ctx, uid, text) {
 			return
 		}
+	case store.SessionWizard:
+		// Подэкран мастера (сообщение победителю / текст итогов).
+		if b.handleWizardFieldInput(ctx, uid, text) {
+			return
+		}
 	case store.SessionUTMCreate:
 		if b.handleUTMCreateInput(ctx, uid, text) {
 			return
@@ -284,30 +295,32 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		}
 	}
 
-	// Если идёт создание розыгрыша — валидируем ввод под тип шага.
+	// Если идёт создание розыгрыша — маршрутизируем ввод по типу шага.
 	if draft, err := b.db.GetDraftGiveaway(ctx, uid); err == nil && draft.DraftStep != "" {
-		// Шаг медиа обрабатываем по attachments (форвард с фото/видео — ок).
-		if draft.DraftStep == fsm.StepMedia {
-			b.handleMediaInput(ctx, uid, draft, msg)
+		switch {
+		case draft.DraftStep == fsm.StepPost:
+			// Шаг 1: текст и/или медиа одним сообщением.
+			b.handlePostInput(ctx, uid, draft, msg)
 			return
-		}
-		// Шаги, где выбор делается КНОПКАМИ (каналы/режимы/капча/подтверждение):
-		// текст и форварды не принимаем — объясняем и перерисовываем шаг.
-		if fsm.IsButtonStep(draft.DraftStep) {
+		case draft.DraftStep == fsm.StepChannel:
+			// Шаг 2: форвард/ссылка/ID добавляет канал; прочее — подсказка.
+			if isForward(msg) || isChannelLink(text) || isNumber(text) {
+				b.handleChannelStepInput(ctx, uid, draft, msg)
+				return
+			}
+			b.morphError(ctx, uid, draft, "Перешлите пост из канала или отправьте ссылку/ID")
+			return
+		case fsm.IsButtonStep(draft.DraftStep):
 			if text != "" || isForward(msg) || hasAttachments(msg) {
 				b.rejectUnexpectedDraftInput(ctx, uid, draft)
 				return
 			}
-			// Пустое сообщение без вложений — тоже малополезно, подсказываем.
 			b.rejectUnexpectedDraftInput(ctx, uid, draft)
 			return
 		}
 		// Текстовые шаги: форвард поста — не тот ввод (текст нужен свой).
 		if isForward(msg) {
-			_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-				"⚠️ Это пересланное сообщение, а на этом шаге нужно ввести СВОЙ текст.\n\n"+
-					fsm.PromptForStep(draft.DraftStep),
-				kbForStep(draft.DraftStep, draft))
+			b.morphError(ctx, uid, draft, "Это пересланное сообщение — нужен СВОЙ текст")
 			return
 		}
 		b.handleDraftInput(ctx, uid, draft, text)
@@ -334,6 +347,15 @@ func hasAttachments(msg model.MessageUpdate) bool {
 	return len(msg.Body.Attachments) > 0
 }
 
+// isNumber — строка состоит из цифр (возможно, отрицательный ID канала).
+func isNumber(s string) bool {
+	if s == "" {
+		return false
+	}
+	_, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	return err == nil
+}
+
 // unexpectedNoFlow — пользователь прислал что-то неожидаемое вне любого флоу
 // (нет сессии, нет создания): объясняем и показываем меню.
 func (b *Bot) unexpectedNoFlow(ctx context.Context, uid int64, msg model.MessageUpdate) {
@@ -357,46 +379,38 @@ func (b *Bot) unexpectedNoFlow(ctx context.Context, uid int64, msg model.Message
 }
 
 // rejectUnexpectedDraftInput — на кнопочном шаге пришёл текст/форвард:
-// объясняем и заново показываем шаг с кнопками.
+// объясняем уведомлением и морфим шаг на месте (сообщение шага уже на экране).
 func (b *Bot) rejectUnexpectedDraftInput(ctx context.Context, uid int64, g store.Giveaway) {
 	var what string
 	switch g.DraftStep {
-	case fsm.StepSubChannels, fsm.StepPubChannels:
-		what = "выбрать каналы кнопками из списка"
-	case fsm.StepPreview:
-		what = "подтвердить кнопками «✅ Принять» / «❌ Отклонить»"
+	case fsm.StepSubs:
+		what = "отмечать каналы кнопками"
+	case fsm.StepCheck:
+		what = "использовать «✏️»/«🚀»/«💾» кнопками"
 	default:
-		what = "выбрать вариант кнопкой"
+		what = "выбирать кнопкой"
 	}
-	_ = b.api.SendText(ctx, uid, "⚠️ Здесь не нужен текст — нужно "+what+". Вот шаг ещё раз 👇")
-	b.showStep(ctx, uid, g, g.DraftStep)
+	gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
+	b.morphError(ctx, uid, gg, "Здесь не нужен текст — нужно "+what)
 }
 
-// sendMainMenu отправляет главное меню пользователю.
-//
-// NOTE: reply-keyboard (кнопки у поля ввода) в MAX для ботов НЕ работает:
-// платформа принимает attachment (200 OK), но молча выкидывает его —
-// сообщение доходит голым текстом (проверено живым API-запросом и чтением
-// сообщения обратно: attachments пуст). Поэтому меню — всегда inline.
+// sendMainMenu отправляет главное меню пользователю. Если есть незаконченный
+// черновик — первой строкой «📝 Продолжить черновик» (мануал §11).
 func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
-	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
+	kb := util.MainMenuKeyboard()
+	if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
+		kb = util.MainMenuWithDraftKeyboard()
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 }
 
-// sendStartScreen — информативное приветствие при /start: что умеет бот + меню.
+// sendStartScreen — приветствие при /start (текст по мануалу §11).
 func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
-	text := `🎁 Бот розыгрышей в MAX
-
-Что умеет:
-• Создавать розыгрыши с постами, медиа и кнопкой «Участвовать»
-• Публиковать в каналах по расписанию, проверять подписки участников
-• Подводить итоги: взвешенный выбор победителей, итоги в посте или отдельным
-• Капча от ботов (картинка с цифрами при участии)
-• UTM-аналитика источников подписчиков с экспортом CSV
-
-Команды:
-/menu — главное меню
-/stop — остановить создание и сбросить состояние
-
-Выберите действие 👇`
-	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, util.MainMenuKeyboard())
+	text := "**RandoMaster** — розыгрыши и трекинг для ваших каналов в MAX.\n\n" +
+		"🎁 **Розыгрыши** — пост с кнопкой участия за минуту. Бот сам проверит подписки, " +
+		"отсеет ботов, начислит билеты за приглашённых друзей и честно выберет победителей.\n\n" +
+		"📈 **Трекинг** — своя ссылка на каждую рекламную закупку. Видно, сколько переходов " +
+		"и подписчиков принесла каждая и какой закуп окупился.\n\n" +
+		"С чего начнём?"
+	b.sendMainMenu(ctx, userID, text)
 }

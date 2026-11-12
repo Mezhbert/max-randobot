@@ -63,6 +63,10 @@ type BotAPI interface {
 	SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error
 	SendFile(ctx context.Context, userID int64, filename string, data []byte) error
 	AnswerCallback(ctx context.Context, callbackID, notification string)
+	// AnswerCallbackEdit — ответ на нажатие с ЗАМЕНОЙ сообщения, в котором
+	// была кнопка (механика мануала: выбор варианта морфирует шаг — «✓ »
+	// переезжает на выбранный вариант, без нового сообщения в чате).
+	AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard)
 }
 
 // New создаёт обёртку. maxRPS — целевой лимит (платформа: 30).
@@ -499,6 +503,26 @@ func (a *API) AnswerCallback(ctx context.Context, callbackID, notification strin
 	_, err := a.Messages.AnswerOnCallback(ctx, callbackID, model.CallbackAnswer{Notification: &notif})
 	if err != nil {
 		slog.Debug("AnswerOnCallback", "err", err)
+	}
+	a.metrics.Inc(metrics.MethodAnswerCallback, err)
+}
+
+// AnswerCallbackEdit — ответ на нажатие, ЗАМЕНЯЮЩИЙ сообщение с кнопкой:
+// POST /answers с message (тот же шаг с новым «✓ ») — ядро UX мануала
+// («Один шаг — одно сообщение», нажатия не плодят новых). kb=nil — сообщение
+// без клавиатуры (пройденный шаг).
+func (a *API) AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard) {
+	if callbackID == "" {
+		return
+	}
+	body := &model.NewMessageBody{Text: text, Format: model.FormatMarkdown}
+	if kb != nil {
+		body.Attachments = []model.Attachment{kb.Build()}
+	}
+	a.rl.wait(ctx)
+	_, err := a.Messages.AnswerOnCallback(ctx, callbackID, model.CallbackAnswer{Message: body})
+	if err != nil {
+		slog.Debug("AnswerOnCallbackEdit", "err", err)
 	}
 	a.metrics.Inc(metrics.MethodAnswerCallback, err)
 }

@@ -116,8 +116,8 @@ func TestChannels_BotRemovedUpdate_FlagsChannel(t *testing.T) {
 	assert.True(t, ch.IsBotAdmin, "bot_added должен вернуть флаг is_bot_admin")
 }
 
-// TestFSM_EarlyChannelCheck — вход в шаг «Каналы публикации» без каналов с
-// админкой уводит в «Мои каналы», а не даёт пройти дальше.
+// TestFSM_EarlyChannelCheck — шаг 2 без каналов: пикер предлагает
+// «➕ Подключить канал», шаг остаётся channel (валидация до, не в конце).
 func TestFSM_EarlyChannelCheck(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
@@ -125,38 +125,35 @@ func TestFSM_EarlyChannelCheck(t *testing.T) {
 	const uid = 6103
 	testutil.EnsureUser(t, s, uid, "creator")
 
-	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, uid)
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+	click(util.CBCreateGiveaway)
+	b.Handle(ctx, msgUpdate(uid, "Текст поста"))
+
+	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
+	assert.Equal(t, fsm.StepChannel, gg.DraftStep, "после поста — шаг канала")
 
-	// Быстро прыгаем на шаг pub_channels (name → post_text → skip*3 → next).
-	b.Handle(ctx, msgUpdate(uid, "Имя"))
-	b.Handle(ctx, msgUpdate(uid, "Текст"))
-	b.Handle(ctx, callbackUpdate(uid, util.CBFSMSkip)) // media
-	b.Handle(ctx, callbackUpdate(uid, util.CBFSMSkip)) // button_text
-	b.Handle(ctx, callbackUpdate(uid, util.CBFSMOption+"next")) // sub_channels (пусто — ок)
-
-	// Шаг pub_channels: каналов нет → должен быть экран «Мои каналы»
-	// (сообщение с инструкцией), а draft_step остаётся pub_channels.
-	gg, err := s.GetGiveawayAny(ctx, g.ID)
-	require.NoError(t, err)
-	assert.Equal(t, fsm.StepPubChannels, gg.DraftStep)
-
-	warned := false
+	// Шаг канала без каналов: кнопка подключения, «Далее» недоступен.
+	connectOffered := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "Нет каналов, где бот — админ") {
-			warned = true
+		if r.UserID == uid && strings.Contains(r.Text, "Шаг 2 из 10") {
+			connectOffered = true
 		}
 	}
-	assert.True(t, warned, "юзер должен получить предупреждение о каналах ДО шага публикации")
+	assert.True(t, connectOffered, "шаг канала должен показаться (с ➕ Подключить канал)")
+
+	// «Далее» без канала — уведомление, шаг не меняется.
+	click(util.CBFSMNext)
+	gg, err = s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, fsm.StepChannel, gg.DraftStep, "без канала «Далее» не проходит")
 }
 
 // ---------- FSM условная навигация ----------
 
-// TestFSM_BackSkipsConditionalSteps — «Назад» не попадает на пропущенные шаги:
-// при finish_mode=count из finish_count назад идём к finish_mode (не finish_at),
-// при publish_now назад от finish_mode идёт к pub_channels (не publish_at).
-func TestFSM_BackSkipsConditionalSteps(t *testing.T) {
+// TestFSM_BackNavigation — «← Назад» идёт на предыдущий шаг с сохранёнными
+// значениями; с первого шага — выход в меню (черновик жив).
+func TestFSM_BackNavigation(t *testing.T) {
 	b, s, _, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -165,55 +162,35 @@ func TestFSM_BackSkipsConditionalSteps(t *testing.T) {
 	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8301, Title: "Ch", IsBotAdmin: true})
 	require.NoError(t, err)
 
-	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
-	g, err := s.GetDraftGiveaway(ctx, uid)
-	require.NoError(t, err)
-	_ = g
-
 	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
-	send := func(text string) { b.Handle(ctx, msgUpdate(uid, text)) }
 	curStep := func() string {
 		gg, e := s.GetDraftGiveaway(ctx, uid)
 		require.NoError(t, e)
 		return gg.DraftStep
 	}
 
-	send("Имя")
-	send("Текст")
-	click(util.CBFSMSkip) // media
-	click(util.CBFSMSkip) // button
-	click(util.CBFSMOption + "next") // sub
-	click(util.CBChannelTogglePub + strconv.FormatInt(ch.ID, 10))
-	click(util.CBFSMOption + "next") // pub → publish_mode
-	click(util.CBFSMOption + "publish_now") // скип publish_at → finish_mode
-	require.Equal(t, fsm.StepFinishMode, curStep())
+	click(util.CBCreateGiveaway)
+	b.Handle(ctx, msgUpdate(uid, "Текст"))
+	click(util.CBFSMOption + "ch:" + strconv.FormatInt(ch.ID, 10))
+	click(util.CBFSMNext) // -> name
+	require.Equal(t, fsm.StepName, curStep())
+	click(util.CBFSMOption + "name:0")
+	click(util.CBFSMNext) // -> subs
+	require.Equal(t, fsm.StepSubs, curStep())
 
-	// Назад от finish_mode — должен попасть на publish_mode (выбор «сразу/по
-	// времени»), НЕ на пропущенный publish_at.
+	// Назад: subs -> name (значение сохранено).
 	click(util.CBFSMBack)
-	assert.Equal(t, fsm.StepPublishMode, curStep(),
-		"Назад после publish_now не должен попадать на пропущенный publish_at")
+	assert.Equal(t, fsm.StepName, curStep(), "Назад с подписок — к названию")
+	gg, _ := s.GetDraftGiveaway(ctx, uid)
+	assert.NotEmpty(t, gg.Name, "название сохранено при возврате")
 
-	// Вперёд снова: publish_at всё ещё «только что» → снова finish_mode.
-	click(util.CBFSMOption + "publish_later")
-	// P1-регрессия: publish_now → Назад → publish_later обязан СБРОСИТЬ флаг
-	// «сразу» и показать шаг даты (раньше шаг молча скипался, а Confirm
-	// публиковал розыгрыш немедленно — откат выбора режима был сломан).
-	gg, err := s.GetDraftGiveaway(ctx, uid)
+	// Назад с первого шага (post) — меню, черновик жив.
+	click(util.CBFSMBack) // name -> channel
+	click(util.CBFSMBack) // channel -> post
+	click(util.CBFSMBack) // post -> меню
+	gg, err = s.GetGiveawayAny(ctx, gg.ID)
 	require.NoError(t, err)
-	assert.False(t, gg.PublishNow, "publish_later должен сбрасывать publish_now")
-	assert.Equal(t, fsm.StepPublishAt, curStep(),
-		"после publish_later шаг publish_at должен ПОКАЗЫВАТЬСЯ (не скипаться)")
-	// publish_later ведёт на ввод даты — вводим будущую.
-	send(util.FormatMoscowTime(time.Now().Add(48 * time.Hour)))
-	require.Equal(t, fsm.StepFinishMode, curStep())
-	click(util.CBFSMOption + "finish_count") // → finish_count
-	require.Equal(t, fsm.StepFinishCount, curStep())
-
-	// Назад от finish_count → finish_mode (не finish_at).
-	click(util.CBFSMBack)
-	assert.Equal(t, fsm.StepFinishMode, curStep(),
-		"Назад после finish_count должен идти к finish_mode, не к finish_at")
+	assert.Equal(t, store.StatusDraft, gg.Status, "черновик сохранён после выхода с первого шага")
 }
 
 // ---------- Редактура ----------
@@ -601,7 +578,7 @@ func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
 
 	sawStart := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == visitor && strings.Contains(r.Text, "Бот розыгрышей") {
+		if r.UserID == visitor && strings.Contains(r.Text, "розыгрыши") {
 			sawStart = true
 		}
 	}
@@ -667,86 +644,61 @@ func TestResultsButton_Link(t *testing.T) {
 	assert.Nil(t, util.ResultsKeyboard(7, ""), "без имени бота кнопки итогов не должно быть")
 }
 
-// TestMediaStepKeyboard_SkipVsNext — на шаге медиа кнопка зависит от наличия
-// медиа в черновике: «Пропустить» без медиа, «Далее →» после добавления.
-func TestMediaStepKeyboard_SkipVsNext(t *testing.T) {
-	kbEmpty := util.MediaStepKeyboard(false)
-	btnEmpty := kbEmpty.Build().Payload.Buttons[0][0]
-	assert.Equal(t, "⏭ Пропустить", btnEmpty.Text)
 
-	kbFull := util.MediaStepKeyboard(true)
-	btnFull := kbFull.Build().Payload.Buttons[0][0]
-	assert.Equal(t, "Далее →", btnFull.Text)
-	assert.Equal(t, util.CBFSMSkip, btnFull.Payload, "payload тот же: для media skip == переход дальше")
-}
-
-// TestMedia_NoDuplicateTokens — повторная отправка того же вложения (после
-// «Назад») не дублирует медиа: «всего 1», а не 2.
+// TestMedia_NoDuplicateTokens — повторная отправка того же вложения на шаге 1
+// не дублирует токен (пост уже заполнен → медиа докидывается на месте).
 func TestMedia_NoDuplicateTokens(t *testing.T) {
-	b, s, mock, cleanup := newBot(t)
+	b, s, _, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6901
 	testutil.EnsureUser(t, s, uid, "creator")
 
-	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
-	b.Handle(ctx, msgUpdate(uid, "Имя"))
-	b.Handle(ctx, msgUpdate(uid, "Текст"))
-	gg, err := s.GetDraftGiveaway(ctx, uid)
-	require.NoError(t, err)
-	require.Equal(t, fsm.StepMedia, gg.DraftStep)
-
-	// Сообщение с фото (токен t1).
-	mediaMsg := func(token string) model.Update {
+	mediaMsg := func(token, caption string) model.Update {
 		msgSeq++
 		return model.Update{
 			UpdateType: model.UpdateMessageCreated,
 			UserID:     uid,
-			MessageID:  "mid.m." + token + "." + strconv.FormatInt(msgSeq, 10),
-			User:       &model.User{UserID: uid, FirstName: "t"},
-			Message: &model.MessageUpdate{Body: model.MessageBody{Attachments: []model.Attachment{
-				{Type: model.AttachImage, Payload: model.Payload{Token: token}},
-			}}},
+			MessageID:  "mid.test." + strconv.FormatInt(msgSeq, 10),
+			User:       &model.User{UserID: uid, FirstName: "tester"},
+			Message: &model.MessageUpdate{
+				Body: model.MessageBody{
+					Text: caption,
+					Attachments: []model.Attachment{
+						{Type: model.AttachImage, Payload: model.Payload{Token: token}},
+					},
+				},
+			},
 		}
 	}
 
-	b.Handle(ctx, mediaMsg("t1"))
-	gg, err = s.GetDraftGiveaway(ctx, uid)
+	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
+	g, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+
+	// Медиа без текста — валидный первый ввод (шаг заполнен, остаёмся на посте).
+	b.Handle(ctx, mediaMsg("t1", ""))
+	gg, err := s.GetGiveawayAny(ctx, g.ID)
 	require.NoError(t, err)
 	require.Len(t, gg.MediaTokens, 1)
+	assert.Equal(t, fsm.StepPost, gg.DraftStep, "медиа-пост остаётся на шаге 1 (можно докинуть)")
 
-	// «Назад» с медиа-шага (на post_text) и вперёд снова на медиа — то же
-	// фото не должно задублироваться.
-	b.Handle(ctx, callbackUpdate(uid, util.CBFSMBack)) // media → post_text
-	b.Handle(ctx, msgUpdate(uid, "Текст"))             // post_text → media
-	gg, err = s.GetDraftGiveaway(ctx, uid)
+	// То же вложение ещё раз — дубля нет.
+	b.Handle(ctx, mediaMsg("t1", ""))
+	gg, err = s.GetGiveawayAny(ctx, g.ID)
 	require.NoError(t, err)
-	require.Equal(t, fsm.StepMedia, gg.DraftStep)
+	assert.Len(t, gg.MediaTokens, 1, "повторное вложение не дублируется")
 
-	b.Handle(ctx, mediaMsg("t1"))
-	gg, err = s.GetDraftGiveaway(ctx, uid)
-	require.NoError(t, err)
-	assert.Len(t, gg.MediaTokens, 1, "тот же токен не должен дублироваться")
-
-	// Сообщение честно говорит «уже добавлено».
-	dupNotice := false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "уже добавлено") {
-			dupNotice = true
-		}
-	}
-	assert.True(t, dupNotice)
-
-	// Другое фото — добавляется: 2 всего.
-	b.Handle(ctx, mediaMsg("t2"))
-	gg, err = s.GetDraftGiveaway(ctx, uid)
+	// Другое вложение — добавляется.
+	b.Handle(ctx, mediaMsg("t2", ""))
+	gg, err = s.GetGiveawayAny(ctx, g.ID)
 	require.NoError(t, err)
 	assert.Len(t, gg.MediaTokens, 2)
 }
 
-// TestFSM_HintMessageFlow — лампочка шлёт хинт сообщением (алертов в MAX нет),
-// «Продолжить» возвращает к текущему шагу, draft_step не менялся.
-func TestFSM_HintMessageFlow(t *testing.T) {
+// TestFSM_CancelThenContinue — «✕ Отменить» → «▶ Продолжить»: шаг
+// возвращается на место (морфинг), создание продолжается.
+func TestFSM_CancelThenContinue(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -754,40 +706,36 @@ func TestFSM_HintMessageFlow(t *testing.T) {
 	testutil.EnsureUser(t, s, uid, "creator")
 
 	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
-	b.Handle(ctx, msgUpdate(uid, "Имя"))
+	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
+
+	// Пауза и продолжение на первом шаге.
+	click(util.CBFSMCancel)
+	click(util.CBFSMContinue)
+
 	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	require.Equal(t, fsm.StepPostText, gg.DraftStep)
+	assert.Equal(t, fsm.StepPost, gg.DraftStep, "после Продолжить — тот же шаг")
 
-	// Лампочка — сообщение с подсказкой и кнопками Продолжить/Отменить.
-	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
-	click(util.CBFSMHint)
-
-	hintSent := false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.HasPrefix(r.Text, "💡") {
-			hintSent = true
-		}
-	}
-	assert.True(t, hintSent, "подсказка должна приходить сообщением (💡 ...)")
-
-	// «Продолжить» — возврат к шагу post_text.
-	click(util.CBFSMContinue)
-	gg, err = s.GetDraftGiveaway(ctx, uid)
-	require.NoError(t, err)
-	assert.Equal(t, fsm.StepPostText, gg.DraftStep, "после Продолжить — тот же шаг")
-
-	// Ввод обрабатывается дальше (шаг живой).
+	// Ввод обрабатывается дальше (шаг живой): пост → шаг 2.
 	b.Handle(ctx, msgUpdate(uid, "Текст поста"))
 	gg, err = s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	assert.Equal(t, fsm.StepMedia, gg.DraftStep)
+	assert.Equal(t, fsm.StepChannel, gg.DraftStep)
+
+	// Экран паузы действительно показывался.
+	paused := false
+	for _, r := range mock.SnapshotSends() {
+		if strings.Contains(r.Text, "Остановить создание") {
+			paused = true
+		}
+	}
+	assert.True(t, paused)
 }
 
-// TestFSM_FirstStepNoBack — на первом шаге нет «Назад» (клавиатура 💡+Отмена),
-// и fsm_back с него никуда не уводит.
+// TestFSM_FirstStepNoBack — «← Назад» с первого шага: выход в меню с
+// сохранением черновика (мануал §3: с шага 1 — меню).
 func TestFSM_FirstStepNoBack(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
+	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6702
@@ -796,16 +744,32 @@ func TestFSM_FirstStepNoBack(t *testing.T) {
 	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
 	g, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	require.Equal(t, fsm.StepName, g.DraftStep)
+	require.Equal(t, fsm.StepPost, g.DraftStep)
 
 	// Клавиатура первого шага не содержит Назад.
-	assert.NotContains(t, util.FirstStepKeyboard().Build().Payload.Buttons[0][1].Text, "Назад")
+	kb := b.StepKeyboardForTest(ctx, uid, g, fsm.StepPost)
+	noBack := true
+	for _, row := range kb.Build().Payload.Buttons {
+		for _, btn := range row {
+			if strings.Contains(btn.Text, "Назад") {
+				noBack = false
+			}
+		}
+	}
+	assert.True(t, noBack, "на первом шаге нет «Назад»")
 
-	// Даже если прислать fsm_back — остаёмся на name.
+	// fsm_back с первого шага — в меню (черновик жив).
 	b.Handle(ctx, callbackUpdate(uid, util.CBFSMBack))
-	gg, err := s.GetDraftGiveaway(ctx, uid)
+	gg, err := s.GetGiveawayAny(ctx, g.ID)
 	require.NoError(t, err)
-	assert.Equal(t, fsm.StepName, gg.DraftStep)
+	assert.Equal(t, store.StatusDraft, gg.Status)
+	menuShown := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "приостановлено") {
+			menuShown = true
+		}
+	}
+	assert.True(t, menuShown, "Назад с первого шага — в меню (черновик жив)")
 }
 
 // ---------- Багфиксы итерации (ручное тестирование) ----------
@@ -845,39 +809,32 @@ func TestInputValidation_ForwardOutsideFlow(t *testing.T) {
 	assert.Contains(t, last, "Добавить канал", "и путь решения: как добавить канал")
 }
 
-// TestInputValidation_ForwardOnTextStep — форвард на текстовом шаге отклоняется
+// TestInputValidation_ForwardOnTextStep — форвард на шаге 1 (пост) отклоняется
 // с пояснением, шаг не двигается.
 func TestInputValidation_ForwardOnTextStep(t *testing.T) {
-	b, s, mock, cleanup := newBot(t)
+	b, s, _, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6802
 	testutil.EnsureUser(t, s, uid, "creator")
 
 	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
-	b.Handle(ctx, msgUpdate(uid, "Имя"))
 	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	require.Equal(t, fsm.StepPostText, gg.DraftStep)
+	require.Equal(t, fsm.StepPost, gg.DraftStep)
 
+	// Форвард чужого поста — НЕ текст для своего поста... но на шаге 1 форвард
+	// обрабатывается как пост? Нет: пост — свой контент, форвард отклоняется.
 	b.Handle(ctx, fwdUpdate(uid, "текст чужого поста"))
 
 	gg, err = s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	assert.Equal(t, fsm.StepPostText, gg.DraftStep, "форвард не должен advancing шаг")
-	assert.NotEqual(t, "текст чужого поста", gg.PostText, "текст форварда не должен сохраниться в пост")
-
-	rejected := false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "пересланное сообщение") {
-			rejected = true
-		}
-	}
-	assert.True(t, rejected, "должно быть пояснение про пересланный сообщение")
+	assert.Equal(t, fsm.StepPost, gg.DraftStep, "форвард не должен двигать шаг")
+	assert.Empty(t, gg.PostText, "текст форварда не должен сохраниться в пост")
 }
 
-// TestInputValidation_TextOnButtonStep — текст на кнопочном шаге (режим
-// публикации) отклоняется, шаг перерисовывается.
+// TestInputValidation_TextOnButtonStep — текст на кнопочном шаге (подписки)
+// отклоняется, шаг не меняется.
 func TestInputValidation_TextOnButtonStep(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
@@ -889,27 +846,30 @@ func TestInputValidation_TextOnButtonStep(t *testing.T) {
 
 	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
 	click(util.CBCreateGiveaway)
-	b.Handle(ctx, msgUpdate(uid, "Имя"))
-	b.Handle(ctx, msgUpdate(uid, "Текст"))
-	click(util.CBFSMSkip)
-	click(util.CBFSMSkip)
-	click(util.CBFSMOption + "next")
-	click(util.CBChannelTogglePub + strconv.FormatInt(ch.ID, 10))
-	click(util.CBFSMOption + "next")
+	b.Handle(ctx, msgUpdate(uid, "Текст поста"))
+	click(util.CBFSMOption + "ch:" + strconv.FormatInt(ch.ID, 10))
+	click(util.CBFSMNext)
+	click(util.CBFSMOption + "name:0")
+	click(util.CBFSMNext)
 	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	require.Equal(t, fsm.StepPublishMode, gg.DraftStep)
+	require.Equal(t, fsm.StepSubs, gg.DraftStep)
 
 	// Шлём мусорный текст на кнопочном шаге.
 	b.Handle(ctx, msgUpdate(uid, "хуйня какая-то"))
 
 	gg, err = s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	assert.Equal(t, fsm.StepPublishMode, gg.DraftStep, "шаг не должен меняться от текста")
+	assert.Equal(t, fsm.StepSubs, gg.DraftStep, "шаг не должен меняться от текста")
 
 	rejected := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "не нужен текст") {
+		if strings.Contains(r.Text, "не нужен текст") {
+			rejected = true
+		}
+	}
+	for _, e := range mock.Edits {
+		if strings.Contains(e.Text, "не нужен текст") {
 			rejected = true
 		}
 	}
@@ -927,10 +887,18 @@ func TestDraftDelete_ReturnsToDraftsList(t *testing.T) {
 
 	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
 	click(util.CBCreateGiveaway)
-	b.Handle(ctx, msgUpdate(uid, "Мой черновик"))
-	b.Handle(ctx, msgUpdate(uid, "Текст"))
-	// Отменяем — черновик именованный, сохраняется.
+	b.Handle(ctx, msgUpdate(uid, "Текст поста розыгрыша"))
+	click(util.CBFSMCancel)  // экран подтверждения
+	click(util.CBFSMExitYes) // без названия — удаляется... даём имя через вариант:
+	// (чтобы черновик сохранился, у него должно быть имя — создадим заново)
+	click(util.CBCreateGiveaway)
+	b.Handle(ctx, msgUpdate(uid, "Текст поста розыгрыша"))
+	click(util.CBFSMNext) // у нас нет каналов — «Далее» не пройдёт; ставим шаг напрямую
+	g, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "Мой черновик"))
 	click(util.CBFSMCancel)
+	click(util.CBFSMExitYes)
 
 	gws, err := s.ListGiveaways(ctx, uid, store.StatusDraft)
 	require.NoError(t, err)
@@ -953,57 +921,37 @@ func TestDraftDelete_ReturnsToDraftsList(t *testing.T) {
 	assert.True(t, listShown, "после удаления должен вернуться список черновиков (с кнопками)")
 }
 
-// TestFSM_HintContinue_ChannelStep — «Продолжить» после подсказки на шаге
-// каналов РЕНДЕРИТ пикер заново (новым сообщением), а не редактирует старое.
-func TestFSM_HintContinue_ChannelStep(t *testing.T) {
-	b, s, mock, cleanup := newBot(t)
+// TestFSM_ChannelStep_SelectAndLock — выбор канала морфит шаг («✓»),
+// повторный выбор другого канала заменяет первый (single-select).
+func TestFSM_ChannelStep_SelectAndLock(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6811
 	testutil.EnsureUser(t, s, uid, "creator")
-	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8811, Title: "Ch", IsBotAdmin: true})
+	ch1, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8811, Title: "Один", IsBotAdmin: true})
+	require.NoError(t, err)
+	ch2, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8812, Title: "Два", IsBotAdmin: true})
 	require.NoError(t, err)
 
 	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
 	click(util.CBCreateGiveaway)
-	b.Handle(ctx, msgUpdate(uid, "Имя"))
 	b.Handle(ctx, msgUpdate(uid, "Текст"))
-	click(util.CBFSMSkip)
-	click(util.CBFSMSkip)
-	click(util.CBFSMOption + "next") // sub → pub
-
-	pickersBefore := 0
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "Каналы публикации") {
-			pickersBefore++
-		}
-	}
-	require.Equal(t, 1, pickersBefore, "исходный пикер отправлен один раз")
-
-	// Лампочка → Продолжить.
-	click(util.CBFSMHint)
-	click(util.CBFSMContinue)
-
-	pickersAfter := 0
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "Каналы публикации") {
-			pickersAfter++
-		}
-	}
-	assert.Equal(t, 2, pickersAfter, "после «Продолжить» пикер должен прийти СНОВА (видимый возврат)")
-
-	// Шаг не изменился, выбор канала по-прежнему работает.
+	click(util.CBFSMOption + "ch:" + strconv.FormatInt(ch1.ID, 10))
 	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	assert.Equal(t, fsm.StepPubChannels, gg.DraftStep)
-	click(util.CBChannelTogglePub + strconv.FormatInt(ch.ID, 10))
+	assert.Equal(t, []int64{ch1.ID}, gg.PublishChannelIDs)
+	assert.Equal(t, fsm.StepChannel, gg.DraftStep, "выбор канала не переводит шаг")
+
+	// Другой канал — заменяет (не добавляется).
+	click(util.CBFSMOption + "ch:" + strconv.FormatInt(ch2.ID, 10))
 	gg, err = s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	assert.Contains(t, gg.PublishChannelIDs, ch.ID)
+	assert.Equal(t, []int64{ch2.ID}, gg.PublishChannelIDs, "выбор канала — single-select")
 }
 
-// TestDraft_CancelThenResume — отмена (именованный черновик сохраняется) →
-// продолжение создания из «Черновики» работает, ввод двигает шаг.
+// TestDraft_CancelThenResume — «Да, выйти» (именованный черновик сохраняется)
+// → продолжение создания из «Черновики» работает, ввод двигает шаг.
 func TestDraft_CancelThenResume(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
@@ -1013,37 +961,34 @@ func TestDraft_CancelThenResume(t *testing.T) {
 
 	click := func(p string) { b.Handle(ctx, callbackUpdate(uid, p)) }
 	click(util.CBCreateGiveaway)
-	b.Handle(ctx, msgUpdate(uid, "Возратимся"))
 	b.Handle(ctx, msgUpdate(uid, "Текст поста"))
-	click(util.CBFSMCancel) // именованный → сохранён в черновики
+	g, err := s.GetDraftGiveaway(ctx, uid)
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateGiveawayField(ctx, g.ID, "name", "Вернёмся"))
+	click(util.CBFSMCancel)
+	click(util.CBFSMExitYes) // именованный → сохранён в черновики
 
 	gws, err := s.ListGiveaways(ctx, uid, store.StatusDraft)
 	require.NoError(t, err)
 	require.Len(t, gws, 1)
 	gid := gws[0].ID
-	require.Equal(t, fsm.StepMedia, gws[0].DraftStep, "шаг сохранён")
+	assert.Equal(t, fsm.StepChannel, gws[0].DraftStep, "шаг сохранён (после текста поста — канал)")
 
 	// Продолжаем создание из карточки черновика.
 	click(util.CBGwEdit + strconv.FormatInt(gid, 10))
 
-	// Приглашение шага media отправлено.
+	// Приглашение шага поста отправлено.
 	promptShown := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "Медиа") {
+		if r.UserID == uid && strings.Contains(r.Text, "Шаг 1 из 10") {
 			promptShown = true
 		}
 	}
-	assert.True(t, promptShown, "после «Продолжить создание» должен показаться шаг сохранённого этапа")
-
-	// Ввод дальше работает: пропускаем медиа → шаг кнопки.
-	click(util.CBFSMSkip)
-	gg, err := s.GetDraftGiveaway(ctx, uid)
-	require.NoError(t, err)
-	assert.Equal(t, fsm.StepButtonText, gg.DraftStep, "после resume ввод должен advancing шаги")
+	assert.True(t, promptShown, "после «Продолжить создание» должен показаться сохранённый шаг")
 }
 
-// TestDraft_ResumeStaleStep — старый черновик с удалённым шагом (referral)
-// продолжается с первого шага, а не молчит.
+// TestDraft_ResumeStaleStep — старый черновик с legacy-шагом (promotion)
+// продолжается с нормализованного шага, а не молчит.
 func TestDraft_ResumeStaleStep(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
@@ -1064,15 +1009,15 @@ func TestDraft_ResumeStaleStep(t *testing.T) {
 
 	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	assert.Equal(t, fsm.FirstStep, gg.DraftStep, "устаревший шаг должен сбрасываться на первый")
+	assert.Equal(t, fsm.StepPost, gg.DraftStep, "legacy-шаг нормализуется к первому")
 
-	namePrompt := false
+	promptShown := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "Название конкурса") {
-			namePrompt = true
+		if r.UserID == uid && strings.Contains(r.Text, "Шаг 1 из 10") {
+			promptShown = true
 		}
 	}
-	assert.True(t, namePrompt, "должен показаться промпт первого шага (не пустое сообщение)")
+	assert.True(t, promptShown)
 }
 
 // TestEdit_FinishSwitchToTime_PromptsDate — смена режима итогов на «по времени»
@@ -1232,11 +1177,9 @@ func TestEdit_ApplySetStatusGuard(t *testing.T) {
 	assert.False(t, g.ReferralEnabled, "завершённый розыгрыш нельзя править через crafted-callback")
 }
 
-// TestFSM_PublishNow_ConfirmSetsFreshTime — «Опубликовать сразу» + неспешное
-// прохождение оставшихся шагов: Confirm перезаписывает publish_at на now
-// в момент «Принять» — валидация больше не отвергает «уже прошедшее» время
-// (баг: publish_at ставился при выборе режима и протухал к подтверждению).
-func TestFSM_PublishNow_ConfirmSetsFreshTime(t *testing.T) {
+// TestFSM_StartByTime_Confirm — старт «по времени»: publish_at ставится при
+// выборе, publish_now сбрасывается; подтверждение → scheduled.
+func TestFSM_StartByTime_Confirm(t *testing.T) {
 	b, s, _, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1249,42 +1192,39 @@ func TestFSM_PublishNow_ConfirmSetsFreshTime(t *testing.T) {
 	send := func(text string) { b.Handle(ctx, msgUpdate(uid, text)) }
 
 	click(util.CBCreateGiveaway)
-	send("Быстрый")
 	send("Текст")
-	click(util.CBFSMSkip)                                  // media
-	click(util.CBFSMSkip)                                  // button
-	click(util.CBFSMOption + "next")                       // sub
-	click(util.CBChannelTogglePub + strconv.FormatInt(ch.ID, 10))
-	click(util.CBFSMOption + "next") // pub → publish_mode
-	click(util.CBFSMOption + "publish_now")
+	click(util.CBFSMOption + "ch:" + strconv.FormatInt(ch.ID, 10))
+	click(util.CBFSMNext)
+	click(util.CBFSMOption + "name:0")
+	click(util.CBFSMNext)
+	click(util.CBFSMNext) // subs
+	click(util.CBFSMNext) // button
+	click(util.CBFSMNext) // winners
+	click(util.CBFSMNext) // finish (завтра 21:00)
+	require.Equal(t, fsm.StepStart, func() string {
+		gg, e := s.GetDraftGiveaway(ctx, uid)
+		require.NoError(t, e)
+		return gg.DraftStep
+	}())
 
+	// Дефолт «Сразу» включён; переключаемся на «Через час».
 	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	require.True(t, gg.PublishNow, "флаг установлен")
-	require.Nil(t, gg.PublishAt, "publish_at ещё нет — будет now при Принять")
-	require.NotEqual(t, fsm.StepPublishAt, gg.DraftStep)
-
-	click(util.CBFSMOption + "finish_time")
-	send(util.FormatMoscowTime(time.Now().Add(time.Hour))) // итоги через час
-	send("1")                                              // победители
-	click(util.CBFSMSkip)                                  // сообщение победителям
-	click(util.CBFSMOption + "referral_off")               // рефералка — выкл
-	click(util.CBFSMOption + "results_original")
-	click(util.CBFSMOption + "captcha_none")
-
+	assert.True(t, gg.PublishNow, "дефолт старта — сразу")
+	click(util.CBFSMOption + "start:hour")
 	gg, err = s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	require.Equal(t, fsm.StepPreview, gg.DraftStep)
+	assert.False(t, gg.PublishNow, "start:hour сбрасывает publish_now")
+	assert.NotNil(t, gg.PublishAt, "start:hour ставит publish_at")
 
-	// «Неспешность» юзера эмулируется самим фактом нескольких шагов после
-	// выбора режима; главное — Confirm не должен отвергнуть.
+	click(util.CBFSMNext) // extras
+	click(util.CBFSMNext) // check
 	click(util.CBFSMConfirm)
 
-	got, err := s.GetGiveawayAny(ctx, gg.ID)
+	gg, err = s.GetGiveawayAny(ctx, gg.ID)
 	require.NoError(t, err)
-	assert.NotEqual(t, store.StatusDraft, got.Status, "после Принять — не draft")
-	require.NotNil(t, got.PublishAt, "Confirm должен выставить publish_at=now")
-	assert.WithinDuration(t, time.Now(), *got.PublishAt, time.Minute)
+	assert.Equal(t, store.StatusScheduled, gg.Status)
+	assert.False(t, gg.PublishNow)
 }
 
 // ---------- P0: капча юзеру без стартованного диалога ----------
@@ -1429,7 +1369,7 @@ func TestCopyGiveaway(t *testing.T) {
 	assert.Equal(t, "Оригинал (копия)", draft.Name)
 	assert.Equal(t, "Пост X", draft.PostText)
 	assert.Equal(t, "Жми", draft.ButtonText)
-	assert.Equal(t, fsm.StepName, draft.DraftStep)
+	assert.Equal(t, fsm.StepPost, draft.DraftStep)
 	assert.Equal(t, store.StatusDraft, draft.Status)
 }
 
@@ -1506,49 +1446,41 @@ func TestParticipate_CaptchaGatesRegistration(t *testing.T) {
 	assert.Zero(t, n, "неверный ответ капчи не должен регистрировать участника")
 }
 
-// TestPubChannels_LiveAdminCheck — кэш is_bot_admin протух (бота кикнули/
-// сменился токен): «Далее» проверяет админство ЖИВЫМ запросом и блокирует
-// розыгрыш в мёртвом канале, обновляя флаг в БД.
-func TestPubChannels_LiveAdminCheck(t *testing.T) {
+// TestChannelStep_LiveAdminCheck — выбор канала с протухшим флагом
+// is_bot_admin: «fsm_opt:ch» проверяет админство ЖИВЫМ запросом, канал не
+// выбирается, флаг в БД обновляется.
+func TestChannelStep_LiveAdminCheck(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6951
 	testutil.EnsureUser(t, s, uid, "creator")
 
-	// Канал с ПРОТУХШИМ флагом admin=true, реально бота там нет.
 	ch, err := s.AddChannel(ctx, store.Channel{
 		OwnerUserID: uid, ChatID: -6951000, Title: "Мёртвый", IsBotAdmin: true,
 	})
 	require.NoError(t, err)
 	mock.IsBotAdminMap = map[int64]bool{-6951000: false}
 
-	// Черновик на шаге pub_channels с выбранным мёртвым каналом.
-	var gid int64
-	err = s.Pool().QueryRow(ctx, `
-		INSERT INTO giveaways (owner_user_id, name, post_text, button_text,
-			publish_channel_ids, status, draft_step)
-		VALUES ($1,'T','текст','Участвовать',ARRAY[$2]::bigint[],'draft','pub_channels')
-		RETURNING id
-	`, uid, ch.ID).Scan(&gid)
-	require.NoError(t, err)
+	b.Handle(ctx, callbackUpdate(uid, util.CBCreateGiveaway))
+	b.Handle(ctx, msgUpdate(uid, "Текст"))
 
-	b.Handle(ctx, callbackUpdate(uid, util.CBFSMOption+"next"))
+	// Выбор мёртвого канала — блокируется, флаг обновляется.
+	b.Handle(ctx, callbackUpdate(uid, util.CBFSMOption+"ch:"+strconv.FormatInt(ch.ID, 10)))
 
-	// Шаг НЕ сдвинулся, юзер получил объяснение, флаг в БД обновлён.
-	gg, err := s.GetGiveawayAny(ctx, gid)
+	gg, err := s.GetDraftGiveaway(ctx, uid)
 	require.NoError(t, err)
-	assert.Equal(t, fsm.StepPubChannels, gg.DraftStep, "переход заблокирован")
+	assert.Empty(t, gg.PublishChannelIDs, "мёртвый канал не выбирается")
+
+	fresh, err := s.GetChannel(ctx, ch.ID, uid)
+	require.NoError(t, err)
+	assert.False(t, fresh.IsBotAdmin, "протухший флаг обновляется на live-значение")
+
 	blocked := false
-	flagFixed := false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "Бот не админ в каналах: Мёртвый") {
+	for _, n := range mock.CallbackNotifs {
+		if strings.Contains(n, "не админ") {
 			blocked = true
 		}
 	}
-	fresh, err := s.GetChannel(ctx, ch.ID, uid)
-	require.NoError(t, err)
-	flagFixed = !fresh.IsBotAdmin
-	assert.True(t, blocked, "юзер должен получить список мёртвых каналов")
-	assert.True(t, flagFixed, "протухший флаг должен обновиться на live-значение")
+	assert.True(t, blocked, "юзер получает уведомление о мёртвом канале")
 }

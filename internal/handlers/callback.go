@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"context"
-	"errors"
+
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,14 +26,15 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 		return
 	}
 
-	// Прочие callback'и — снимаем "часики" с кнопки.
-	defer b.api.AnswerCallback(ctx, cb.CallbackID, "")
-
-	// 2. Кнопки FSM создания розыгрыша
-	if isFSMPayload(p) {
-		b.handleFSMCallback(ctx, uid, p, cb.CallbackID)
+	// 2. Кнопки мастера создания — морфируют сообщение шага сами
+	//    (AnswerCallbackEdit/уведомление), общий ответ не нужен.
+	if isWizardPayload(p) {
+		b.handleWizardCallback(ctx, uid, p, cb.CallbackID)
 		return
 	}
+
+	// Прочие callback'и — снимаем "часики" с кнопки.
+	defer b.api.AnswerCallback(ctx, cb.CallbackID, "")
 
 	// 3. Главное меню и навигация
 	b.handleMenuAction(ctx, uid, p)
@@ -84,13 +85,18 @@ func (b *Bot) handleMenuAction(ctx context.Context, uid int64, p string) {
 	}
 }
 
-// isFSMPayload определяет кнопки FSM (навигация/опции/подтверждение/подсказка).
-func isFSMPayload(p string) bool {
+// isWizardPayload — кнопки мастера создания (морфят шаг сами, без общего
+// ответа на нажатие): fsm_*, cal:*, тогглы каналов подписок.
+func isWizardPayload(p string) bool {
 	switch p {
-	case util.CBFSMBack, util.CBFSMCancel, util.CBFSMSkip, util.CBFSMConfirm, util.CBFSMReject, util.CBFSMHint, util.CBFSMContinue:
+	case util.CBFSMBack, util.CBFSMCancel, util.CBFSMNext, util.CBFSMExitYes,
+		util.CBFSMConfirm, util.CBFSMReject, util.CBFSMHint, util.CBFSMContinue, util.CBFSMSave:
 		return true
 	}
-	return strings.HasPrefix(p, util.CBFSMOption)
+	return strings.HasPrefix(p, util.CBFSMOption) ||
+		strings.HasPrefix(p, util.CBFSMEdit) ||
+		strings.HasPrefix(p, util.CBCal) ||
+		strings.HasPrefix(p, util.CBChannelToggleSub)
 }
 
 // startCreate начинает создание розыгрыша.
@@ -101,209 +107,9 @@ func (b *Bot) startCreate(ctx context.Context, uid int64) {
 		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать создание. Попробуйте позже.")
 		return
 	}
+	_ = b.db.ClearSession(ctx, uid)
+	_ = b.db.UpdateGiveawayField(ctx, g.ID, "channel_select_mid", nil)
 	b.showStep(ctx, uid, g, g.DraftStep)
-}
-
-// handleFSMCallback обрабатывает кнопки FSM (навигация/опции/подтверждение/подсказка).
-func (b *Bot) handleFSMCallback(ctx context.Context, uid int64, p string, callbackID string) {
-	g, err := b.db.GetDraftGiveaway(ctx, uid)
-	if err != nil {
-		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"Создание не активно. Начните заново.", util.MainMenuKeyboard())
-		return
-	}
-
-	switch {
-	case p == util.CBFSMCancel:
-		_ = b.engine.Abandon(ctx, g.ID)
-		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
-		if g.Name != "" {
-			b.sendMainMenu(ctx, uid, "✖ Создание отменено. Черновик сохранён в «Мои розыгрыши → Черновики».")
-		} else {
-			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
-			b.sendMainMenu(ctx, uid, "✖ Создание отменено.")
-		}
-
-	case p == util.CBFSMBack:
-		// Ошибки БД раньше глотались: showStep рисовался по zero-value
-		// giveaway (пустой шаг, «мёртвая» клавиатура) — теперь честно
-		// остаёмся на текущем шаге с сообщением.
-		prev, err := b.engine.GoBack(ctx, g.ID, g.DraftStep, g)
-		if err != nil {
-			b.log.Warn("go back", "err", err, "id", g.ID, "user", uid)
-			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось вернуться. Попробуйте ещё раз.")
-			return
-		}
-		// перечитываем, чтобы актуальные данные
-		gg, err := b.db.GetGiveawayAny(ctx, g.ID)
-		if err != nil {
-			b.log.Warn("go back: refetch", "err", err, "id", g.ID, "user", uid)
-			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось вернуться. Попробуйте ещё раз.")
-			return
-		}
-		b.showStep(ctx, uid, gg, prev)
-
-	case p == util.CBFSMSkip:
-		if err := b.engine.SkipStep(ctx, g); err != nil {
-			b.api.AnswerCallback(ctx, "", err.Error())
-			return
-		}
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-
-	case p == util.CBFSMConfirm:
-		if err := b.engine.Confirm(ctx, g.ID); err != nil {
-			var ve *fsm.ValidationError
-			msg := "⚠️ Не удалось подтвердить розыгрыш. Попробуйте позже."
-			if errors.As(err, &ve) {
-				msg = "⚠️ " + ve.Msg //ValidationError — авторский текст, internals не утекают
-			} else {
-				b.log.Warn("confirm", "err", err, "id", g.ID, "user", uid)
-			}
-			// Ошибка валидации на предпросмотре — предлагаем вернуться на
-			// соотв. шаг для исправления (не голый текст без кнопок).
-			_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-				msg+"\n\nНажмите «✏ Исправить» и пройдите к нужному шагу, или «✖ Отменить».",
-				util.ConfirmErrorKeyboard(g.ID))
-			return
-		}
-		// «Опубликовать сразу»: Confirm уже выставил publish_at=now —
-		// перечитываем и публикуем немедленно, без ожидания тика.
-		published := false
-		if b.publishNow != nil {
-			if gg, err := b.db.GetGiveawayAny(ctx, g.ID); err == nil && gg.PublishNow {
-				b.publishNow(ctx, gg.ID)
-				published = true
-			}
-		}
-		if published {
-			b.sendMainMenu(ctx, uid, "✅ Розыгрыш опубликован! Пост уже в каналах, кнопка «Участвовать» активна.")
-		} else {
-			b.sendMainMenu(ctx, uid, "✅ Розыгрыш запланирован! Пост будет опубликован автоматически в назначенное время. Следите в «Мои розыгрыши → Запланированные».")
-		}
-
-	case p == util.CBFSMReject:
-		_ = b.engine.Abandon(ctx, g.ID)
-		// Черновик без названия — мусор, удаляем. С названием — сохраняем.
-		if g.Name != "" {
-			b.sendMainMenu(ctx, uid, "❌ Создание отменено. Черновик сохранён в «Мои розыгрыши → Черновики».")
-		} else {
-			_ = b.db.DeleteGiveaway(ctx, g.ID, uid)
-			b.sendMainMenu(ctx, uid, "❌ Создание отменено.")
-		}
-
-	case p == util.CBFSMHint:
-		// Подсказка по текущему шагу — СООБЩЕНИЕМ (алертов в MAX нет):
-		// под ним «Продолжить» (возврат к шагу) и «Отменить».
-		if hint := fsm.HintForStep(g.DraftStep); hint != "" {
-			_, _ = b.api.SendTextWithKeyboard(ctx, uid, "💡 "+hint, util.HintKeyboard())
-		}
-
-	case p == util.CBFSMContinue:
-		// Возврат к шагу, на котором нажали лампочку (draft_step не менялся).
-		b.showStep(ctx, uid, g, g.DraftStep)
-
-	case strings.HasPrefix(p, util.CBFSMOption):
-		key := strings.TrimPrefix(p, util.CBFSMOption)
-		b.handleOption(ctx, uid, g, key)
-	}
-}
-
-// handleOption обрабатывает опционные кнопки шагов (выбор каналов, режимы и т.д.).
-// Рефералы и продвижение убраны из MVP.
-func (b *Bot) handleOption(ctx context.Context, uid int64, g store.Giveaway, key string) {
-	switch key {
-	case "next":
-		// Шаги sub/pub channels: валидируем выбранные каналы ПЕРЕД переходом
-		// (ошибка на месте, а не в конце создания).
-		if g.DraftStep == fsm.StepPubChannels {
-			if len(g.PublishChannelIDs) == 0 {
-				_ = b.api.SendText(ctx, uid,
-					"⚠️ Выберите хотя бы один канал публикации (отметьте ✅) — без него пост некуда публиковать.")
-				return
-			}
-			// Проверяем админство бота в выбранных каналах — ЖИВЫМ запросом,
-			// не кэшем: флаг is_bot_admin в БД может протухнуть (бота кикнули,
-			// сменился токен = новый бот без админства). Ретраи публикации в
-			// мёртвый канал — именно эта дыра (chat.not.found в scheduler).
-			chs, err := b.db.ChannelsByIDs(ctx, uid, g.PublishChannelIDs)
-			if err == nil {
-				var bad []string
-				for _, c := range chs {
-					live, err := b.api.IsBotAdminInChat(ctx, c.ChatID)
-					if live != c.IsBotAdmin {
-						_ = b.db.SetChannelAdminFlag(ctx, c.ID, live) // кэш → правда
-					}
-					if err != nil || !live {
-						title := c.Title
-						if title == "" {
-							title = fmt.Sprintf("канал #%d", c.ChatID)
-						}
-						bad = append(bad, title)
-					}
-				}
-				if len(bad) > 0 {
-					_ = b.api.SendText(ctx, uid,
-						"⚠️ Бот не админ в каналах: "+strings.Join(bad, ", ")+
-							".\nДобавьте бота админом в канал и передобавьте его в «Мои каналы ➕» (перешлите пост из канала).")
-					return
-				}
-			}
-		}
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-
-	case "publish_now":
-		// «Опубликовать сразу»: НЕ ставим publish_at тут (пока юзер идёт по
-		// оставшимся шагам, время бы «прошло»). Только флаг — publish_at
-		// будет перезаписан на now в момент «Принять» (см. engine.Confirm).
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_now", true)
-		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
-		b.advance(ctx, uid, g.ID, gg.DraftStep)
-
-	case "publish_later":
-		// «По времени» — следующий шаг publish_at (ввод даты).
-		// Сбрасываем флаг «сразу»: он мог остаться от предыдущего выбора
-		// «Опубликовать сразу» → юзер вернулся Назад → переключил режим.
-		// Без сброса StepSkipped навсегда пропускал шаг даты, а Confirm
-		// молча публиковал розыгрыш немедленно (ломка отката, P1).
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "publish_now", false)
-		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
-		b.advance(ctx, uid, g.ID, gg.DraftStep)
-
-	case "finish_time":
-		// «По времени» — движок пропустит finish_count по finish_mode.
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "time")
-		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
-		b.advance(ctx, uid, g.ID, gg.DraftStep)
-
-	case "finish_count":
-		// «По количеству участников» — движок пропустит finish_at.
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "finish_mode", "count")
-		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
-		b.advance(ctx, uid, g.ID, gg.DraftStep)
-
-	case "results_original":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", true)
-		// «В исходном посте» — текст итогов не нужен, движок пропустит шаг.
-		gg, _ := b.db.GetGiveawayAny(ctx, g.ID)
-		b.advance(ctx, uid, g.ID, gg.DraftStep)
-	case "results_separate":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "results_in_original_post", false)
-		// «Отдельным постом» — запросить текст итогов (след. шаг results_text).
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-
-	case "referral_on":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "referral_enabled", true)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-	case "referral_off":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "referral_enabled", false)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-	case "captcha_none":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaNone)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-	case "captcha_all":
-		_ = b.db.UpdateGiveawayField(ctx, g.ID, "captcha_mode", store.CaptchaAll)
-		b.advance(ctx, uid, g.ID, g.DraftStep)
-	}
 }
 
 // handleSubPayload — подпункты меню (фильтры, открыть, удалить и т.д.).
@@ -444,9 +250,6 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 
 	case p == util.CBGwList:
 		b.showGiveawayFilters(ctx, uid)
-
-	case strings.HasPrefix(p, util.CBChannelToggleSub), strings.HasPrefix(p, util.CBChannelTogglePub):
-		b.toggleChannelSelection(ctx, uid, p)
 
 	case strings.HasPrefix(p, util.CBUTMSkipPost):
 		// Билдер трекинг-ссылки: пропустить пост-источник → сразу стоимость.

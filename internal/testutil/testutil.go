@@ -92,9 +92,11 @@ type MockBotAPI struct {
 	mu      sync.Mutex
 	counter int64
 
-	Sends     []SendRecord
-	Edits     []EditRecord
-	Callbacks []string // answers callback ids
+	Sends           []SendRecord
+	Edits           []EditRecord
+	Callbacks       []string // answers callback ids
+	CallbackNotifs  []string // тексты уведомлений ответов на нажатия
+	CallbackAnswers int      // сколько нажатий закрыто (edit или уведомление)
 
 	// Ответы (настраиваются тестом).
 	SendToChatMID   func(chatID int64) (string, error) // по умолчанию возвращает уникальный mid
@@ -201,6 +203,26 @@ func (m *MockBotAPI) AnswerCallback(ctx context.Context, callbackID, notificatio
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Callbacks = append(m.Callbacks, callbackID)
+	if notification != "" && notification != " " {
+		m.CallbackNotifs = append(m.CallbackNotifs, notification)
+	}
+	m.CallbackAnswers++
+}
+
+// AnswerCallbackEdit — морфинг сообщения шага ответом на нажатие: фиксируем
+// как обычную отправку (тесты ищут текст шага в Sends).
+func (m *MockBotAPI) AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Callbacks = append(m.Callbacks, callbackID)
+	m.CallbackAnswers++
+	rec := SendRecord{Method: "AnswerEdit", UserID: 0, Text: text, HasKb: kb != nil}
+	if kb != nil {
+		for _, row := range kb.Build().Payload.Buttons {
+			rec.Buttons = append(rec.Buttons, row...)
+		}
+	}
+	m.Sends = append(m.Sends, rec)
 }
 
 func (m *MockBotAPI) SendImage(ctx context.Context, userID int64, pngData []byte, caption string) error {

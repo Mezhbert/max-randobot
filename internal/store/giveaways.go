@@ -387,7 +387,7 @@ func (s *Store) CreateDraftFromGiveaway(ctx context.Context, ownerUserID int64, 
 		src.ResultsInOriginalPost, src.ResultsPostText,
 		src.FinishMode, src.FinishParticipantsCount, src.WinnersCount, src.WinnersMessage,
 		src.CaptchaMode, src.ReferralEnabled, src.ReferralLimit,
-		"name",
+		"post",
 	).Scan(scanDest(&g)...)
 	if err != nil {
 		return g, err

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/max-messenger/max-bot-api-client-go/v2/model"
 )
@@ -64,29 +65,56 @@ const (
 	CBUTMDyn      = "utm_dyn:" // + channel_id — динамика подписчиков канала
 	CBUTMExport   = "utm_exp:" // + channel_id — экспорт CSV
 
-	// FSM создания
+	// FSM создания (мастер по мануалу Claude-log)
 	CBFSMBack     = "fsm_back"
 	CBFSMCancel   = "fsm_cancel"
-	CBFSMSkip     = "fsm_skip"
-	CBFSMOption   = "fsm_opt:"
+	CBFSMNext     = "fsm_next"     // «Далее →»: подтвердить шаг
+	CBFSMExitYes  = "fsm_exit_yes" // подтверждение «Да, выйти»
+	CBFSMOption   = "fsm_opt:"     // + key[:arg] — выбор варианта шага
 	CBFSMConfirm  = "fsm_confirm"
 	CBFSMReject   = "fsm_reject"
-	CBFSMHint     = "fsm_hint"     // 💡 подсказка по текущему шагу (сообщением)
-	CBFSMContinue = "fsm_continue" // ▶ продолжить после подсказки (возврат к шагу)
+	CBFSMHint     = "fsm_hint"     // 💡 подсказка (notification, ≤150 символов)
+	CBFSMContinue = "fsm_continue" // ▶ продолжить (возврат к шагу)
+	CBFSMEdit     = "fsm_edit:"    // + step — правка пункта с экрана проверки
+	CBFSMSave     = "fsm_save"     // 💾 «В черновики» с экрана проверки
+	CBCal         = "cal:"         // + m/d/t/noop/past/back — календарь итогов
 
 	// Кнопка "Участвовать" под постом розыгрыша
 	CBParticipate = "part:" // + giveaway_id
 )
 
-// MainMenuKeyboard — клавиатура главного меню. Каждая кнопка на отдельной строке.
+// MainMenuKeyboard — главное меню (мануал §11): главные функции первым
+// рядом, пары «данные + аналитика» вместе.
 func MainMenuKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
-	kb.AddRow().AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
+	kb.AddRow().
+		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
+		AddCallBack("📈 Трекинг", CBUTMQuickCreate)
 	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
-	kb.AddRow().AddCallBack("🎟 Мои участия", CBMyParticipations)
-	kb.AddRow().AddCallBack("📊 Аналитика", CBAnalytics)
-	kb.AddRow().AddCallBack("🆘 Поддержка", CBSupport)
+	kb.AddRow().
+		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways).
+		AddCallBack("📊 Аналитика", CBAnalytics)
+	kb.AddRow().
+		AddCallBack("🎟 Мои участия", CBMyParticipations).
+		AddCallBack("🆘 Поддержка", CBSupport)
+	return kb
+}
+
+// MainMenuWithDraftKeyboard — меню + строка «📝 Продолжить черновик»
+// (мануал §11: появляется, когда есть незаконченное создание).
+func MainMenuWithDraftKeyboard() *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().AddCallBack("📝 Продолжить черновик", CBGwList)
+	kb.AddRow().
+		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
+		AddCallBack("📈 Трекинг", CBUTMQuickCreate)
+	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
+	kb.AddRow().
+		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways).
+		AddCallBack("📊 Аналитика", CBAnalytics)
+	kb.AddRow().
+		AddCallBack("🎟 Мои участия", CBMyParticipations).
+		AddCallBack("🆘 Поддержка", CBSupport)
 	return kb
 }
 
@@ -99,10 +127,11 @@ func MainMenuKeyboard() *model.Keyboard {
 // (проверено живым API-запросом). Меню — inline.
 var replyMenuTexts = []string{
 	"🎁 Создать розыгрыш",
-	"📋 Мои розыгрыши",
+	"📈 Трекинг",
 	"📢 Мои каналы",
-	"🎟 Мои участия",
+	"📋 Мои розыгрыши",
 	"📊 Аналитика",
+	"🎟 Мои участия",
 	"🆘 Поддержка",
 }
 
@@ -112,14 +141,16 @@ func ReplyPayloadByText(text string) string {
 	switch text {
 	case "🎁 Создать розыгрыш":
 		return CBCreateGiveaway
-	case "📋 Мои розыгрыши":
-		return CBMyGiveaways
+	case "📈 Трекинг":
+		return CBUTMQuickCreate
 	case "📢 Мои каналы":
 		return CBMyChannels
-	case "🎟 Мои участия":
-		return CBMyParticipations
+	case "📋 Мои розыгрыши":
+		return CBMyGiveaways
 	case "📊 Аналитика":
 		return CBAnalytics
+	case "🎟 Мои участия":
+		return CBMyParticipations
 	case "🆘 Поддержка":
 		return CBSupport
 	}
@@ -136,33 +167,25 @@ func NavKeyboard() *model.Keyboard {
 	return kb
 }
 
-// FirstStepKeyboard — первый шаг создания: 💡 + Отменить (Назад идти некуда).
-func FirstStepKeyboard() *model.Keyboard {
-	kb := model.NewKeyboard()
-	kb.AddRow().
-		AddCallBack("💡", CBFSMHint).
-		AddCallBack("✖ Отменить", CBFSMCancel)
-	return kb
+// AddServiceRow дописывает служебный ряд шага мастера (мануал §3):
+// «💡 Справка · ← Назад · ✕ Отмена». withBack=false на первом шаге
+// (назад идти некуда — остаётся 💡 и ✕).
+func AddServiceRow(kb *model.Keyboard, withBack bool) {
+	row := kb.AddRow()
+	row.AddCallBack("💡 Справка", CBFSMHint)
+	if withBack {
+		row.AddCallBack("← Назад", CBFSMBack)
+	}
+	row.AddCallBack("✕ Отменить", CBFSMCancel)
 }
 
-// HintKeyboard — под сообщением-подсказкой: продолжить с того места, где
-// нажали лампочку, или отменить создание.
-func HintKeyboard() *model.Keyboard {
+// CancelConfirmKeyboard — экран «Остановить создание?» (мануал §3 ✕ Отмена):
+// «Да, выйти» / «Продолжить».
+func CancelConfirmKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().
-		AddCallBack("▶ Продолжить", CBFSMContinue).
-		AddCallBack("✖ Отменить", CBFSMCancel)
-	return kb
-}
-
-// NavWithSkipKeyboard — Пропустить / 💡 / Назад / Отменить.
-func NavWithSkipKeyboard() *model.Keyboard {
-	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("⏭ Пропустить", CBFSMSkip)
-	kb.AddRow().
-		AddCallBack("💡", CBFSMHint).
-		AddCallBack("← Назад", CBFSMBack).
-		AddCallBack("✖ Отменить", CBFSMCancel)
+		AddCallBack("✖ Да, выйти", CBFSMExitYes).
+		AddCallBack("▶ Продолжить", CBFSMContinue)
 	return kb
 }
 
@@ -231,24 +254,6 @@ func ResultsKeyboard(giveawayID int64, botUsername string) *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddLink("🏆 Проверить результаты", StartappLink(botUsername, "results_"+strconv.FormatInt(giveawayID, 10)))
 	return kb
-}
-
-// MediaStepKeyboard — клавиатура шага медиа в создании розыгрыша.
-// hasMedia=false → «⏭ Пропустить» (медиа опциональны);
-// hasMedia=true  → «Далее →» (медиа уже добавлено — «Пропустить» сбивает
-// с толку). Условие динамическое: в каждом черновике своё (удалили медиа
-// в редактуре → снова «Пропустить»), никакого перманентного переименования.
-func MediaStepKeyboard(hasMedia bool) *model.Keyboard {
-	if hasMedia {
-		kb := model.NewKeyboard()
-		kb.AddRow().AddCallBack("Далее →", CBFSMSkip)
-		kb.AddRow().
-			AddCallBack("💡", CBFSMHint).
-			AddCallBack("← Назад", CBFSMBack).
-			AddCallBack("✖ Отменить", CBFSMCancel)
-		return kb
-	}
-	return NavWithSkipKeyboard()
 }
 
 // PreviewKeyboardBuilder — кнопка участия для ПРЕДПРОСМОТРА (с пометкой "превью",
@@ -401,6 +406,81 @@ func RandomCode(n int) string {
 	b := make([]byte, n/2+1)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)[:n]
+}
+
+// ---------- Календарь итогов (мануал §6) ----------
+
+// weekdaysUS — заголовок дней недели (Пн..Вс).
+var calWeekdays = []string{"Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"}
+
+// CalMonthKeyboard — клавиатура месяца: [←, Ноябрь 2026, →] / Пн..Вс / дни
+// по 7 в ряд (пустые и прошедшие — «·»), выход — к быстрым вариантам и
+// служебный ряд. Самый длинный месяц: 11 рядов, 59 кнопок (лимит 30/210).
+// offset — смещение месяца от текущего (0 = этот месяц; листается до 12).
+func CalMonthKeyboard(offset int) *model.Keyboard {
+	now := time.Now().In(MoscowLocation())
+	first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, MoscowLocation()).AddDate(0, offset, 0)
+
+	kb := model.NewKeyboard()
+	// Строка 1: навигация по месяцам.
+	nav := kb.AddRow()
+	if offset > 0 {
+		nav.AddCallBack("←", fmt.Sprintf("%sm:%d", CBCal, offset-1))
+	} else {
+		nav.AddCallBack("·", CBCal+"noop")
+	}
+	nav.AddCallBack("·"+first.Format("Январь 2006")+"·", CBCal+"noop")
+	if offset < 12 {
+		nav.AddCallBack("→", fmt.Sprintf("%sm:%d", CBCal, offset+1))
+	} else {
+		nav.AddCallBack("·", CBCal+"noop")
+	}
+	// Строка 2: дни недели (пустые ответы).
+	wd := kb.AddRow()
+	for _, d := range calWeekdays {
+		wd.AddCallBack(d, CBCal+"noop")
+	}
+	// Дни: понедельник — первый столбец.
+	lead := int(first.Weekday()+6) % 7 // Пн=0
+	daysInMonth := first.AddDate(0, 1, -1).Day()
+	var row *model.KeyboardRow
+	for i := 0; i < lead; i++ {
+		if i%7 == 0 {
+			row = kb.AddRow()
+		}
+		row.AddCallBack("·", CBCal+"noop")
+	}
+	for d := 1; d <= daysInMonth; d++ {
+		if (lead+d-1)%7 == 0 {
+			row = kb.AddRow()
+		}
+		date := time.Date(first.Year(), first.Month(), d, 0, 0, 0, 0, MoscowLocation())
+		if date.Before(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, MoscowLocation())) {
+			row.AddCallBack("·", CBCal+"past") // прошедший день
+			continue
+		}
+		row.AddCallBack(fmt.Sprintf("%d", d), fmt.Sprintf("%sd:%s", CBCal, date.Format("2006-01-02")))
+	}
+	kb.AddRow().AddCallBack("← К быстрым вариантам", CBCal+"back")
+	AddServiceRow(kb, true)
+	return kb
+}
+
+// CalTimeKeyboard — экран выбора времени дня: 6 быстрых часов двумя рядами,
+// своё время — текстом (ЧЧ:ММ). date — выбранный день (YYYY-MM-DD).
+func CalTimeKeyboard(date string) *model.Keyboard {
+	kb := model.NewKeyboard()
+	r1 := kb.AddRow()
+	for _, h := range []string{"12:00", "15:00", "18:00"} {
+		r1.AddCallBack(h, fmt.Sprintf("%st:%sT%s", CBCal, date, h))
+	}
+	r2 := kb.AddRow()
+	for _, h := range []string{"20:00", "21:00", "22:00"} {
+		r2.AddCallBack(h, fmt.Sprintf("%st:%sT%s", CBCal, date, h))
+	}
+	kb.AddRow().AddCallBack("← Другой день", fmt.Sprintf("%sm:0", CBCal))
+	AddServiceRow(kb, true)
+	return kb
 }
 
 // ChannelURL — абсолютный URL публичного канала по его link из MAX API

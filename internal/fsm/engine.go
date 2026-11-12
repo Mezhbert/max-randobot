@@ -25,157 +25,79 @@ func New(db *store.Store, log *slog.Logger) *Engine {
 	return &Engine{DB: db, log: log}
 }
 
-// StepPrompt описывает, что показать пользователю на шаге.
-type StepPrompt struct {
-	Text       string // текст запроса
-	Attachment string // json-ignored; используем Keyboard ниже
-	Keyboard   []byte // зарезервировано
+// legacyStepMap — шаги старого 18-шагового мастера → ближайший шаг новой
+// 10-шаговой схемы: черновики из БД продолжаются с осмысленного места.
+var legacyStepMap = map[string]string{
+	"post_text": StepPost, "media": StepPost,
+	"sub_channels": StepSubs, "pub_channels": StepChannel,
+	"button_text": StepButton,
+	"publish_mode": StepStart, "publish_at": StepStart,
+	"finish_mode": StepFinish, "finish_at": StepFinish, "finish_count": StepFinish,
+	"winners": StepWinners, "winners_msg": StepExtras,
+	"referral": StepExtras, "results_loc": StepExtras, "results_text": StepExtras,
+	"captcha": StepExtras, "preview": StepCheck,
 }
 
-// PromptForStep возвращает текст-приглашение для шага.
-func PromptForStep(step string) string {
-	switch step {
-	case StepName:
-		return "🏷 Шаг 1/14. Название конкурса.\n\nОтправьте текстом название конкурса. " +
-			"Оно используется как имя конкурса (в списке «Мои розыгрыши»), в самом посте не появится.\n\n" +
-			"Черновик сохраняется автоматически после ввода названия."
-	case StepPostText:
-		return "📝 Шаг 2/14. Текст поста.\n\nОтправьте текст поста розыгрыша. " +
-			"Оформление сохранится точно в таком же виде, как вы отправите.\n\n" +
-			"Если в тексте будут ссылки на каналы — подпишитесь на них участники должны будут обязательно."
-	case StepMedia:
-		return "🖼 Шаг 3/14. Медиа (опционально).\n\nОтправьте фото и/или видео для поста, либо нажмите кнопку под сообщением («Пропустить» без медиа, «Далее →» после добавления)."
-	case StepButtonText:
-		return "🔘 Шаг 4/14. Текст кнопки участия.\n\nОтправьте текст кнопки (по умолчанию «участвовать»)."
-	case StepSubChannels:
-		return "📢 Шаг 5/14. Каналы для подписки.\n\nВыберите каналы, на которые участникам нужно подписаться.\n" +
-			"Если каналы не выбраны — розыгрыш проходит без проверки подписки.\n\n" +
-			"Каналы появляются здесь автоматически, когда вы добавляете бота админом в канал.\n" +
-			"⚠️ рядом с каналом — бот больше не админ (использовать нельзя).\n\n" +
-			"Когда закончите выбор — нажмите «Далее»."
-	case StepPubChannels:
-		return "📣 Шаг 6/14. Каналы публикации.\n\nВыберите каналы, где опубликовать розыгрыш. " +
-			"Бот может опубликовать в любом канале, где он админ.\n\n" +
-			"Выбирайте кнопками из списка. Когда закончите — нажмите «Далее»."
-	case StepPublishMode:
-		return "🚀 Шаг 7/14. Когда опубликовать?\n\n" +
-			"• «Опубликовать сразу» — пост выйдет через ~минуту после создания\n" +
-			"• «По времени» — задать дату и время публикации"
-	case StepPublishAt:
-		return "📅 Шаг 8/14. Дата публикации.\n\nБот живёт по московскому времени.\n" +
-			"Введите время в формате ЧЧ:ММ (например 18:00) — дата подставится автоматически.\n" +
-			"Или полный формат: ДД.ММ.ГГГГ ЧЧ:ММ (например 31.12.2026 18:00)"
-	case StepFinishMode:
-		return "🏁 Шаг 9/14. Как подвести итоги?\n\n" +
-			"• «По времени» — итоги в заданную дату/время\n" +
-			"• «По количеству участников» — как только наберётся заданное число участников"
-	case StepFinishAt:
-		return "⏰ Шаг 10/14. Дата подведения итогов.\n\nБот живёт по московскому времени.\n" +
-			"Введите время в формате ЧЧ:ММ (например 21:00) — дата подставится автоматически.\n" +
-			"Или полный формат: ДД.ММ.ГГГГ ЧЧ:ММ (например 07.01.2027 21:00)"
-	case StepFinishCount:
-		return "👥 Шаг 10/14. Целевое число участников.\n\nВведите число — розыгрыш завершится автоматически, " +
-			"как только участников станет столько (например 100)."
-	case StepWinners:
-		return "🏆 Шаг 11/14. Количество победителей.\n\nВведите число от 1 до 100."
-	case StepWinnersMsg:
-		return "✉️ Шаг 12/14. Сообщение победителям (опционально).\n\n" +
-			"Отправьте текст сообщения, которое бот пришлёт победителям в личку " +
-			"(например, контакты организаторов для получения приза).\n" +
-			"Или нажмите «Пропустить»."
-	case StepReferral:
-		return "🤝 Шаг 13/14. Приглашение друзей (опционально).\n\n" +
-			"Реферальная система: каждый участник получает личную ссылку — \n" +
-			"за каждого приглашённого по ней друга +1 БИЛЕТ (больше билетов = выше шанс победы).\n\n" +
-			"Лимит приглашений — 10 (изменить можно в редактуре)."
-	case StepResultsLoc:
-		return "📍 Шаг 14/14. Где публиковать итоги.\n\n" +
-			"• «В исходном посте» — итоги появятся в посте розыгрыша.\n" +
-			"• «Отдельным постом» — нужно будет отправить текст поста с итогами."
-	case StepResultsText:
-		return "📝 Текст поста с итогами.\n\n" +
-			"Отправьте текст для отдельного поста с итогами розыгрыша.\n" +
-			"Или нажмите «Пропустить» — будет использован стандартный заголовок «🏁 Итоги розыгрыша»."
-	case StepCaptcha:
-		return "🤖 Капча.\n\nВключить проверку на человека (капча при участии)?\n" +
-			"✅ Да — все участники решают капчу\n❌ Нет — без проверки"
-	case StepPreview:
-		return "👁 Предпросмотр розыгрыша. Проверьте всё ли верно."
+// NormalizeStep — валидный шаг новой схемы для значения из БД (legacy →
+// новый, неизвестный → FirstStep).
+func NormalizeStep(step string) string {
+	if StepNumber(step) > 0 {
+		return step
 	}
-	return ""
-}
-
-// HintForStep — краткая подсказка для шага (кнопка 💡). Одна-две строки,
-// показывается через callback notification.
-func HintForStep(step string) string {
-	switch step {
-	case StepName:
-		return "Название видно только вам в списке «Мои розыгрыши». Например: «iPhone 15 в мае»."
-	case StepPostText:
-		return "Это текст поста в канале. Можно копировать из готового описания. Оформление сохранится как есть."
-	case StepMedia:
-		return "Пришлите фото/видео одним сообщением. Можно несколько — каждое отдельным сообщением, затем кнопка под сообщением."
-	case StepButtonText:
-		return "Текст на кнопке под постом, например «Участвовать». Пусто или «Пропустить» = стандартная кнопка."
-	case StepSubChannels:
-		return "Каналы, куда участники ОБЯЗАНЫ подписаться. Можно не выбирать — тогда без проверки подписки."
-	case StepPubChannels:
-		return "Каналы, где ВЫЛОЖИТСЯ пост розыгрыша. ⚠️ = бот не админ, выбрать нельзя."
-	case StepPublishMode:
-		return "«Сразу» — через минуту после подтверждения. «По времени» — зададите дату и время."
-	case StepPublishAt:
-		return "Достаточно ввести ЧЧ:ММ — дата подставится сама (сегодня или завтра). Полный формат: ДД.ММ.ГГГГ ЧЧ:ММ."
-	case StepFinishMode:
-		return "«По времени» — фиксированная дата итогов. «По количеству» — розыгрыш закроется при наборе N участников."
-	case StepFinishAt:
-		return "Когда подвести итоги. Достаточно ЧЧ:ММ. Должно быть позже публикации."
-	case StepFinishCount:
-		return "Розыгрыш завершится автоматически при достижении этого числа участников. Например 100."
-	case StepWinners:
-		return "Сколько победителей выбрать. От 1 до 100."
-	case StepWinnersMsg:
-		return "Личное сообщение победителям (контакты для приза). Можно пропустить."
-	case StepReferral:
-		return "Друг по ссылке участника открывает бота и участвует — inviting получает +1 билет. Максимум 10 билетов за друзей."
-	case StepResultsLoc:
-		return "«В исходном посте» — итоги допишутся в конец поста. «Отдельным постом» — новый пост с итогами."
-	case StepResultsText:
-		return "Текст отдельного поста с итогами. Пропустить = стандартный заголовок."
-	case StepCaptcha:
-		return "Капча — картинка с цифрами в чате с ботом. Отсекает простых ботов."
-	case StepPreview:
-		return "Финальная проверка. «Принять» — розыгрыш запланирован и будет опубликован автоматически."
+	if s, ok := legacyStepMap[step]; ok {
+		return s
 	}
-	return ""
+	return FirstStep
 }
 
-// StartDraft создаёт НОВЫЙ черновик. Старые пустые (без названия) чистятся.
-// Для продолжения существующего черновика используется ResumeDraft (кнопка
-// «Продолжить создание» в карточке).
+// stepKnown — существует ли шаг в новой схеме.
+func stepKnown(step string) bool { return StepNumber(step) > 0 }
+
+// StartDraft создаёт НОВЫЙ черновик с дефолтами мануала: первый вариант
+// каждого шага уже выбран (капча вкл, победитель 1, итоги завтра 21:00,
+// старт сразу) — мастер проходится нажатиями «Далее →».
 func (e *Engine) StartDraft(ctx context.Context, ownerUserID int64) (store.Giveaway, error) {
 	_ = e.DB.DeleteEmptyDrafts(ctx, ownerUserID)
 	g, err := e.DB.CreateDraftGiveaway(ctx, ownerUserID, FirstStep)
 	if err != nil {
 		return g, err
 	}
-	// Дефолты из последнего созданного розыгрыша (каналы публикации, капча,
-	// кнопка, рефералка) — повторяющиеся розыгрыши собираются быстрее.
+	// Дефолты мануала (§4 «По умолчанию (первый)»).
+	tomorrow21 := time.Now().In(util.MoscowLocation()).AddDate(0, 0, 1)
+	tomorrow21 = time.Date(tomorrow21.Year(), tomorrow21.Month(), tomorrow21.Day(), 21, 0, 0, 0, util.MoscowLocation()).UTC()
+	defaults := []struct {
+		field string
+		val   any
+	}{
+		{"button_text", "Участвовать"},
+		{"winners_count", 1},
+		{"captcha_mode", store.CaptchaAll},
+		{"finish_mode", "time"},
+		{"finish_at", tomorrow21},
+		{"publish_now", true},
+		{"results_in_original_post", true},
+		{"referral_enabled", false},
+	}
+	for _, d := range defaults {
+		if err := e.DB.UpdateGiveawayField(ctx, g.ID, d.field, d.val); err != nil {
+			e.log.Debug("start draft default", "err", err, "field", d.field)
+		}
+	}
+	// Дефолты из последнего созданного розыгрыша (каналы, капча, кнопка,
+	// рефералка) — повторяющиеся розыгрыши собираются быстрее. Поверх
+	// дефолтов мануала: опыт владельца важнее.
 	if err := e.DB.ApplyLastGiveawayDefaults(ctx, ownerUserID, g.ID); err != nil {
 		e.log.Debug("apply defaults", "err", err)
-	} else {
-		gg, err := e.DB.GetGiveawayAny(ctx, g.ID)
-		if err == nil {
-			return gg, nil
-		}
+	}
+	gg, err := e.DB.GetGiveawayAny(ctx, g.ID)
+	if err == nil {
+		return gg, nil
 	}
 	return g, nil
 }
 
 // ResumeDraft возобновляет создание существующего черновика по id.
-// Используется кнопкой «Продолжить создание» в карточке черновика.
-// Если шаг создания пуст (черновик сохранён через «Отменить») — стартуем с первого шага.
-// Устаревший шаг (referral/promotion из старых версий бота) — тоже сбрасываем
-// на первый: промпта для него нет, пустое сообщение MAX молча отвергает.
+// Пустой/legacy шаг нормализуется к новой 10-шаговой схеме.
 func (e *Engine) ResumeDraft(ctx context.Context, id int64) (store.Giveaway, error) {
 	g, err := e.DB.GetGiveawayAny(ctx, id)
 	if err != nil {
@@ -184,9 +106,8 @@ func (e *Engine) ResumeDraft(ctx context.Context, id int64) (store.Giveaway, err
 	if g.Status != store.StatusDraft {
 		return g, fmt.Errorf("это не черновик")
 	}
-	step := g.DraftStep
-	if step == "" || PromptForStep(step) == "" {
-		step = FirstStep
+	step := NormalizeStep(g.DraftStep)
+	if step != g.DraftStep {
 		if err := e.DB.SetDraftStep(ctx, id, step); err != nil {
 			return g, err
 		}
@@ -200,20 +121,11 @@ func (e *Engine) Abandon(ctx context.Context, id int64) error {
 	return e.DB.AbandonDraft(ctx, id)
 }
 
-// GoBack откатывает на предыдший АКТУАЛЬНЫЙ шаг (условные шаги, не подходящие
-// по режиму розыгрыша, перескакиваются — «Назад» не должен попадать на шаг,
-// который был пропущен при движении вперёд).
+// GoBack откатывает на предыдущий шаг (условных шагов в новой схеме нет).
 func (e *Engine) GoBack(ctx context.Context, id int64, currentStep string, g store.Giveaway) (string, error) {
-	prev := currentStep
-	for {
-		p := PrevStep(prev)
-		if p == "" {
-			return currentStep, nil // достигнуто начало — остаёмся
-		}
-		prev = p
-		if !StepSkipped(g, prev) {
-			break
-		}
+	prev := PrevStep(currentStep)
+	if prev == "" {
+		return currentStep, nil // первый шаг — остаёмся (в меню ведёт «✖ Отменить»)
 	}
 	if err := e.DB.SetDraftStep(ctx, id, prev); err != nil {
 		return currentStep, err
@@ -221,21 +133,10 @@ func (e *Engine) GoBack(ctx context.Context, id int64, currentStep string, g sto
 	return prev, nil
 }
 
-// GoNext подтверждает шаг и переходит к следующему АКТУАЛЬНОМУ шагу
-// (условные шаги перескакиваются по режиму розыгрыша).
+// GoNext подтверждает шаг и переходит к следующему.
 func (e *Engine) GoNext(ctx context.Context, id int64, currentStep string, g store.Giveaway) (string, error) {
-	next := currentStep
-	for {
-		n := NextStep(next)
-		if n == "" {
-			return currentStep, nil
-		}
-		next = n
-		if !StepSkipped(g, next) {
-			break
-		}
-	}
-	if next == currentStep {
+	next := NextStep(currentStep)
+	if next == "" {
 		return currentStep, nil
 	}
 	if err := e.DB.SetDraftStep(ctx, id, next); err != nil {
@@ -244,57 +145,344 @@ func (e *Engine) GoNext(ctx context.Context, id int64, currentStep string, g sto
 	return next, nil
 }
 
-// FormatPreview строит подробную сводку о розыгрыше для подтверждения.
-func FormatPreview(g store.Giveaway, db *store.Store) string {
-	subs := channelNames(db, g.SubscribeChannelIDs, g.OwnerUserID)
-	pubs := channelNames(db, g.PublishChannelIDs, g.OwnerUserID)
+// ---------- рендер шага (мануал §3 «Общие механики шага») ----------
+
+// StepHeader — «**Шаг N из 10 · Заголовок**\n▰▰…▱▱».
+func StepHeader(step string) string {
+	n := StepNumber(step)
+	return fmt.Sprintf("**Шаг %d из %d · %s %s**\n%s",
+		n, TotalSteps(), StepEmoji(step), StepTitle(step), ProgressBar(n, TotalSteps()))
+}
+
+// StepQuestion — вопрос шага.
+func StepQuestion(step string) string {
+	switch step {
+	case StepPost:
+		return "Пришлите текст поста — оформление сохранится точно как отправите.\nМожно сразу прикрепить фото и/или видео (тем же сообщением)."
+	case StepChannel:
+		return "Где опубликовать розыгрыш?\nБот может публиковать в любом канале, где он админ."
+	case StepName:
+		return "Как назовём розыгрыш? Нужно только вам — в списке «Мои розыгрыши»; в посте не появится."
+	case StepSubs:
+		return "На какие каналы участникам нужно подписаться?\nНе выбрано — розыгрыш без проверки подписки."
+	case StepButton:
+		return "Что написать на кнопке участия под постом?"
+	case StepWinners:
+		return "Сколько будет победителей?"
+	case StepFinish:
+		return "Когда подвести итоги розыгрыша?"
+	case StepStart:
+		return "Когда опубликовать пост?"
+	case StepExtras:
+		return "Дополнительные настройки розыгрыша."
+	case StepCheck:
+		return "Проверьте розыгрыш. Пост выше — как будет выглядеть в канале."
+	}
+	return ""
+}
+
+// TextHint — строка «✍️ …» для шагов, где допустим ввод текстом (мануал:
+// «после отправки сразу перейдём к шагу N»).
+func TextHint(step string) string {
+	switch step {
+	case StepPost:
+		return "✍️ Отправьте текст и/или фото-видео — после отправки сразу перейдём к шагу 2 «Канал»."
+	case StepChannel:
+		return "✍️ Или перешлите сюда любой пост из нужного канала (бот должен быть там админом)."
+	case StepName:
+		return "✍️ Или напишите своё название — после отправки сразу перейдём к шагу 4 «Подписки»."
+	case StepButton:
+		return "✍️ Или напишите свой текст (до 20 символов)."
+	case StepWinners:
+		return "✍️ Или напишите число от 1 до 100 — после отправки сразу перейдём к шагу 7 «Итоги»."
+	case StepFinish:
+		return "✍️ Или отправьте время в формате ДД.ММ.ГГГГ ЧЧ:ММ (можно только ЧЧ:ММ), сейчас " +
+			time.Now().In(util.MoscowLocation()).Format("15:04") + " МСК."
+	case StepStart:
+		return "✍️ Или отправьте дату публикации (ДД.ММ.ГГГГ ЧЧ:ММ или ЧЧ:ММ) — раньше итогов."
+	case StepExtras:
+		return "✍️ На этом шаге можно ввести лимит друзей числом 1–10 (или сообщение победителю после кнопки ✉️)."
+	}
+	return ""
+}
+
+// SelectedSummary — строка «✓ Выбрано: **…**» по текущим данным черновика.
+// Пустая строка = ничего не выбрано.
+func (e *Engine) SelectedSummary(ctx context.Context, g store.Giveaway, step string) string {
+	switch step {
+	case StepPost:
+		if g.PostText != "" {
+			return "✓ Выбрано: **" + excerpt(g.PostText, 60) + "**"
+		}
+		if len(g.MediaTokens) > 0 {
+			return fmt.Sprintf("✓ Выбрано: **%d вложений без текста**", len(g.MediaTokens))
+		}
+	case StepChannel:
+		if len(g.PublishChannelIDs) > 0 {
+			return "✓ Выбрано: **" + e.channelTitles(ctx, g.OwnerUserID, g.PublishChannelIDs) + "**"
+		}
+	case StepName:
+		if g.Name != "" {
+			return "✓ Выбрано: **" + g.Name + "**"
+		}
+	case StepSubs:
+		if len(g.SubscribeChannelIDs) > 0 {
+			return "✓ Выбрано: **" + e.channelTitles(ctx, g.OwnerUserID, g.SubscribeChannelIDs) + "**"
+		}
+		return "✓ Выбрано: **без проверки подписки**"
+	case StepButton:
+		if g.ButtonText != "" {
+			return "✓ Выбрано: **" + g.ButtonText + "**"
+		}
+	case StepWinners:
+		if g.WinnersCount > 0 {
+			return fmt.Sprintf("✓ Выбрано: **%d**", g.WinnersCount)
+		}
+	case StepFinish:
+		switch {
+		case g.FinishMode == "count" && g.FinishParticipantsCount > 0:
+			return fmt.Sprintf("✓ Выбрано: **👥 при %d участниках**", g.FinishParticipantsCount)
+		case g.FinishMode != "count" && g.FinishAt != nil:
+			return "✓ Выбрано: **" + util.FormatMoscowTime(*g.FinishAt) + "**"
+		}
+	case StepStart:
+		if g.PublishNow {
+			return "✓ Выбрано: **сразу после «🚀 Опубликовать»**"
+		}
+		if g.PublishAt != nil {
+			return "✓ Выбрано: **" + util.FormatMoscowTime(*g.PublishAt) + "**"
+		}
+	}
+	return ""
+}
+
+// StepText — полный текст шага по шаблону мануала:
+//
+//	**Шаг 6 из 10 · 🏆 Победители**
+//	▰▰▰▰▰▰▱▱▱▱
+//	**Сколько будет победителей?**
+//	✓ Выбрано: **1**
+//
+//	✍️ Или напишите число от 1 до 100 — …
+func (e *Engine) StepText(ctx context.Context, g store.Giveaway, step string) string {
+	var sb strings.Builder
+	sb.WriteString(StepHeader(step))
+	sb.WriteString("\n**")
+	sb.WriteString(StepQuestion(step))
+	sb.WriteString("**\n")
+	if sel := e.SelectedSummary(ctx, g, step); sel != "" {
+		sb.WriteString(sel)
+		sb.WriteString("\n")
+	}
+	if step == StepExtras {
+		sb.WriteString("\n" + ExtrasStateText(g))
+	}
+	if hint := TextHint(step); hint != "" {
+		sb.WriteString("\n")
+		sb.WriteString(hint)
+	}
+	return sb.String()
+}
+
+// ExtrasStateText — блок состояния всех функций шага 9 (мануал §7):
+// капча / друзья / сообщение победителю / место итогов.
+func ExtrasStateText(g store.Giveaway) string {
+	capV := "❌ выключена"
+	if g.CaptchaMode == store.CaptchaAll {
+		capV = "✅ включена"
+	}
+	friends := "❌ выключены"
+	if g.ReferralEnabled {
+		limit := g.ReferralLimit
+		if limit <= 0 {
+			limit = 10
+		}
+		friends = fmt.Sprintf("✅ до %d друзей = до +%d билетов", limit, limit)
+	}
+	msg := "не добавлено"
+	if g.WinnersMessage != "" {
+		msg = "добавлено"
+	}
+	results := "в исходном посте"
+	if !g.ResultsInOriginalPost {
+		results = "отдельным постом"
+	}
+	return fmt.Sprintf("🛡 **Капча:** %s\n👥 **Приглашение друзей:** %s\n✉️ **Сообщение победителю:** %s\n📍 **Итоги:** %s\n🔔 Победители с включёнными уведомлениями получат сообщение в личку.",
+		capV, friends, msg, results)
+}
+
+// PassedText — «✓ ответ» для морфинга пройденного шага (клавиатура стирается).
+func (e *Engine) PassedText(ctx context.Context, g store.Giveaway, step string) string {
+	return StepHeader(step) + "\n" + firstLine(e.SelectedSummary(ctx, g, step))
+}
+
+// StepComplete — заполнен ли шаг (для «Далее →»: не заполнен → только уведомление).
+func (e *Engine) StepComplete(ctx context.Context, g store.Giveaway, step string) bool {
+	switch step {
+	case StepPost:
+		return g.PostText != "" || len(g.MediaTokens) > 0
+	case StepChannel:
+		return len(g.PublishChannelIDs) > 0
+	case StepName:
+		return g.Name != ""
+	case StepSubs:
+		return true // без каналов = без проверки подписки (легитимно)
+	case StepButton:
+		return g.ButtonText != ""
+	case StepWinners:
+		return g.WinnersCount >= 1
+	case StepFinish:
+		if g.FinishMode == "count" {
+			return g.FinishParticipantsCount >= 10
+		}
+		return g.FinishAt != nil
+	case StepStart:
+		return g.PublishNow || g.PublishAt != nil
+	case StepExtras:
+		return true // всё опционально
+	}
+	return true
+}
+
+// MissingText — что именно не заполнено (уведомление на «Далее →»).
+func MissingText(step string) string {
+	switch step {
+	case StepPost:
+		return "Сначала пришлите текст поста или фото/видео"
+	case StepChannel:
+		return "Сначала выберите канал публикации"
+	case StepName:
+		return "Сначала выберите или напишите название"
+	case StepButton:
+		return "Сначала выберите текст кнопки"
+	case StepFinish:
+		return "Сначала выберите время итогов или «👥 По числу участников»"
+	case StepStart:
+		return "Сначала выберите время публикации"
+	}
+	return "Сначала заполните шаг"
+}
+
+// HintForStep — короткая подсказка (≤150 символов, callback-notification).
+func HintForStep(step string) string {
+	switch step {
+	case StepPost:
+		return "Текст ≥ 10 символов или медиа. Оформление (жирный, эмодзи) сохранится как есть."
+	case StepChannel:
+		return "⚠️ = бот не админ. «➕ Подключить канал» — инструкция и проверка прав."
+	case StepName:
+		return "Название видно только вам. Варианты собраны из текста поста."
+	case StepSubs:
+		return "Канал публикации предвыбран и не снимается — участники и так его увидят."
+	case StepButton:
+		return "Короткий текст 1–20 символов; счётчик участников допишется автоматически."
+	case StepWinners:
+		return "1–100. Один человек выигрывает не больше одного раза."
+	case StepFinish:
+		return "Итоги не раньше чем через 10 минут; по числу — от 10 участников."
+	case StepStart:
+		return "«Сразу» — пост выйдет через ~полминуты после «🚀 Опубликовать»."
+	case StepExtras:
+		return "Капча — 4 цифры в мини-аппе. Друзья: +1 билет за приглашённого."
+	case StepCheck:
+		return "«✏️» у пункта — вернуться к его шагу, после «Далее» вернёт сюда."
+	}
+	return ""
+}
+
+// NameVariants — авто-варианты названия (мануал §4 шаг 3): первая строка
+// поста + дата / + канал / обрезка первой строки.
+func NameVariants(g store.Giveaway, channelTitle string) []string {
+	first := strings.TrimSpace(strings.Split(g.PostText, "\n")[0])
+	first = strings.TrimLeft(first, "*#->_ ")
+	if first == "" {
+		first = "Розыгрыш"
+	}
+	first = excerpt(first, 30)
+	d := time.Now().In(util.MoscowLocation()).Format("02.01")
+	variants := []string{first + " · " + d}
+	if channelTitle != "" {
+		variants = append(variants, first+" · "+excerpt(channelTitle, 20))
+	}
+	return variants
+}
+
+// FormatCheck — сводка шага проверки (мануал §15).
+func FormatCheck(g store.Giveaway, subs, pubs string) string {
+	start := "сразу"
+	if !g.PublishNow && g.PublishAt != nil {
+		start = util.FormatMoscowTime(*g.PublishAt)
+	}
+	finish := "—"
+	switch {
+	case g.FinishMode == "count":
+		finish = fmt.Sprintf("при %d участниках", g.FinishParticipantsCount)
+	case g.FinishAt != nil:
+		finish = util.FormatMoscowTime(*g.FinishAt)
+	}
 	resultsLoc := "в исходном посте"
 	if !g.ResultsInOriginalPost {
 		resultsLoc = "отдельным постом"
 	}
 	captcha := "нет"
-	if g.CaptchaMode == "all" {
-		captcha = "для всех"
+	if g.CaptchaMode == store.CaptchaAll {
+		captcha = "да"
 	}
-
+	contact := "—"
+	if g.WinnersMessage != "" {
+		contact = "добавлено"
+	}
 	return "Информация о розыгрыше:\n" +
-		fmt.Sprintf("Название: %s\n", nonEmpty(g.Name)) +
-		fmt.Sprintf("Дата начала: %s\n", util.FormatMoscowTime(safeTime(g.PublishAt))) +
-		fmt.Sprintf("Дата окончания: %s\n", util.FormatMoscowTime(safeTime(g.FinishAt))) +
-		fmt.Sprintf("Кол-во победителей: %d\n", g.WinnersCount) +
-		fmt.Sprintf("Контакт для победителей: %s\n", nonEmpty(g.WinnersMessage)) +
-		fmt.Sprintf("Результаты в исходных постах: %s\n", yesno(g.ResultsInOriginalPost)) +
-		fmt.Sprintf("Буст каналов: %s\n", yesno(len(g.SubscribeChannelIDs) > 0)) +
-		fmt.Sprintf("Капча: %s\n", captcha) +
-		fmt.Sprintf("Приглашение друзей: %s\n", yesno(g.ReferralEnabled)) +
-		"\nКаналы для подписки:\n" + subs + "\n" +
-		"Старт будет опубликован в:\n" + pubs + "\n" +
-		"Итоги будут опубликованы: " + resultsLoc
+		"Название: " + nonEmpty(g.Name) + "\n" +
+		"Старт: " + start + "\n" +
+		"Итоги: " + finish + "\n" +
+		"Кол-во победителей: " + fmt.Sprintf("%d", g.WinnersCount) + "\n" +
+		"Сообщение победителям: " + contact + "\n" +
+		"Результаты: " + resultsLoc + "\n" +
+		"Каналы для подписки: " + nonEmpty(subs) + "\n" +
+		"Старт будет опубликован в: " + nonEmpty(pubs) + "\n" +
+		"Капча: " + captcha + "\n" +
+		"Приглашение друзей: " + yesno(g.ReferralEnabled)
 }
 
-func nonEmpty(s string) string {
-	if s == "" {
+// FormatPreview — старая сводка (используется тестами/легаси).
+func FormatPreview(g store.Giveaway, db *store.Store) string {
+	subs := channelNames(db, g.SubscribeChannelIDs, g.OwnerUserID)
+	pubs := channelNames(db, g.PublishChannelIDs, g.OwnerUserID)
+	return FormatCheck(g, subs, pubs)
+}
+
+// ---------- хелперы ----------
+
+// channelTitles — список названий каналов по внутренним id (для ✓ Выбрано).
+func (e *Engine) channelTitles(ctx context.Context, ownerUserID int64, ids []int64) string {
+	return e.ChannelTitlesLine(ctx, ownerUserID, ids)
+}
+
+// ChannelTitlesLine — названия каналов через запятую (для сводки проверки).
+func (e *Engine) ChannelTitlesLine(ctx context.Context, ownerUserID int64, ids []int64) string {
+	if len(ids) == 0 {
 		return "—"
 	}
-	return s
-}
-
-func yesno(b bool) string {
-	if b {
-		return "да"
+	channels, err := e.DB.ChannelsByIDs(ctx, ownerUserID, ids)
+	if err != nil || len(channels) == 0 {
+		return "—"
 	}
-	return "нет"
-}
-
-// safeTime разыменовывает указатель, возвращая zero time если nil.
-func safeTime(t *time.Time) time.Time {
-	if t == nil {
-		return time.Time{}
+	titles := make([]string, 0, len(channels))
+	for _, c := range channels {
+		t := c.Title
+		if t == "" {
+			t = fmt.Sprintf("канал #%d", c.ChatID)
+		}
+		titles = append(titles, t)
 	}
-	return *t
+	if len(titles) > 3 {
+		return strings.Join(titles[:3], ", ") + fmt.Sprintf(" и ещё %d", len(titles)-3)
+	}
+	return strings.Join(titles, ", ")
 }
 
-// channelNames возвращает текстовый список каналов по их внутренним id.
+// channelNames — текстовый список каналов (легаси-хелпер для FormatPreview).
 func channelNames(db *store.Store, ids []int64, ownerUserID int64) string {
 	if len(ids) == 0 {
 		return "—"
@@ -312,4 +500,36 @@ func channelNames(db *store.Store, ids []int64, ownerUserID int64) string {
 		lines = append(lines, "• "+title)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// excerpt — первые max рун строки в одну строку.
+func excerpt(s string, max int) string {
+	s = strings.Join(strings.Split(s, "\n"), " ")
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+// firstLine — первая строка (или пустая).
+func firstLine(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.SplitN(s, "\n", 2)[0]
+}
+
+func nonEmpty(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+func yesno(b bool) string {
+	if b {
+		return "да"
+	}
+	return "нет"
 }
