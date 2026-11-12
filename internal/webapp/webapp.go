@@ -23,6 +23,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -87,6 +89,19 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 	mux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if path == "/app/" || path == "/app" || path == "/app/index.html" {
+			// Серверная маршрутизация start_param (если клиент передал его
+			// query-параметром — веб-версия MAX так делает): сразу на нужную
+			// страницу, без клиентского JS-редиректа (в мобильном клиенте он
+			// может не выполниться). Дублирует роутер index.html — надёжнее.
+			if sp := firstNonEmpty(r.URL.Query().Get("startapp"), r.URL.Query().Get("start_param")); sp != "" {
+				if dest, ok := miniAppRoute(sp); ok {
+					q := "start_param=" + url.QueryEscape(sp) +
+						"&init_data=" + url.QueryEscape(r.URL.Query().Get("init_data"))
+					log.Info("miniapp route (server)", "start_param", sp, "dest", dest)
+					http.Redirect(w, r, dest+"?"+q, http.StatusFound)
+					return
+				}
+			}
 			serve(w, "index.html")
 			return
 		}
@@ -322,7 +337,52 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		})
 	})
 
-	return mux
+	// Лог запросов мини-аппа (диагностика QA: видно, что реально приходит от
+	// клиента; init_data не логируем — только факт наличия).
+	return logRequests(mux, log)
+}
+
+// logRequests — логирование запросов мини-аппа (HTML и API) для диагностики.
+func logRequests(next http.Handler, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/app/api/") {
+			log.Info("app api", "path", r.URL.Path, "init_data", r.URL.Query().Get("init_data") != "")
+		} else {
+			log.Info("app page", "path", r.URL.Path, "query", sanitizeQuery(r.URL.Query()))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sanitizeQuery — query без чувствительных значений (init_data подписана
+// юзером — в лог только факт наличия).
+func sanitizeQuery(q url.Values) string {
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+// miniAppRoute — страница мини-аппа для start_param.
+func miniAppRoute(sp string) (string, bool) {
+	switch {
+	case strings.HasPrefix(sp, "part_"), strings.HasPrefix(sp, "g_"):
+		return "/app/participate.html", true
+	case strings.HasPrefix(sp, "results_"), strings.HasPrefix(sp, "r_"):
+		return "/app/results.html", true
+	}
+	return "", false
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // authorize проверяет подпись init_data (HMAC) и возвращает user_id.

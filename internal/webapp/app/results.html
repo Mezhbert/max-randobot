@@ -33,12 +33,20 @@
     <div class="skel"></div><div class="skel"></div><div class="skel" style="height:120px"></div>
   </div>
 </div>
+<script src="https://st.max.ru/js/max-web-app.js"></script>
 <script>
 // Страница итогов (P4/P5). Открывается кнопкой «🏆 Проверить результаты» под
 // постом завершённого розыгрыша (startapp-ссылка results_<id>); маршрутизатор
-// в index.html передаёт start_param и init_data query-параметрами.
+// в index.html передаёт start_param query-параметром. Фолбэк — из моста.
 const params = new URLSearchParams(location.search);
-const sp = params.get('start_param') || '';
+let sp = params.get('start_param') || '';
+if (!sp) {
+  try {
+    const api = window.WebApp || {};
+    api.ready && api.ready();
+    sp = (api.initDataUnsafe && api.initDataUnsafe.start_param) || '';
+  } catch (e) {}
+}
 const gid = params.get('id') || (sp.indexOf('results_') === 0 ? sp.slice(8) : (sp.indexOf('r_') === 0 ? sp.slice(2) : ''));
 
 // Открыто без id — на главную с описанием.

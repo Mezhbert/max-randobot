@@ -63,10 +63,13 @@
     <button class="ghost" onclick="history.length>1?history.back():window.close()">Закрыть</button>
   </div>
 </div>
+<script src="https://st.max.ru/js/max-web-app.js"></script>
 <script>
 // Страница участия (P3/P5). Открывается из поста розыгрыша по startapp-ссылке
 // (start_param=part_<id>) — маршрутизатор в index.html передаёт сюда
-// start_param и init_data query-параметрами.
+// start_param и init_data query-параметрами. Фолбэк: если страница открыта
+// напрямую как мини-апп — start_param читается из официального моста
+// (max-web-app.js; мобильные клиенты НЕ внедряют window.WebApp без скрипта).
 //
 // ВАЖНО (почему старый мини-апп-путь «не взлетел»): ВСЕ запросы к API несут
 // init_data — в query для GET и В ТЕЛЕ для POST. Ранняя версия слала POST
@@ -75,6 +78,14 @@
   var params = new URLSearchParams(location.search);
   var initData = params.get('init_data') || '';
   var sp = params.get('start_param') || '';
+  if (!sp) {
+    try {
+      var api = window.WebApp || {};
+      api.ready && api.ready();
+      sp = (api.initDataUnsafe && api.initDataUnsafe.start_param) || '';
+      initData = initData || api.initData || '';
+    } catch (e) {}
+  }
   var gid = params.get('giveaway_id') || (sp.indexOf('part_') === 0 ? sp.slice(5) : (sp.indexOf('g_') === 0 ? sp.slice(2) : ''));
   var $ = function (id) { return document.getElementById(id); };
   var needCaptcha = false;

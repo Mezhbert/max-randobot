@@ -48,6 +48,7 @@
     <div class="muted">Создавайте розыгрыши и ссылки в чате с ботом — нажмите «Начать» или найдите бота в поиске MAX.</div>
   </div>
 </div>
+<script src="https://st.max.ru/js/max-web-app.js"></script>
 <script>
 // Маршрутизатор мини-аппа (P5: главная — статичная, участие/итоги — отдельные
 // страницы). Мини-апп бота один; start_param из startapp-ссылки определяет,
@@ -56,16 +57,21 @@
 //   part_<id>/g_<id> — страница участия (participate.html);
 //   results_<id>/r_<id> — страница итогов (results.html);
 //   ничего          — статичная главная.
+// Мост max-web-app.js — официальный: он гарантирует window.WebApp (initData,
+// initDataUnsafe.start_param) на ВСЕХ клиентах MAX (мобильные НЕ внедряют
+// мост автоматически — без скрипта роутер молчал и страница «вставала»).
 (function () {
   var api = window.WebApp || {};
   var initData = '';
   var sp = '';
   try {
+    api.ready && api.ready();
     initData = api.initData || '';
     sp = (api.initDataUnsafe && api.initDataUnsafe.start_param) || '';
   } catch (e) {}
   if (!sp) {
-    // Фолбэк: start_param может прийти и query-параметром (веб-версия).
+    // Фолбэк: веб-версия MAX передаёт start_param query-параметром (а сервер
+    // тогда редиректит сам — этот путь для прямых открытий страниц).
     try { sp = new URLSearchParams(location.search).get('startapp') ||
                new URLSearchParams(location.search).get('start_param') || ''; } catch (e) {}
   }
@@ -78,7 +84,7 @@
   if (sp.indexOf('part_') === 0 || sp.indexOf('g_') === 0) { go('/app/participate.html', sp); return; }
   if (sp.indexOf('results_') === 0 || sp.indexOf('r_') === 0) { go('/app/results.html', sp); return; }
 
-  if (sp.indexOf('u_') === 0) { runTrack(sp.slice(2)); return; }
+  if (sp.indexOf('u_') === 0) { runTrack(sp.slice(2), initData); return; }
 
   // Без start_param — статичная главная (P5).
   document.getElementById('main-view').classList.remove('hidden');
@@ -86,11 +92,13 @@
 
 // Трекинг-редиректор: код ссылки → сервер считает клик (с user_id из
 // подписанной init_data) → отвечает, куда вести (канал/пост).
-function runTrack(code) {
+function runTrack(code, initDataPreset) {
   document.getElementById('track-view').classList.remove('hidden');
   var api = window.WebApp || {};
-  var initData = '';
-  try { initData = api.initData || ''; } catch (e) {}
+  var initData = initDataPreset;
+  if (!initData) {
+    try { initData = api.initData || ''; } catch (e) {}
+  }
 
   fetch('/app/api/track', {
     method: 'POST',
