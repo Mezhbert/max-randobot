@@ -231,7 +231,9 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler, db *store.Store
 	// (например, бот был выключен в момент publish_at).
 	// Отписки и чистка черновиков — редко (раз в 10 минут), отдельным счётчиком:
 	// CheckUnsubs дергает API MAX за каждого участника активных розыгрышей.
+	// Удержание трекинг-ссылок — раз в сутки (перепроверка подписчиков ссылок).
 	lastSlow := time.Time{}
+	lastRetention := time.Time{}
 	slowTick := func() {
 		if time.Since(lastSlow) < 10*time.Minute {
 			return
@@ -246,6 +248,17 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler, db *store.Store
 			slog.Debug("drafts ttl cleanup", "err", err)
 		}
 	}
+	retentionTick := func() {
+		if time.Since(lastRetention) < 20*time.Hour {
+			return
+		}
+		lastRetention = time.Now()
+		c, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		if err := sch.CheckUTMRetention(c); err != nil {
+			slog.Warn("scheduler CheckUTMRetention", "err", err)
+		}
+	}
 
 	tick := func() {
 		c, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -257,6 +270,7 @@ func runScheduler(ctx context.Context, sch *scheduler.Scheduler, db *store.Store
 			slog.Warn("scheduler FinishPending", "err", err)
 		}
 		slowTick()
+		retentionTick()
 	}
 	tick()
 

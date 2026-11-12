@@ -172,8 +172,9 @@ stateDiagram-v2
 | Участие (мини-апп/чат) | `giveaways`, `participants`, `subscriptions_log` | `participants` (+`tickets` при реферальном кредите), `subscriptions_log`, `referral_invites` |
 | Итоги | `participants` (verified), `winners_*` | `giveaways` (winners, results_published, статусы) |
 | Трекинг-клик | `utm_links` | `users` (upsert), `utm_clicks`, `utm_links.clicks`, `user_utm_attribution` |
-| Подписка в канале | `user_utm_attribution` | `utm_links.signups`, `subscriptions_log` |
-| Отписка | `user_utm_attribution` | `utm_links.unsubs`, `subscriptions_log.unsubscribed_at`, `giveaway`-дисквалификация перед жеребьёвкой |
+| Подписка в канале | `user_utm_attribution` | `utm_links.signups`, `subscriptions_log`, `utm_subscribers` (retention) |
+| Отписка | `user_utm_attribution` | `utm_links.unsubs`, `subscriptions_log.unsubscribed_at`, `utm_subscribers.unsubscribed_at`, `giveaway`-дисквалификация |
+| Суточный поллинг удержания | `user_utm_attribution` × `utm_subscribers` | `utm_subscribers` (добавление уже-состоящих, фиксация тихих отписок) |
 | Рефералка | `referral_links`, `referral_invites` | `referral_links`, `referral_invites`, `participants.tickets` |
 | Редактура | `giveaways` | `giveaways` (точечные колонки, live-обновление постов) |
 | Аналитика/CSV | `participants`, `subscriptions_log`, `utm_links`, `utm_clicks` | — |

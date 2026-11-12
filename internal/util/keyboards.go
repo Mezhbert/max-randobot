@@ -44,11 +44,15 @@ const (
 	CBGwCSVParts     = "gw_csv:"                     // + giveaway_id (экспорт участников CSV)
 
 	// UTM-трекинг (общее)
-	CBUTMQuickCreate = "utm_quick"     // трекинг-ссылка: выбор канала (быстрый флоу P6)
-	CBUTMQuickChSel  = "utm_qch:"      // + channel_id — канал выбран для быстрой ссылки
-	CBUTMQuickLink   = "utm_fast:"     // + channel_id — простая ссылка одним тапом
-	CBUTMSkipPost    = "utm_post_skip" // билдер ссылки: пропустить пост-источник
-	CBUTMSkipCost    = "utm_cost_skip" // билдер ссылки: без стоимости
+	CBUTMQuickCreate = "utm_quick"      // трекинг: выбор канала (главное меню)
+	CBUTMQuickChSel  = "utm_qch:"       // + channel_id — канал выбран
+	CBUTMBuildYes    = "utm_build_yes"  // после названия: настроить метки конструктором
+	CBUTMBuildNo     = "utm_build_no"   // после названия: простая ссылка
+	CBUTMStageSkip   = "utm_stage_skip" // билдер: пропустить текущий шаг
+	CBUTMGW          = "utm_gw:"        // + giveaway_id — привязать ссылку к розыгрышу
+	CBUTMGWSkip      = "utm_gw_skip"    // билдер: без привязки к розыгрышу
+	CBUTMSkipPost    = "utm_post_skip"  // легаси: пропуск поста (маппится в stage-skip)
+	CBUTMSkipCost    = "utm_cost_skip"  // легаси: без стоимости
 
 	// Каналы
 	CBChannelAdd       = "ch_add"
@@ -365,14 +369,14 @@ func PostRefKeyboard() *model.Keyboard {
 	return kb
 }
 
-// ChannelUTMKeyboard — меню канала: UTM-операции.
+// ChannelUTMKeyboard — меню канала: создание ссылки (название → опциональный
+// конструктор меток) + аналитика.
 func ChannelUTMKeyboard(channelID int64) *model.Keyboard {
 	id := strconv.FormatInt(channelID, 10)
 	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("⚡ Простая ссылка", CBUTMQuickLink+id)
-	kb.AddRow().AddCallBack("🎛 Билдер (UTM/пост/стоимость)", CBUTMCreate+id)
+	kb.AddRow().AddCallBack("➕ Новая ссылка", CBUTMCreate+id)
 	kb.AddRow().
-		AddCallBack("📊 Аналитика", CBUTMStats+id).
+		AddCallBack("📊 Статистика", CBUTMStats+id).
 		AddCallBack("📈 Динамика", CBUTMDyn+id)
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb

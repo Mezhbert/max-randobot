@@ -251,48 +251,64 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 	case p == util.CBGwList:
 		b.showGiveawayFilters(ctx, uid)
 
-	case strings.HasPrefix(p, util.CBUTMSkipPost):
-		// Билдер трекинг-ссылки: пропустить пост-источник → сразу стоимость.
-		sess, err := b.db.GetSessionPayload(ctx, uid)
-		if err != nil || sess.State != store.SessionUTMCreate {
-			return
-		}
-		source, _ := sess.Payload["source"].(string)
-		chIDf, _ := sess.Payload["channel_id"].(float64)
-		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
-			"channel_id": chIDf, "stage": "cost", "source": source, "post_ref": "",
-		})
-		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"💰 Стоимость выхода (необязательно).\n\n"+
-				"Сколько заплачено за размещение (₽)? Посчитаем CPA — цену подписчика. Можно пропустить.",
-			util.CostKeyboard())
-
-	case strings.HasPrefix(p, util.CBUTMSkipCost):
-		sess, err := b.db.GetSessionPayload(ctx, uid)
-		if err != nil || sess.State != store.SessionUTMCreate {
-			return
-		}
-		source, _ := sess.Payload["source"].(string)
-		postRef, _ := sess.Payload["post_ref"].(string)
-		chIDf, _ := sess.Payload["channel_id"].(float64)
-		b.finishUTMLink(ctx, uid, int64(chIDf), source, postRef, 0)
-
 	case strings.HasPrefix(p, util.CBChannelUTM):
 		// Выбор канала для генерации UTM-ссылки
 		b.showUTMMenu(ctx, uid, p)
 
-	case strings.HasPrefix(p, util.CBUTMQuickLink):
-		// Простая ссылка одним тапом: без вопросов, source = «Простая <дата>».
-		// Пришло/ушло считается; UTM-детализация — через билдер.
-		idStr := strings.TrimPrefix(p, util.CBUTMQuickLink)
-		chID, err := strconv.ParseInt(idStr, 10, 64)
+	case p == util.CBUTMBuildYes:
+		// Конструктор меток: первый шаг (utm_source).
+		sess, err := b.db.GetSessionPayload(ctx, uid)
+		if err != nil || sess.State != store.SessionUTMCreate {
+			return
+		}
+		payload := map[string]any{"stage": "src"}
+		for k, v := range sess.Payload {
+			if k != "stage" && k != "quick" {
+				payload[k] = v
+			}
+		}
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
+		b.showUTMStage(ctx, uid, sess, "src")
+
+	case p == util.CBUTMBuildNo:
+		// Простая ссылка — без конструктора.
+		b.finishUTMLinkFromSession(ctx, uid)
+
+	case p == util.CBUTMStageSkip, p == util.CBUTMSkipPost:
+		b.utmStageSkip(ctx, uid)
+
+	case p == util.CBUTMSkipCost:
+		// Легаси-кнопка «Без стоимости» — финализируем без стоимости.
+		sess, err := b.db.GetSessionPayload(ctx, uid)
+		if err != nil || sess.State != store.SessionUTMCreate {
+			return
+		}
+		payload := map[string]any{"stage": ""}
+		for k, v := range sess.Payload {
+			if k != "stage" {
+				payload[k] = v
+			}
+		}
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
+		b.finishUTMLinkFromSession(ctx, uid)
+
+	case p == util.CBUTMGWSkip:
+		sess, err := b.db.GetSessionPayload(ctx, uid)
+		if err != nil || sess.State != store.SessionUTMCreate {
+			return
+		}
+		b.utmNextStage(ctx, uid, sess, "gw", "")
+
+	case strings.HasPrefix(p, util.CBUTMGW):
+		idStr := strings.TrimPrefix(p, util.CBUTMGW)
+		gid, err := strconv.ParseInt(idStr, 10, 64)
 		if err != nil {
 			return
 		}
-		b.createSimpleUTMLink(ctx, uid, chID)
+		b.pickUTMGiveaway(ctx, uid, gid)
 
 	case strings.HasPrefix(p, util.CBUTMQuickChSel):
-		// Быстрая ссылка (P6): канал выбран → спрашиваем название.
+		// Трекинг: канал выбран → спрашиваем название.
 		idStr := strings.TrimPrefix(p, util.CBUTMQuickChSel)
 		chID, err := strconv.ParseInt(idStr, 10, 64)
 		if err != nil {
