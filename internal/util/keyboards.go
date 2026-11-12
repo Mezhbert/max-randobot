@@ -88,15 +88,15 @@ const (
 func MainMenuKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().
-		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
-		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
+		AddCallBack("Создать розыгрыш", CBCreateGiveaway).
+		AddCallBack("Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().
-		AddCallBack("🔗 Трекинг", CBUTMQuickCreate).
-		AddCallBack("📊 Аналитика", CBAnalytics)
-	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
+		AddCallBack("Трекинг", CBUTMQuickCreate).
+		AddCallBack("Аналитика", CBAnalytics)
+	kb.AddRow().AddCallBack("Мои каналы", CBMyChannels)
 	kb.AddRow().
-		AddCallBack("🎟 Мои участия", CBMyParticipations).
-		AddCallBack("🆘 Поддержка", CBSupport)
+		AddCallBack("Мои участия", CBMyParticipations).
+		AddCallBack("Поддержка", CBSupport)
 	return kb
 }
 
@@ -104,17 +104,17 @@ func MainMenuKeyboard() *model.Keyboard {
 // (мануал §11: появляется, когда есть незаконченное создание).
 func MainMenuWithDraftKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("📝 Продолжить черновик", CBGwList)
+	kb.AddRow().AddCallBack("Продолжить черновик", CBGwList)
 	kb.AddRow().
-		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
-		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways)
+		AddCallBack("Создать розыгрыш", CBCreateGiveaway).
+		AddCallBack("Мои розыгрыши", CBMyGiveaways)
 	kb.AddRow().
-		AddCallBack("🔗 Трекинг", CBUTMQuickCreate).
-		AddCallBack("📊 Аналитика", CBAnalytics)
-	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
+		AddCallBack("Трекинг", CBUTMQuickCreate).
+		AddCallBack("Аналитика", CBAnalytics)
+	kb.AddRow().AddCallBack("Мои каналы", CBMyChannels)
 	kb.AddRow().
-		AddCallBack("🎟 Мои участия", CBMyParticipations).
-		AddCallBack("🆘 Поддержка", CBSupport)
+		AddCallBack("Мои участия", CBMyParticipations).
+		AddCallBack("Поддержка", CBSupport)
 	return kb
 }
 
@@ -126,32 +126,32 @@ func MainMenuWithDraftKeyboard() *model.Keyboard {
 // работает: платформа принимает attachment (200 OK), но молча выкидывает его
 // (проверено живым API-запросом). Меню — inline.
 var replyMenuTexts = []string{
-	"🎁 Создать розыгрыш",
-	"🔗 Трекинг",
-	"📢 Мои каналы",
-	"📋 Мои розыгрыши",
-	"📊 Аналитика",
-	"🎟 Мои участия",
-	"🆘 Поддержка",
+	"Создать розыгрыш",
+	"Трекинг",
+	"Мои каналы",
+	"Мои розыгрыши",
+	"Аналитика",
+	"Мои участия",
+	"Поддержка",
 }
 
 // ReplyPayloadByText — payload действия по подписи кнопки меню ("", если не
 // кнопка меню). Fallback для текстовых сообщений.
 func ReplyPayloadByText(text string) string {
 	switch text {
-	case "🎁 Создать розыгрыш":
+	case "Создать розыгрыш":
 		return CBCreateGiveaway
-	case "🔗 Трекинг":
+	case "Трекинг":
 		return CBUTMQuickCreate
-	case "📢 Мои каналы":
+	case "Мои каналы":
 		return CBMyChannels
-	case "📋 Мои розыгрыши":
+	case "Мои розыгрыши":
 		return CBMyGiveaways
-	case "📊 Аналитика":
+	case "Аналитика":
 		return CBAnalytics
-	case "🎟 Мои участия":
+	case "Мои участия":
 		return CBMyParticipations
-	case "🆘 Поддержка":
+	case "Поддержка":
 		return CBSupport
 	}
 	return ""
