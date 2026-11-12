@@ -39,6 +39,7 @@ var editFields = map[string]editFieldDef{
 	"finish_at":     {title: "⏰ Дата итогов", col: "finish_at", kind: "date"}, // вводится через смену режима, кнопки в меню нет
 	"winners":       {title: "🏆 Кол-во победителей", col: "winners_count", kind: "number"},
 	"winners_msg":   {title: "✉️ Сообщение победителям", col: "winners_message", kind: "text"},
+	"referral":      {title: "🤝 Рефералка (друзья)", col: "referral_enabled", kind: "referral"},
 	"results_loc":   {title: "📍 Где итоги", col: "results_in_original_post", kind: "resultsloc"},
 	"results_text":  {title: "📄 Текст итогов", col: "results_post_text", kind: "text"},
 	"captcha":       {title: "🤖 Капча", col: "captcha_mode", kind: "captcha"},
@@ -49,7 +50,7 @@ var orderedEditKeys = []string{
 	"name", "post_text", "media", "button_text",
 	"sub_channels", "pub_channels",
 	"publish_at", "finish",
-	"winners", "winners_msg",
+	"winners", "winners_msg", "referral",
 	"results_loc", "results_text",
 	"captcha",
 }
@@ -92,7 +93,7 @@ func (b *Bot) startEditField(ctx context.Context, uid int64, g store.Giveaway, k
 		return
 	}
 
-	// Для выбор-полей (captcha/finishmode/resultsloc) показываем опции кнопками.
+	// Для выбор-полей (captcha/finishmode/resultsloc/referral) показываем опции кнопками.
 	switch def.kind {
 	case "captcha":
 		b.showCaptchaEditOptions(ctx, uid, g)
@@ -102,6 +103,9 @@ func (b *Bot) startEditField(ctx context.Context, uid int64, g store.Giveaway, k
 		return
 	case "resultsloc":
 		b.showResultsLocEditOptions(ctx, uid, g)
+		return
+	case "referral":
+		b.showReferralEditOptions(ctx, uid, g)
 		return
 	case "channels":
 		b.showChannelsEditOptions(ctx, uid, g, key)
@@ -318,8 +322,27 @@ func (b *Bot) showResultsLocEditOptions(ctx context.Context, uid int64, g store.
 	kb.AddRow().
 		AddCallBack("В исходном посте", util.CBGwEditSet+"results_original:1:"+fmt.Sprintf("%d", g.ID)).
 		AddCallBack("Отдельным постом", util.CBGwEditSet+"results_original:0:"+fmt.Sprintf("%d", g.ID))
-	kb.AddRow().AddCallBack("← Назад", util.CBGwEdit+"results_loc:"+fmt.Sprintf("%d", g.ID))
+	kb.AddRow().AddCallBack("← Назад", util.CBGwEdit+"captcha:"+fmt.Sprintf("%d", g.ID))
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, "📍 Где публиковать итоги?", kb)
+}
+
+// showReferralEditOptions — P2: рефералка редактируется после планирования
+// (раньше шаг FSM обещал «изменить можно в редактуре», а пункта в меню не было).
+func (b *Bot) showReferralEditOptions(ctx context.Context, uid int64, g store.Giveaway) {
+	limit := g.ReferralLimit
+	if limit <= 0 {
+		limit = 10 // дефолт из ТЗ (COALESCE в БД)
+	}
+	kb := model.NewKeyboard()
+	kb.AddRow().
+		AddCallBack("✅ Включить", util.CBGwEditSet+"referral:1:"+fmt.Sprintf("%d", g.ID)).
+		AddCallBack("❌ Выключить", util.CBGwEditSet+"referral:0:"+fmt.Sprintf("%d", g.ID))
+	kb.AddRow().AddCallBack("← Назад", util.CBGwEdit+"referral:"+fmt.Sprintf("%d", g.ID))
+	state := "выключена"
+	if g.ReferralEnabled {
+		state = fmt.Sprintf("включена (+1 билет за друга, лимит %d)", limit)
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, "🤝 Реферальная система (сейчас: "+state+")?", kb)
 }
 
 // showChannelsEditOptions — редактирование каналов (подписки/публикации)
@@ -472,11 +495,19 @@ func (b *Bot) refreshPublishedPosts(ctx context.Context, gid int64) {
 	go b.counterUpd(context.Background(), &g) // переиспользуем механизм счётчика
 }
 
-// applyEditSet — применение выбор-опции (captcha/finish/результаты/медиа).
+// applyEditSet — применение выбор-опции (captcha/finish/результаты/медиа/
+// рефералка).
 func (b *Bot) applyEditSet(ctx context.Context, uid int64, key, value string, gid int64) {
 	g, err := b.db.GetGiveaway(ctx, gid, uid)
 	if err != nil {
 		_ = b.api.SendText(ctx, uid, "Розыгрыш не найден.")
+		return
+	}
+	// Граница статуса: applyEditSet достижим и crafted-callback'ом в обход
+	// showEditMenu (который проверяет статус) — без проверки здесь можно
+	// было бы править завершённые/отменённые розыгрыши.
+	if g.Status != store.StatusScheduled && g.Status != store.StatusActive {
+		_ = b.api.SendText(ctx, uid, "Редактировать можно только запланированные и текущие розыгрыши.")
 		return
 	}
 	switch key {
@@ -484,6 +515,8 @@ func (b *Bot) applyEditSet(ctx context.Context, uid int64, key, value string, gi
 		if value == "all" || value == "none" {
 			_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "captcha_mode", value)
 		}
+	case "referral":
+		_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "referral_enabled", value == "1")
 	case "finish":
 		if value == "time" || value == "count" {
 			_ = b.db.UpdateGiveawayFieldAny(ctx, g.ID, "finish_mode", value)

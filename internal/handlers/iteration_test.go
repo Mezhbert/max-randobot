@@ -1174,6 +1174,9 @@ func TestEdit_SectionsComprehensive(t *testing.T) {
 	// Итоги → отдельным постом.
 	click(util.CBGwEditField + "results_loc:" + id)
 	click(util.CBGwEditSet + "results_original:0:" + id)
+	// Рефералка → включить (P2: раньше пункт отсутствовал в меню).
+	click(util.CBGwEditField + "referral:" + id)
+	click(util.CBGwEditSet + "referral:1:" + id)
 	// Медиа → очистить.
 	click(util.CBGwEditField + "media:" + id)
 	click(util.CBGwEditSet + "media:clear:" + id)
@@ -1190,6 +1193,7 @@ func TestEdit_SectionsComprehensive(t *testing.T) {
 	assert.True(t, g.PublishAt.After(time.Now()), "publish_at обновлён на будущее")
 	assert.Equal(t, store.CaptchaAll, g.CaptchaMode)
 	assert.False(t, g.ResultsInOriginalPost)
+	assert.True(t, g.ReferralEnabled, "рефералка должна включаться из редактуры (P2)")
 	assert.Empty(t, g.MediaTokens)
 
 	// Меню редактуры active скрывает время публикации.
@@ -1205,6 +1209,27 @@ func TestEdit_SectionsComprehensive(t *testing.T) {
 	}
 	require.NotEmpty(t, lastMenu, "меню редактуры должно открыться")
 	assert.NotContains(t, lastMenu, "Время публикации", "у active не должно быть кнопки «Время публикации» в меню правки")
+}
+
+// TestEdit_ApplySetStatusGuard — applyEditSet достижим crafted-callback'ом
+// в обход showEditMenu: завершённый розыгрыш править нельзя (P2).
+func TestEdit_ApplySetStatusGuard(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6945
+	testutil.EnsureUser(t, s, uid, "creator")
+
+	gid := seedActiveGiveaway(t, s, uid, "none", false)
+	_, err := s.Pool().Exec(ctx, `UPDATE giveaways SET status='finished', referral_enabled=false WHERE id=$1`, gid)
+	require.NoError(t, err)
+
+	// Crafted-вызов applyEditSet напрямую (минуя меню с проверкой статуса).
+	b.Handle(ctx, callbackUpdate(uid, util.CBGwEditSet+"referral:1:"+strconv.FormatInt(gid, 10)))
+
+	g, err := s.GetGiveaway(ctx, gid, uid)
+	require.NoError(t, err)
+	assert.False(t, g.ReferralEnabled, "завершённый розыгрыш нельзя править через crafted-callback")
 }
 
 // TestFSM_PublishNow_ConfirmSetsFreshTime — «Опубликовать сразу» + неспешное
