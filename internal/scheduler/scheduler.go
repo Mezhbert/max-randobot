@@ -31,6 +31,11 @@ type Scheduler struct {
 	api maxapi.BotAPI
 	db  *store.Store
 	log *slog.Logger
+
+	// botUsername — публичное имя бота для startapp-кнопок участия/итогов.
+	// Пусто до GetMyInfo — тогда кнопка участия деградирует в callback,
+	// а кнопка итогов не добавляется (итоги остаются текстом в посте).
+	botUsername string
 }
 
 // New создаёт Scheduler.
@@ -39,6 +44,13 @@ func New(api maxapi.BotAPI, db *store.Store, log *slog.Logger) *Scheduler {
 		log = slog.Default()
 	}
 	return &Scheduler{api: api, db: db, log: log}
+}
+
+// SetBotUsername задаёт публичное имя бота (для startapp-кнопок из постов).
+func (s *Scheduler) SetBotUsername(name string) {
+	if name != "" {
+		s.botUsername = strings.TrimPrefix(name, "@")
+	}
 }
 
 // PublishPending публикует все scheduled-розыгрыши, у которых наступило publish_at.
@@ -96,10 +108,9 @@ func (s *Scheduler) publishOne(ctx context.Context, id int64) error {
 		return fmt.Errorf("publish: нет каналов публикации")
 	}
 
-	// Кнопка участия со счётчиком участников (стартует с 0): deep-link
-	// max.ru/<bot>/start/part_N — клиент открывает диалог с ботом, участие
-	// принимается там. Без username — callback-fallback.
-	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, 0).Build()}
+	// Кнопка участия со счётчиком участников (стартует с 0): startapp-ссылка
+	// открывает мини-апп участия (без чата бота); без имени бота — callback.
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, 0, s.botUsername).Build()}
 	var media []model.Attachment
 	for _, m := range g.MediaTokens {
 		switch m.Type {
@@ -193,7 +204,7 @@ func (s *Scheduler) UpdateParticipantCounter(ctx context.Context, g *store.Givea
 		return
 	}
 
-	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, count).Build()}
+	buttons := []model.Attachment{util.ParticipateKeyboardBuilder(g.ButtonText, g.ID, count, s.botUsername).Build()}
 	var media []model.Attachment
 	for _, m := range g.MediaTokens {
 		switch m.Type {
@@ -300,23 +311,30 @@ func (s *Scheduler) finishOne(ctx context.Context, id int64) error {
 
 // publishResults публикует итоги: либо редактирует исходный пост, либо (при
 // ошибке/недоступности редактирования — fallback) отправляет отдельным постом.
-// Победители — списком @юзернеймов с кликабельными тегами прямо в тексте:
-// никакой кнопки под итогами не нужно (мини-апп результатов удалён).
-// Гарантия: итоги появляются ровно один раз.
+// Победители — списком @юзернеймов с кликабельными тегами прямо в тексте.
+// Под итогами — inline-кнопка «🏆 Проверить результаты» (P4): открывает
+// страницу результатов в мини-аппе (startapp-ссылка; без имени бота кнопки
+// нет). Гарантия: итоги появляются ровно один раз.
 func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winners []int64) error {
 	// Резолвим имена победителей через БД.
 	ws := s.resolveWinners(ctx, winners)
+
+	// Кнопка итогов (nil, если имя бота ещё не известно).
+	var resultsBtn []model.Attachment
+	if kb := util.ResultsKeyboard(g.ID, s.botUsername); kb != nil {
+		resultsBtn = []model.Attachment{kb.Build()}
+	}
 
 	if g.ResultsInOriginalPost && len(g.PublishMessageIDs) > 0 {
 		// Ветка «в исходном посте»: оригинальный текст сохраняется, итоги дописываются.
 		appendedText := BuildResultsAppended(g, ws)
 		for chatID, mid := range g.PublishMessageIDs {
-			if err := s.api.EditChatText(ctx, mid, appendedText, nil, model.FormatMarkdown); err != nil {
+			if err := s.api.EditChatText(ctx, mid, appendedText, resultsBtn, model.FormatMarkdown); err != nil {
 				// MAX ограничивает время на редактирование сообщения; для длинного
 				// розыгрыша edit молча падал. Логируем и делаем fallback — отдельный пост.
 				s.log.Warn("edit results into original post — fallback to separate post",
 					"giveaway", g.ID, "chat", chatID, "mid", mid, "err", err)
-				if nmid, ferr := s.api.SendToChat(ctx, chatID, appendedText, nil, model.FormatMarkdown); ferr == nil {
+				if nmid, ferr := s.api.SendToChat(ctx, chatID, appendedText, resultsBtn, model.FormatMarkdown); ferr == nil {
 					_ = s.db.StoreResultsMessageID(ctx, g.ID, chatID, nmid)
 				} else {
 					s.log.Error("results fallback send failed", "giveaway", g.ID, "chat", chatID, "err", ferr)
@@ -337,7 +355,7 @@ func (s *Scheduler) publishResults(ctx context.Context, g *store.Giveaway, winne
 		if _, ok := g.ResultsMessageIDs[ch.ChatID]; ok {
 			continue
 		}
-		mid, err := s.api.SendToChat(ctx, ch.ChatID, resultsText, nil, model.FormatMarkdown)
+		mid, err := s.api.SendToChat(ctx, ch.ChatID, resultsText, resultsBtn, model.FormatMarkdown)
 		if err != nil {
 			s.log.Warn("results post to channel", "channel", ch.ChatID, "err", err)
 			continue

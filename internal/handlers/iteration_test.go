@@ -597,17 +597,37 @@ func TestResults_AppendedEscape(t *testing.T) {
 
 // ---------- Лампочка: хинт сообщением + Продолжить ----------
 
-// TestParticipateButton_IsCallback — кнопка участия под постом: CALLBACK
-// (part:<id>). Deep-link не годится: повторный клик у уже запущенного бота
-// открывает диалог на клиенте, но bot_started НЕ присылается — участие
-// терялось (подтверждено логами). Callback приходит всегда; капча-картинка
-// в личку открывает диалог с ботом.
-func TestParticipateButton_IsCallback(t *testing.T) {
-	kb := util.ParticipateKeyboardBuilder("Участвовать", 5, 3)
+// TestParticipateButton_LinkAndFallback — кнопка участия под постом (P3b):
+// с именем бота — startapp-ССЫЛКА в мини-апп участия (механика проверена
+// живьём на трекинге), без имени — callback-fallback (старые посты, участие
+// в чате). Счётчик участников — в подписи в обоих режимах.
+func TestParticipateButton_LinkAndFallback(t *testing.T) {
+	// Основной путь: startapp-ссылка на страницу участия.
+	kb := util.ParticipateKeyboardBuilder("Участвовать", 5, 3, "my_bot")
 	btn := kb.Build().Payload.Buttons[0][0]
-	assert.Equal(t, model.ButtonCallback, btn.Type, "кнопка участия — callback")
-	assert.Equal(t, "part:5", btn.Payload)
+	assert.Equal(t, model.ButtonLink, btn.Type, "кнопка участия — ссылка в мини-апп")
+	assert.Equal(t, "https://max.ru/my_bot?startapp=part_5", btn.URL)
 	assert.Contains(t, btn.Text, "(3)", "счётчик участников в подписи кнопки")
+
+	// Fallback: имя бота ещё не узнали — callback (участие в чате бота).
+	kbCb := util.ParticipateKeyboardBuilder("Участвовать", 5, 3, "")
+	btnCb := kbCb.Build().Payload.Buttons[0][0]
+	assert.Equal(t, model.ButtonCallback, btnCb.Type, "без имени бота — callback-fallback")
+	assert.Equal(t, "part:5", btnCb.Payload)
+	assert.Contains(t, btnCb.Text, "(3)")
+}
+
+// TestResultsButton_Link — кнопка итогов (P4): startapp-ссылка на страницу
+// результатов; без имени бота кнопки нет (nil).
+func TestResultsButton_Link(t *testing.T) {
+	kb := util.ResultsKeyboard(7, "my_bot")
+	require.NotNil(t, kb)
+	btn := kb.Build().Payload.Buttons[0][0]
+	assert.Equal(t, model.ButtonLink, btn.Type)
+	assert.Equal(t, "https://max.ru/my_bot?startapp=results_7", btn.URL)
+	assert.Contains(t, btn.Text, "Проверить результаты")
+
+	assert.Nil(t, util.ResultsKeyboard(7, ""), "без имени бота кнопки итогов не должно быть")
 }
 
 // TestMediaStepKeyboard_SkipVsNext — на шаге медиа кнопка зависит от наличия

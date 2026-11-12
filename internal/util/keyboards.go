@@ -191,18 +191,44 @@ func ConfirmErrorKeyboard(giveawayID int64) *model.Keyboard {
 	return kb
 }
 
+// StartappLink — диплинк открытия мини-аппа бота с параметром start_param.
+// Механика офиц. (dev.max.ru/webapps): max.ru/<bot>?startapp=<param> открывает
+// мини-апп БЕЗ чата бота; клиент передаёт подписанный init_data с user_id.
+// Проверено живьём на трекинг-ссылках (startapp=u_<code>).
+func StartappLink(botUsername, param string) string {
+	return "https://max.ru/" + botUsername + "?startapp=" + param
+}
+
 // ParticipateKeyboardBuilder — кнопка «Участвовать (N)» под постом розыгрыша.
 //
-// CALLBACK-кнопка (part:<id>): message_callback приходит ВСЕГДА, в отличие от
-// deep-link. Проверено живьём: повторный клик max.ru/<bot>/start/part_N у уже
-// запущенного бота просто открывает диалог на клиенте — bot_started НЕ
-// присылается (в логах ни одного вебхука на клик) → участие терялось.
-// Ответ бота в личку (капча-картинка / карточка «Вы участвуете») открывает
-// диалог с ботом — юзер «проваливается» в чат.
-func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, participants int) *model.Keyboard {
+// Основной путь (botUsername известен): LINK-кнопка max.ru/<bot>?startapp=part_<id>
+// — открывает мини-апп участия (страница participate.html): подписки, капча и
+// подтверждение там, чат бота не открывается, user_id приходит подписанным
+// (init_data). Механика startapp-ссылок проверена живьём на трекинге.
+//
+// Fallback (имя бота ещё не узнали): CALLBACK-кнопка (part:<id>) — участие в
+// чате бота (капча картинкой). Callback приходит всегда; ответ бота в личку
+// открывает диалог. Так остаются рабочими и старые опубликованные посты.
+func ParticipateKeyboardBuilder(buttonText string, giveawayID int64, participants int, botUsername string) *model.Keyboard {
 	kb := model.NewKeyboard()
 	label := fmt.Sprintf("%s (%d)", buttonText, participants)
+	if botUsername != "" {
+		kb.AddRow().AddLink(label, StartappLink(botUsername, "part_"+strconv.FormatInt(giveawayID, 10)))
+		return kb
+	}
 	kb.AddRow().AddCallBack(label, CBParticipate+strconv.FormatInt(giveawayID, 10))
+	return kb
+}
+
+// ResultsKeyboard — кнопка «🏆 Проверить результаты» под постом с итогами
+// (P4): открывает страницу результатов в мини-аппе. Пустой username → nil
+// (кнопки нет — итоги и так текстом в посте).
+func ResultsKeyboard(giveawayID int64, botUsername string) *model.Keyboard {
+	if botUsername == "" {
+		return nil
+	}
+	kb := model.NewKeyboard()
+	kb.AddRow().AddLink("🏆 Проверить результаты", StartappLink(botUsername, "results_"+strconv.FormatInt(giveawayID, 10)))
 	return kb
 }
 
@@ -257,7 +283,7 @@ func GiveawayAttachments(buttonText string, giveawayID int64, mediaTokens []Medi
 	if preview {
 		kb = PreviewKeyboardBuilder(buttonText, giveawayID)
 	} else {
-		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, 0)
+		kb = ParticipateKeyboardBuilder(buttonText, giveawayID, 0, "")
 	}
 	attachments = append(attachments, kb.Build())
 	return attachments

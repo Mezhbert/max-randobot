@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Открываю канал…</title>
+<title>RandoMaster — розыгрыши и трекинг</title>
 <style>
-  :root { --bg:#0f1420; --accent:#7c5cff; --text:#e8ecf5; --muted:#8b93a7; }
+  :root { --bg:#0f1420; --card:#1a2235; --accent:#7c5cff; --text:#e8ecf5; --muted:#8b93a7; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { background:var(--bg); color:var(--text); font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
-         min-height:100vh; display:flex; align-items:center; justify-content:center; }
-  .box { text-align:center; padding:24px; }
+         min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .box { width:100%; max-width:400px; text-align:center; }
   .spin { width:44px; height:44px; margin:0 auto 18px; border-radius:50%;
           border:3px solid rgba(124,92,255,.2); border-top-color:var(--accent);
           animation:rot .8s linear infinite; }
@@ -18,39 +18,79 @@
   .t2 { font-size:13px; color:var(--muted); margin-top:6px; }
   .btn { display:inline-block; margin-top:18px; padding:10px 22px; border-radius:12px;
          background:var(--accent); color:#fff; text-decoration:none; font-size:14px; font-weight:600; }
-  .err { display:none; }
+  .card { background:var(--card); border-radius:18px; padding:26px 22px; }
+  .logo { font-size:48px; }
+  h1 { font-size:22px; margin:8px 0 14px; }
+  .feat { text-align:left; font-size:14px; line-height:1.55; color:var(--text); margin-top:14px; }
+  .feat div { margin-bottom:10px; }
+  .muted { color:var(--muted); font-size:13px; margin-top:14px; line-height:1.5; }
+  .hidden { display:none; }
 </style>
 </head>
 <body>
 <div class="box">
-  <div class="spin" id="sp"></div>
-  <div class="t1" id="t1">Открываю канал…</div>
-  <div class="t2">секундочку</div>
-  <a class="btn" id="go" style="display:none" href="#">Перейти сейчас</a>
+  <!-- Спиннер трекинг-редиректора (пока идёт запрос /app/api/track) -->
+  <div id="track-view" class="hidden">
+    <div class="spin" id="sp"></div>
+    <div class="t1" id="t1">Открываю канал…</div>
+    <div class="t2">секундочку</div>
+    <a class="btn" id="go" style="display:none" href="#">Перейти сейчас</a>
+  </div>
+
+  <!-- Главная страница мини-аппа (статичная, P5) -->
+  <div id="main-view" class="card hidden">
+    <div class="logo">🎁</div>
+    <h1>RandoMaster</h1>
+    <div class="feat">
+      <div>🎉 <b>Розыгрыши</b> — пост с кнопкой участия за минуту: бот проверит подписки, отсечёт ботов капчей и честно выберет победителей.</div>
+      <div>📈 <b>Трекинг</b> — своя ссылка на каждую рекламную закупку: видно, сколько переходов и подписчиков принесла каждая.</div>
+    </div>
+    <div class="muted">Создавайте розыгрыши и ссылки в чате с ботом — нажмите «Начать» или найдите бота в поиске MAX.</div>
+  </div>
 </div>
 <script>
-// Трекинг-редиректор мини-аппа MAX.
-// Ссылка https://max.ru/<bot>?startapp=u_<code> открывает эту страницу;
-// клиент MAX передаёт window.WebApp.initData (подписанный user — сервер
-// валидирует и фиксирует клик с идентификацией) и start_param (код ссылки).
-// После ответа сервера — мгновенный редирект в канал/пост. Чат бота НЕ открывается.
+// Маршрутизатор мини-аппа (P5: главная — статичная, участие/итоги — отдельные
+// страницы). Мини-апп бота один; start_param из startapp-ссылки определяет,
+// что открыть:
+//   u_<code>       — трекинг-редиректор (этот же файл, POST /app/api/track);
+//   part_<id>/g_<id> — страница участия (participate.html);
+//   results_<id>/r_<id> — страница итогов (results.html);
+//   ничего          — статичная главная.
 (function () {
   var api = window.WebApp || {};
   var initData = '';
-  var code = '';
+  var sp = '';
   try {
     initData = api.initData || '';
-    code = (api.initDataUnsafe && api.initDataUnsafe.start_param) || '';
+    sp = (api.initDataUnsafe && api.initDataUnsafe.start_param) || '';
   } catch (e) {}
-  if (!code) {
+  if (!sp) {
     // Фолбэк: start_param может прийти и query-параметром (веб-версия).
-    try { code = new URLSearchParams(location.search).get('startapp') ||
-                 new URLSearchParams(location.search).get('start_param') || ''; } catch (e) {}
+    try { sp = new URLSearchParams(location.search).get('startapp') ||
+               new URLSearchParams(location.search).get('start_param') || ''; } catch (e) {}
   }
-  // Формат кода: u_<hex> — префикс отрезаем, остальное серверу.
-  if (code.indexOf('u_') === 0) code = code.slice(2);
 
-  if (!code) { showFallback('Мини-апп розыгрышей'); return; }
+  function go(page, param) {
+    location.replace(page + '?start_param=' + encodeURIComponent(param) +
+                     '&init_data=' + encodeURIComponent(initData));
+  }
+
+  if (sp.indexOf('part_') === 0 || sp.indexOf('g_') === 0) { go('/app/participate.html', sp); return; }
+  if (sp.indexOf('results_') === 0 || sp.indexOf('r_') === 0) { go('/app/results.html', sp); return; }
+
+  if (sp.indexOf('u_') === 0) { runTrack(sp.slice(2)); return; }
+
+  // Без start_param — статичная главная (P5).
+  document.getElementById('main-view').classList.remove('hidden');
+})();
+
+// Трекинг-редиректор: код ссылки → сервер считает клик (с user_id из
+// подписанной init_data) → отвечает, куда вести (канал/пост).
+function runTrack(code) {
+  document.getElementById('track-view').classList.remove('hidden');
+  var api = window.WebApp || {};
+  var initData = '';
+  try { initData = api.initData || ''; } catch (e) {}
 
   fetch('/app/api/track', {
     method: 'POST',
@@ -66,7 +106,7 @@
       showFallback('Канал недоступен');
     }
   }).catch(function () { showFallback('Ошибка соединения'); });
-})();
+}
 
 function showGo(dest) {
   var sp = document.getElementById('sp'); if (sp) sp.style.display = 'none';

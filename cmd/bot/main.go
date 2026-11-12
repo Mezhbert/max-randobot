@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/maxbot/giveawaybot/internal/captcha"
 	"github.com/maxbot/giveawaybot/internal/config"
 	"github.com/maxbot/giveawaybot/internal/dedup"
 	"github.com/maxbot/giveawaybot/internal/handlers"
@@ -94,14 +95,27 @@ func main() {
 		}
 	}()
 
-	// Узнаём публичное имя бота — нужно для построения UTM-диплинков.
-	// Заодно регистрируем меню команд бота (PatchCommands), чтобы при вводе «/»
-	// в MAX появлялся список доступных команд, а не «команды не найдены».
+	// Узнаём публичное имя бота — нужно для startapp-кнопок участия/итогов и
+	// UTM-диплинков. Заодно регистрируем меню команд бота (PatchCommands), чтобы
+	// при вводе «/» в MAX появлялся список доступных команд, а не «команды не найдены».
+	appDeps := &webapp.Deps{
+		DB:       db,
+		BotToken: cfg.BotToken,
+		// Отдельный инстанс капчи мини-аппа: ключи "<userID>:<giveawayID>"
+		// не пересекаются с чатовыми ("<userID>").
+		Captcha: captcha.New(0),
+		Participate: func(giveawayID, userID int64) webapp.ParticipateResult {
+			r := bot.ParticipateFromApp(giveawayID, userID)
+			return webapp.ParticipateResult{Ok: r.Ok, Err: r.Err, Notifiable: r.Notifiable}
+		},
+	}
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if info, err := api.Bots.GetMyInfo(ic); err == nil && info.Username != "" {
 			bot.SetUsername(info.Username)
+			sch.SetBotUsername(info.Username) // startapp-кнопки из постов
+			appDeps.BotUsername = info.Username
 			slog.Info("bot username", "name", info.Username)
 		}
 		if err := api.RegisterCommands(ic); err != nil {
@@ -173,11 +187,9 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		api.Metrics().WritePrometheus(w)
 	})
-	// Мини-апп: трекинг-редиректор (startapp=u_<code>) + статика.
-	mux.Handle("/app/", webapp.Handler(&webapp.Deps{
-		DB:       db,
-		BotToken: cfg.BotToken,
-	}, slog.Default()))
+	// Мини-апп: трекинг-редиректор (startapp=u_<code>), страницы участия и
+	// итогов (part_<id>/results_<id>) + статика.
+	mux.Handle("/app/", webapp.Handler(appDeps, slog.Default()))
 	// Бесшовные трекинг-ссылки: /r/<code> → клик + 302 на канал/пост.
 	mux.Handle("/r/", webapp.RedirectHandler(db, slog.Default()))
 
