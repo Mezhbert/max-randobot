@@ -624,7 +624,12 @@ func (b *Bot) wizardSelectOption(ctx context.Context, uid int64, g store.Giveawa
 		}
 		// Живая проверка админства (кэш мог протухнуть после смены токена).
 		live, lerr := b.api.IsBotAdminInChat(ctx, ch.ChatID)
-		if lerr != nil || !live {
+		if lerr != nil {
+			// Ошибка проверки ≠ «не админ» (платформа/сеть легли): сброс флага
+			// и блокировка выбора парализуют мастера при простое API. Живём по
+			// кэшу; дефицит прав всё равно поймает публикация (свой ретрай/кап).
+			b.log.Warn("channel live check (использую кэш)", "err", lerr, "chat", ch.ChatID)
+		} else if !live {
 			_ = b.db.SetChannelAdminFlag(ctx, ch.ID, false)
 			b.api.AnswerCallback(ctx, cbID, "⚠️ Проверка: бот больше не админ в «"+channelLabel(ch)+"». Передобавьте канал")
 			gg, _ := b.db.GetGiveawayAny(ctx, g.ID)

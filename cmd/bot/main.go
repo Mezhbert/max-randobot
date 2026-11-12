@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"io"
 	"log/slog"
@@ -143,7 +144,10 @@ func main() {
 		// запускал обработку диплинка до того, как библиотечный handler
 		// проверял X-Max-Bot-Api-Secret — подделанный bot_started регистрировал
 		// участников без подписи. Здесь — граница доверия, дальше всё аутентично.
-		if secret := r.Header.Get("X-Max-Bot-Api-Secret"); secret == "" || secret != cfg.WebhookSecret {
+		// Constant-time (subtle): наивное != течёт таймингом по совпавшему
+		// префиксу (известная дыра GetHandler самого SDK, см. skill
+		// webhooks-and-security.md).
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Max-Bot-Api-Secret")), []byte(cfg.WebhookSecret)) != 1 {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}
