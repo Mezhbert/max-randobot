@@ -83,13 +83,14 @@ const (
 	CBParticipate = "part:" // + giveaway_id
 )
 
-// MainMenuKeyboard — главное меню (мануал §11): главные функции первым
-// рядом, пары «данные + аналитика» вместе.
+// MainMenuKeyboard — главное меню (мануал §11). Высоту кнопок и перенос
+// текста платформа MAX не позволяет менять (обрезает) — главные функции
+// выделены отдельными ПОЛНОШИРИНОВЫМИ рядами: визуально крупнее и текст
+// не обрезается.
 func MainMenuKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
-	kb.AddRow().
-		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
-		AddCallBack("📈 Трекинг", CBUTMQuickCreate)
+	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
+	kb.AddRow().AddCallBack("📈 Трекинг", CBUTMQuickCreate)
 	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
 	kb.AddRow().
 		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways).
@@ -105,9 +106,8 @@ func MainMenuKeyboard() *model.Keyboard {
 func MainMenuWithDraftKeyboard() *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("📝 Продолжить черновик", CBGwList)
-	kb.AddRow().
-		AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway).
-		AddCallBack("📈 Трекинг", CBUTMQuickCreate)
+	kb.AddRow().AddCallBack("🎁 Создать розыгрыш", CBCreateGiveaway)
+	kb.AddRow().AddCallBack("📈 Трекинг", CBUTMQuickCreate)
 	kb.AddRow().AddCallBack("📢 Мои каналы", CBMyChannels)
 	kb.AddRow().
 		AddCallBack("📋 Мои розыгрыши", CBMyGiveaways).
