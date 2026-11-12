@@ -312,44 +312,86 @@ func TestParticipants_KickAndCSV(t *testing.T) {
 
 // ---------- UTM без канала ----------
 
-// TestUTM_QuickNoChannel — трекинг-ссылка из «Аналитика» создаётся без канала.
-// Билдер двухшаговый: источник → пост-источник.
-func TestUTM_QuickNoChannel(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
+// TestUTM_QuickLink_ChannelPickerFlow — P6: «Трекинг» → выбор канала из
+// «мои каналы» → название → бот выдаёт ссылку (без поста/стоимости).
+// Ссылка привязана к каналу; главный URL — startapp (мини-апп считает клики
+// с user_id).
+func TestUTM_QuickLink_ChannelPickerFlow(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6601
 	testutil.EnsureUser(t, s, uid, "owner")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8601, Title: "Мой канал", IsBotAdmin: true})
+	require.NoError(t, err)
 
-	b.Handle(ctx, callbackUpdate(uid, util.CBAnalytics))
+	// Шаг 1: выбор канала — пикер со списком каналов.
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
-	b.Handle(ctx, msgUpdate(uid, "Реклама у Петрова"))  // шаг 1: источник
-	b.Handle(ctx, msgUpdate(uid, "Пост в TG от 15.10")) // шаг 2: пост-источник
-	b.Handle(ctx, msgUpdate(uid, "1500"))               // шаг 3: стоимость
+	pickerShown := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Выберите канал") {
+			pickerShown = true
+		}
+	}
+	require.True(t, pickerShown, "первым шагом должен быть выбор канала")
+
+	// Шаг 2: канал выбран → запрос названия.
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickChSel+strconv.FormatInt(ch.ID, 10)))
+	// Шаг 3: название — и ссылка готова (без вопросов про пост/стоимость).
+	b.Handle(ctx, msgUpdate(uid, "Реклама у Петрова"))
 
 	all, err := s.ListUTMStatsAll(ctx, uid)
 	require.NoError(t, err)
-	found := false
-	for _, l := range all {
-		if l.Source == "Реклама у Петрова" {
-			found = true
-			assert.Equal(t, "Пост в TG от 15.10", l.PostRef, "пост-источник должен сохраниться")
-			assert.InDelta(t, 1500.0, l.Cost, 0.01, "стоимость должна сохраниться")
+	require.Len(t, all, 1, "быстрая ссылка создаётся сразу после названия")
+	assert.Equal(t, "Реклама у Петрова", all[0].Source)
+	assert.Equal(t, "", all[0].PostRef, "быстрая ссылка — без поста-источника")
+	assert.InDelta(t, 0.0, all[0].Cost, 0.01, "быстрая ссылка — без стоимости")
+
+	// Ссылка привязана к выбранному каналу.
+	stats, err := s.ListUTMStats(ctx, uid, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+
+	// В ответе бота — startapp-ссылка (трафик через мини-апп).
+	linkShown := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "?startapp=u_") {
+			linkShown = true
 		}
 	}
-	assert.True(t, found, "быстрая UTM-ссылка должна создаться без канала")
+	assert.True(t, linkShown, "бот должен выдать startapp-ссылку мини-аппа")
 }
 
-// TestUTM_SkipPost — кнопка «⏭ Без поста-источника»: ссылка создаётся,
-// post_ref пустой.
+// TestUTM_QuickLink_NoChannels — пикер без каналов: подсказка вместо флоу.
+func TestUTM_QuickLink_NoChannels(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6603
+	testutil.EnsureUser(t, s, uid, "owner")
+
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
+	hinted := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Сначала добавьте канал") {
+			hinted = true
+		}
+	}
+	assert.True(t, hinted, "без каналов — подсказка добавить канал в «Мои каналы»")
+}
+
+// TestUTM_SkipPost — кнопка «⏭ Без поста-источника» в БИЛДЕРЕ (P7): ссылка
+// создаётся, post_ref пустой.
 func TestUTM_SkipPost(t *testing.T) {
 	b, s, _, cleanup := newBot(t)
 	defer cleanup()
 	ctx := context.Background()
 	const uid = 6602
 	testutil.EnsureUser(t, s, uid, "owner")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8602, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
 
-	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
 	b.Handle(ctx, msgUpdate(uid, "Сторис"))
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipPost))
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipCost))
@@ -540,8 +582,8 @@ func TestUTM_PrivateChannel_NoLinkButton(t *testing.T) {
 	assert.False(t, hasAnyLink, "у приватного канала не может быть link-кнопки")
 }
 
-// TestUTM_QuickClick_ShowsStartMenu — быстрая ссылка (без канала): клик даёт
-// обычный стартовый экран бота.
+// TestUTM_QuickClick_ShowsStartMenu — ЛЕГАСИ-ссылка без канала (остались с
+// прошлых версий): клик по диплинку utm_<code> даёт обычный стартовый экран.
 func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
@@ -550,16 +592,11 @@ func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
 	testutil.EnsureUser(t, s, owner, "owner")
 	testutil.EnsureUser(t, s, visitor, "visitor")
 
-	b.Handle(ctx, callbackUpdate(owner, util.CBUTMQuickCreate))
-	b.Handle(ctx, msgUpdate(owner, "Реклама"))
-	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipPost))
-	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipCost))
-
-	all, err := s.ListUTMStatsAll(ctx, owner)
+	// Сеем канал-менее ссылку напрямую (новые ссылки всегда канальные, P6).
+	_, err := s.CreateUTMLink(ctx, owner, 0, "Реклама", "referral", "Реклама", "", "deadbeef01", 0)
 	require.NoError(t, err)
-	require.Len(t, all, 1)
 
-	b.SetPendingStart(visitor, "utm_"+all[0].Code)
+	b.SetPendingStart(visitor, "utm_deadbeef01")
 	b.Handle(ctx, botStartedUpdate(visitor))
 
 	sawStart := false
@@ -568,7 +605,7 @@ func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
 			sawStart = true
 		}
 	}
-	assert.True(t, sawStart, "быстрая ссылка без канала → стартовый экран бота")
+	assert.True(t, sawStart, "легаси-ссылка без канала → стартовый экран бота")
 }
 
 // ---------- Итоги: экранирование ----------

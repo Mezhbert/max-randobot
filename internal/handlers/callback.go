@@ -488,6 +488,15 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		}
 		b.createSimpleUTMLink(ctx, uid, chID)
 
+	case strings.HasPrefix(p, util.CBUTMQuickChSel):
+		// Быстрая ссылка (P6): канал выбран → спрашиваем название.
+		idStr := strings.TrimPrefix(p, util.CBUTMQuickChSel)
+		chID, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return
+		}
+		b.pickQuickUTMChannel(ctx, uid, chID)
+
 	case strings.HasPrefix(p, util.CBUTMCreate):
 		// Начать создание UTM-ссылки на канал
 		b.startCreateUTM(ctx, uid, p)

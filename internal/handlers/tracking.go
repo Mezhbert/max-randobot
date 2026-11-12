@@ -212,23 +212,68 @@ func (b *Bot) showUTMMenu(ctx context.Context, uid int64, p string) {
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid, text, kb)
 }
 
-// startQuickUTM — быстрая трекинг-ссылка БЕЗ привязки к каналу (из меню
-// «Аналитика»). Юзер вводит только название источника — ссылка готова.
+// startQuickUTM — БЫСТРАЯ трекинг-ссылка (P6): выбор канала из «мои каналы» →
+// название → бот выдаёт ссылку. Весь трафик идёт через мини-апп (startapp):
+// бот запоминает id кликнувшего и ведёт его в канал, не открывая чат.
 func (b *Bot) startQuickUTM(ctx context.Context, uid int64) {
-	if err := b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{"channel_id": float64(0)}); err != nil {
-		_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+	channels, err := b.db.ListChannels(ctx, uid)
+	if err != nil || len(channels) == 0 {
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"📈 Трекинг\n\nСначала добавьте канал в «Мои каналы» — куда должна вести ссылка.",
+			util.BackKeyboard())
+		return
+	}
+	var admin []store.Channel
+	for _, c := range channels {
+		if c.IsBotAdmin {
+			admin = append(admin, c)
+		}
+	}
+	if len(admin) == 0 {
+		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+			"📈 Трекинг\n\nНет каналов, где бот админ. Сначала добавьте бота админом в канал.",
+			util.BackKeyboard())
+		return
+	}
+	kb := model.NewKeyboard()
+	for _, c := range admin {
+		kb.AddRow().AddCallBack("📢 "+ifEmpty(c.Title, fmt.Sprintf("канал #%d", c.ChatID)),
+			util.CBUTMQuickChSel+strconv.FormatInt(c.ID, 10))
+	}
+	kb.AddRow().AddCallBack("✖ Отмена", util.CBMainMenu)
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
+		"📈 Трекинг — быстрая ссылка\n\nВыберите канал, на который будет вести ссылка:",
+		kb)
+}
+
+// pickQuickUTMChannel — канал выбран (P6, шаг 1/2): запоминаем и спрашиваем
+// название ссылки (шаг 2/2) — после ввода бот сразу выдаёт ссылку.
+func (b *Bot) pickQuickUTMChannel(ctx context.Context, uid int64, chID int64) {
+	// Канал должен принадлежать юзеру — crafted-callback с чужим channel_id
+	// иначе привязал бы трекинг-ссылку к чужому каналу.
+	ch, err := b.db.GetChannel(ctx, chID, uid)
+	if err != nil {
+		_ = b.api.SendText(ctx, uid, "Канал не найден.")
+		return
+	}
+	if err := b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
+		"channel_id": float64(chID), "quick": true,
+	}); err != nil {
+		b.log.Warn("utm: set session", "err", err, "user", uid)
+		_ = b.api.SendText(ctx, uid, "⚠️ Не удалось начать создание ссылки. Попробуйте позже.")
 		return
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"🔗 Создание трекинг-ссылки\n\n"+
-			"Отправьте название источника — откуда будут приходить подписчики.\n"+
-			"Например: «Telegram», «Реклама у Иванова», «Пост в VK»\n\n"+
-			"Бот сгенерирует уникальную ссылку с трекингом автоматически.",
+		fmt.Sprintf("🔗 Канал «%s» выбран.\n\n"+
+			"Отправьте НАЗВАНИЕ ссылки — как её искать в статистике.\n"+
+			"Например: «Telegram», «Реклама у Иванова», «Сторис 15.11»",
+			ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))),
 		util.CancelKeyboard())
 }
 
-// startCreateUTM — начало создания UTM-ссылки. Юзер вводит только название
-// источника (одно слово/фразу) — остальное бот генерит автоматически.
+// startCreateUTM — КОНСТРУКТОР трекинг-ссылки (P7): канал → название →
+// пост-источник → стоимость. В отличие от быстрой ссылки (P6) добавляется
+// выбор поста (куда вести: конкретный пост или канал) и стоимость для CPA.
 func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 	idStr := strings.TrimPrefix(p, util.CBUTMCreate)
 	chID, err := strconv.ParseInt(idStr, 10, 64)
@@ -247,10 +292,9 @@ func (b *Bot) startCreateUTM(ctx context.Context, uid int64, p string) {
 		return
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"🔗 Создание трекинг-ссылки\n\n"+
-			"Отправьте название источника — откуда будут приходить подписчики.\n"+
-			"Например: «Telegram», «Реклама у Иванова», «Пост в VK»\n\n"+
-			"Бот сгенерирует уникальную ссылку с трекингом автоматически.",
+		"🎛 Конструктор трекинг-ссылки\n\n"+
+			"Шаг 1/3. Отправьте НАЗВАНИЕ ссылки — как её искать в статистике.\n"+
+			"Например: «Telegram», «Реклама у Иванова», «Пост в VK»",
 		util.CancelKeyboard())
 }
 
@@ -295,10 +339,15 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 	}
 
 	if stage != "post" {
-		// Шаг 1: название источника.
+		// Шаг «название ссылки» (общий у быстрой ссылки и конструктора).
 		source := strings.TrimSpace(text)
 		if err := util.ValidateUTMSource(source); err != nil {
 			_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
+			return true
+		}
+		// Быстрая ссылка (P6): название — последний шаг, ссылка сразу.
+		if quick, _ := sess.Payload["quick"].(bool); quick {
+			b.finishUTMLink(ctx, uid, chID, source, "", 0)
 			return true
 		}
 		if err := b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
@@ -309,11 +358,12 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 			return true
 		}
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"📍 Пост-источник (необязательно).\n\n"+
-				"Где будет размещена ссылка? Отправьте ссылку на конкретный пост "+
-				"или короткое описание (напр. «Пост в TG от 15.10», «Сторис»). "+
-				"В аналитике будет видно, какой пост привёл каждого подписчика.\n\n"+
-				"Можно пропустить — тогда привязки к посту не будет.",
+			"📍 Шаг 2/3. Пост-источник (необязательно).\n\n"+
+				"Отправьте ссылку на конкретный пост (https://max.ru/…) — посетитель "+
+				"придёт на него, а не на канал.\n"+
+				"Или короткое описание размещения (напр. «Сторис», «Пост в TG от 15.10»). "+
+				"В аналитике будет видно, какое размещение привело подписчиков.\n\n"+
+				"Можно пропустить — тогда ссылка ведёт на сам канал.",
 			util.PostRefKeyboard())
 		return true
 	}
@@ -331,7 +381,7 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 		b.log.Warn("utm: set session", "err", err, "user", uid)
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-		"💰 Стоимость выхода (необязательно).\n\n"+
+		"💰 Шаг 3/3. Стоимость выхода (необязательно).\n\n"+
 			"Сколько заплачено за размещение этой ссылки (₽)? В аналитике посчитается "+
 			"CPA — цена подписчика. Можно пропустить.",
 		util.CostKeyboard())
@@ -339,7 +389,9 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 }
 
 // finishUTMLink — финал билдера: создаёт ссылку и показывает результат.
-// Вызывается из шага «пост» и по кнопке «⏭ Без поста-источника».
+// ГЛАВНАЯ ссылка — startapp-диплинк мини-аппа (P6): весь трафик идёт через
+// мини-апп, бот запоминает id кликнувшего (init_data) и ведёт его в
+// канал/на пост — чат бота не открывается, юзер попадает в БД бота.
 func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRef string, cost float64) {
 	code := util.RandomCode(10)
 	if _, err := b.db.CreateUTMLink(ctx, uid, chID, source, "referral", source, postRef, code, cost); err != nil {
@@ -354,53 +406,53 @@ func (b *Bot) finishUTMLink(ctx context.Context, uid, chID int64, source, postRe
 		b.log.Warn("botUsername не задан — ссылка будет нерабочей", "user", uid)
 		botName = "ВАШ_БОТ"
 	}
-	// Бесшовная ссылка: открывает мини-апп (без чата бота!), сервер
-	// идентифицирует юзера по init_data и ведёт его в канал/пост.
-	link := fmt.Sprintf("https://max.ru/%s?startapp=u_%s", botName, code)
+	// Основная ссылка: мини-апп считает клик С user_id → редирект в канал/пост.
+	link := util.StartappLink(botName, "u_"+code)
 
 	postLine := ""
 	if postRef != "" {
-		postLine = fmt.Sprintf("\n📍 Пост-источник: %s", postRef)
+		postLine = fmt.Sprintf("\n📍 Ведёт на: %s", postRef)
+	}
+	costLine := ""
+	if cost > 0 {
+		costLine = fmt.Sprintf("\n💰 Стоимость: %.2f ₽ (CPA посчитается в статистике)", cost)
 	}
 
-	// Быстрая ссылка (без канала) — свой ответ и своя клавиатура.
+	// Быстрая ссылка без канала (легаси-сессии) — короткий ответ.
 	if chID == 0 {
 		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\nИсточник: %s%s\n\n"+
-				"Размещайте где угодно — клики и подписки будут учтены "+
-				"в «Аналитика → Каналы».", link, source, postLine),
-			util.BackKeyboard())
+			fmt.Sprintf("✅ Трекинг-ссылка создана:\n\n%s\n\nНазвание: %s%s%s\n\n"+
+				"Клик → мини-апп считает переход с id юзера → ведёт в канал/на пост.",
+				link, source, postLine, costLine),
+			util.TrackingLinkKeyboard(link, 0))
 		return
 	}
 
-	// Канальная ссылка: главный вариант — БЕСШОВНАЯ /r/<code> на нашем домене
-	// (клик считается на редиректе, юзер сразу в канале/на посте). Прямая —
-	// для случаев, когда домен бота светить не хочется. Диплинк — для точной
-	// атрибуции «кто именно подписался».
-	title, directURL := "", ""
+	title := ""
 	if ch, err := b.db.GetChannel(ctx, chID, uid); err == nil {
 		title = ifEmpty(ch.Title, fmt.Sprintf("канал #%d", ch.ChatID))
-		directURL = util.ChannelURL(ch.Link)
 	}
 
-	mainLink := link // диплинк-фолбэк (если публичный домен бота неизвестен)
+	// Альтернативы: /r/<code> — мгновенный 302 без мини-аппа (клик анонимный,
+	// домен бота виден); прямая ссылка на канал — без счётчика.
+	alternatives := ""
 	if b.publicURL != "" {
-		mainLink = b.publicURL + "/r/" + code
+		alternatives += "\n• Короткая (клик анонимный, без мини-аппа): " + b.publicURL + "/r/" + code
 	}
-	notes := "Клик → мгновенный переход в канал/на пост, клики считаются."
-	if postURL := strings.TrimSpace(postRef); util.IsHTTPURL(postURL) {
-		notes = "Клик → мгновенный переход на конкретный пост, клики считаются."
+	if ch, err := b.db.GetChannel(ctx, chID, uid); err == nil {
+		if direct := util.ChannelURL(ch.Link); direct != "" {
+			alternatives += "\n• Прямая на канал (без счётчика): " + direct
+		}
 	}
 
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		fmt.Sprintf("✅ Ссылка для «%s» готова:\n\n"+
-			"⚡ %s\n%s\n\n"+
-			"Альтернативы:\n"+
-			"• Прямая на канал (домен бота не светится, клики НЕ считаются): %s\n"+
-			"• С точной атрибуцией подписок (кто именно вступил): %s\n\n"+
-			"Источник: %s%s",
-			title, mainLink, notes, ifEmpty(directURL, "—"), link, source, postLine),
-		util.ChannelUTMKeyboard(chID))
+			"⚡ %s\n\n"+
+			"Клик → мини-апп запоминает id юзера → ведёт в канал/на пост. "+
+			"В статистике видно, кто пришёл, кто подписался и через сколько отписался.\n\n"+
+			"Название: %s%s%s%s",
+			title, link, source, postLine, costLine, alternatives),
+		util.TrackingLinkKeyboard(link, chID))
 }
 
 // showUTMStats — аналитика UTM по каналу.

@@ -43,7 +43,8 @@ const (
 	CBGwCSVParts     = "gw_csv:"                     // + giveaway_id (экспорт участников CSV)
 
 	// UTM-трекинг (общее)
-	CBUTMQuickCreate = "utm_quick"      // быстрая трекинг-ссылка без канала
+	CBUTMQuickCreate = "utm_quick"     // трекинг-ссылка: выбор канала (быстрый флоу P6)
+	CBUTMQuickChSel  = "utm_qch:"      // + channel_id — канал выбран для быстрой ссылки
 	CBUTMQuickLink   = "utm_fast:"     // + channel_id — простая ссылка одним тапом
 	CBUTMSkipPost    = "utm_post_skip" // билдер ссылки: пропустить пост-источник
 	CBUTMSkipCost    = "utm_cost_skip" // билдер ссылки: без стоимости
@@ -379,6 +380,18 @@ func ChannelUTMStatsKeyboard(channelID int64) *model.Keyboard {
 	kb.AddRow().AddCallBack("📎 Экспорт CSV", CBUTMExport+id)
 	kb.AddRow().AddCallBack("🔗 Создать UTM", CBUTMCreate+id)
 	kb.AddRow().AddCallBack("← К каналу", CBChannelUTM+id)
+	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
+	return kb
+}
+
+// TrackingLinkKeyboard — экран готовой трекинг-ссылки: скопировать,
+// статистика канала, в меню.
+func TrackingLinkKeyboard(link string, channelID int64) *model.Keyboard {
+	kb := model.NewKeyboard()
+	kb.AddRow().AddClipboard("📋 Скопировать ссылку", link)
+	if channelID > 0 {
+		kb.AddRow().AddCallBack("📊 Статистика канала", CBChannelUTM+strconv.FormatInt(channelID, 10))
+	}
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb
 }
