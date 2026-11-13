@@ -113,6 +113,29 @@ func main() {
 		CheckSubscriber: api.IsSubscriber,
 		// Отправка готового поста админу в чат (кнопка из миниаппа).
 		SendPost: bot.SendGiveawayPostToOwner,
+		// Действия из миниаппа: создание розыгрыша/ссылок, добавление
+		// канала, загрузка медиа.
+		CreateGiveaway: func(ctx context.Context, uid int64, in webapp.CreateGiveawayReq) (int64, string, error) {
+			return bot.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
+				Name: in.Name, PostText: in.PostText, PostFormat: in.PostFormat,
+				MediaTokens: in.MediaTokens, ButtonText: in.ButtonText,
+				PubChannels: in.PubChannels, SubChannels: in.SubChannels,
+				PublishNow: in.PublishNow, PublishAt: in.PublishAt,
+				FinishMode: in.FinishMode, FinishAt: in.FinishAt, FinishCount: in.FinishCount,
+				Winners: in.Winners, WinnersMessage: in.WinnersMessage,
+				Referral: in.Referral, Captcha: in.Captcha,
+				ResultsInPost: in.ResultsInPost, ResultsText: in.ResultsText,
+				SaveDraft: in.SaveDraft,
+			})
+		},
+		CreateTracking: func(ctx context.Context, uid int64, in webapp.CreateTrackingReq) ([]string, string, error) {
+			return bot.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{
+				Mode: in.Mode, ChannelID: in.ChannelID, ChannelIDs: in.ChannelIDs,
+				Name: in.Name, Cost: in.Cost, LinkType: in.LinkType, PostRef: in.PostRef,
+			})
+		},
+		AddChannel:  bot.AddChannelFromApp,
+		UploadMedia: api.UploadMedia,
 	}
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)

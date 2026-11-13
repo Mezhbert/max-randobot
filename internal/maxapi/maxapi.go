@@ -67,6 +67,8 @@ type BotAPI interface {
 	// была кнопка (механика мануала: выбор варианта морфирует шаг — «✓ »
 	// переезжает на выбранный вариант, без нового сообщения в чате).
 	AnswerCallbackEdit(ctx context.Context, callbackID, text string, kb *model.Keyboard)
+	// UploadMedia — загрузка медиа миниаппа (multipart) → токен+тип.
+	UploadMedia(ctx context.Context, data []byte, filename, kind string) (string, string, error)
 }
 
 // New создаёт обёртку. maxRPS — целевой лимит (платформа: 30).
@@ -580,4 +582,28 @@ func (r *rateLimiter) wait(ctx context.Context) {
 		case <-time.After(sleep):
 		}
 	}
+}
+
+// UploadMedia — загрузка медиа из миниаппа (multipart от владельца):
+// возвращает токен вложения и тип ("image"/"video"/"file"). Токен кладётся
+// в media_tokens розыгрыша.
+func (a *API) UploadMedia(ctx context.Context, data []byte, filename string, kind string) (token string, attType string, err error) {
+	uploadKind := modelUploadKind(kind)
+	a.rl.wait(ctx)
+	token, err = a.Upload.Upload(ctx, uploadKind, bytes.NewReader(data), filename, int64(len(data)))
+	if err != nil {
+		return "", "", err
+	}
+	return token, kind, nil
+}
+
+// modelUploadKind — тип загрузки MAX по нашей строке типа.
+func modelUploadKind(kind string) model.UploadType {
+	switch kind {
+	case "image":
+		return model.UploadImage
+	case "video":
+		return model.UploadVideo
+	}
+	return model.UploadFile
 }

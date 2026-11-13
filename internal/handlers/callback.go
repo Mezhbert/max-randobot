@@ -48,6 +48,8 @@ func (b *Bot) handleMenuAction(ctx context.Context, uid int64, p string) {
 	case util.CBMainMenu:
 		_ = b.db.ClearSession(ctx, uid) // сброс любой активной сессии (UTM/captcha/etc)
 		b.sendMainMenu(ctx, uid, "Главное меню:")
+	case util.CBOldMenu:
+		b.showOldMenu(ctx, uid)
 	case util.CBCreateGiveaway:
 		_ = b.db.ClearSession(ctx, uid) // гарантия: никаких висящих сессий при создании
 		b.startCreate(ctx, uid)

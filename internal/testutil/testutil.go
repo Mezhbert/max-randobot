@@ -281,3 +281,11 @@ func (m *MockBotAPI) EditCount() int {
 
 // Compile-time assertion: MockBotAPI реализует maxapi.BotAPI.
 var _ maxapi.BotAPI = (*MockBotAPI)(nil)
+
+// UploadMedia — мок загрузки медиа: детерминированный токен.
+func (m *MockBotAPI) UploadMedia(ctx context.Context, data []byte, filename, kind string) (string, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counter++
+	return fmt.Sprintf("tok.%s.%d", kind, m.counter), kind, nil
+}

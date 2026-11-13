@@ -297,3 +297,91 @@ func signedInitData(t *testing.T, token string, userID int64) string {
 	return "auth_date=1&hash=" + hex.EncodeToString(sign.Sum(nil)) +
 		"&user=" + url.QueryEscape(fmt.Sprintf(`{"id":%d}`, userID))
 }
+
+// TestAppAPI_CreateGiveawayAndTracking — транспорт действий миниаппа:
+// JSON → замыкание CreateGiveaway/CreateTracking → ответ; валидация полей
+// покрыта в handlers-тестах, тут проверяем API-слой (auth, формат, ошибки).
+func TestAppAPI_CreateGiveawayAndTracking(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const owner = 5200
+	require.NoError(t, s.UpsertUser(ctx, store.User{UserID: owner, FirstName: "Owner"}))
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: owner, ChatID: -52100, Title: "Канал", IsPublic: true, IsBotAdmin: true})
+	require.NoError(t, err)
+
+	token := "test-token"
+	initData := signedInitData(t, token, owner)
+
+	var gotPost string
+	var gotTrack CreateTrackingReq
+	d := &Deps{
+		DB:       s,
+		BotToken: token,
+		CreateGiveaway: func(c context.Context, uid int64, in CreateGiveawayReq) (int64, string, error) {
+			gotPost = in.PostText
+			if in.PostText == "" {
+				return 0, "не заполнен пост", nil
+			}
+			return 42, "", nil
+		},
+		CreateTracking: func(c context.Context, uid int64, in CreateTrackingReq) ([]string, string, error) {
+			gotTrack = in
+			if in.Name == "" {
+				return nil, "введите название", nil
+			}
+			return []string{"abc123"}, "", nil
+		},
+	}
+	h := Handler(d, nil)
+	qinit := "?init_data=" + url.QueryEscape(initData)
+
+	// Создание розыгрыша: поля доходят, ok=true, id на месте.
+	req := httptest.NewRequest("POST", "/app/api/giveaways/create"+qinit,
+		strings.NewReader(`{"post_text":"Пост из миниаппа","pub_channels":[`+strconv.FormatInt(ch.ID, 10)+`],"winners":3}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"ok":true`)
+	assert.Contains(t, rec.Body.String(), `"giveaway_id":42`)
+	assert.Equal(t, "Пост из миниаппа", gotPost)
+
+	// Без init_data — 401.
+	reqAnon := httptest.NewRequest("POST", "/app/api/giveaways/create",
+		strings.NewReader(`{"post_text":"x"}`))
+	recAnon := httptest.NewRecorder()
+	h.ServeHTTP(recAnon, reqAnon)
+	assert.Equal(t, http.StatusUnauthorized, recAnon.Code)
+
+	// Пустой пост — авторская ошибка, ok=false.
+	req2 := httptest.NewRequest("POST", "/app/api/giveaways/create"+qinit,
+		strings.NewReader(`{"post_text":"","pub_channels":[1]}`))
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	assert.Contains(t, rec2.Body.String(), `"ok":false`)
+	assert.Contains(t, rec2.Body.String(), "пост")
+
+	// Трекинг: поля доходят, коды в ответе.
+	req3 := httptest.NewRequest("POST", "/app/api/tracking/create"+qinit,
+		strings.NewReader(`{"mode":"ads","channel_id":`+strconv.FormatInt(ch.ID, 10)+`,"name":"Реклама","cost":1500,"link_type":"super","post_ref":"https://max.ru/k/42"}`))
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, req3)
+	assert.Contains(t, rec3.Body.String(), `"ok":true`)
+	assert.Contains(t, rec3.Body.String(), `"abc123"`)
+	assert.Equal(t, "super", gotTrack.LinkType)
+	assert.InDelta(t, 1500.0, gotTrack.Cost, 0.01)
+
+	// Трекинг без названия — авторская ошибка.
+	req4 := httptest.NewRequest("POST", "/app/api/tracking/create"+qinit,
+		strings.NewReader(`{"mode":"ads","channel_id":`+strconv.FormatInt(ch.ID, 10)+`,"name":""}`))
+	rec4 := httptest.NewRecorder()
+	h.ServeHTTP(rec4, req4)
+	assert.Contains(t, rec4.Body.String(), `"ok":false`)
+	assert.Contains(t, rec4.Body.String(), "название")
+}
+
+// futureMSK — дата через N часов в формате ДД.ММ.ГГГГ ЧЧ:ММ (МСК).
+func futureMSK(hours int) string {
+	return time.Now().Add(time.Duration(hours) * time.Hour).In(msk()).Format("02.01.2006 15:04")
+}

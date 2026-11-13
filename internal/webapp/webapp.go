@@ -57,6 +57,12 @@ type Deps struct {
 	// точным видом: текст + медиа + кнопка). Реализация в handlers.
 	SendPost func(ctx context.Context, userID int64, g store.Giveaway) error
 
+	// Создание из миниаппа (реализации в handlers).
+	CreateGiveaway   func(ctx context.Context, uid int64, in CreateGiveawayReq) (int64, string, error)
+	CreateTracking   func(ctx context.Context, uid int64, in CreateTrackingReq) ([]string, string, error)
+	AddChannel       func(ctx context.Context, uid int64, link string) (string, string, error)
+	UploadMedia      func(ctx context.Context, data []byte, filename, kind string) (string, string, error)
+
 	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
 	// (maxapi.IsSubscriber). Первичная проверка в момент клика по
 	// трекинг-ссылке: уже-участники фиксируются сразу (user_added для них не
@@ -141,6 +147,40 @@ func clickCheck(t clickCheckTask) {
 type CaptchaService interface {
 	GenerateForKey(key string) ([]byte, error)
 	VerifyForKey(key, answer string) bool
+}
+
+// CreateGiveawayReq — запрос создания розыгрыша из миниаппа.
+type CreateGiveawayReq struct {
+	Name           string             `json:"name"`
+	PostText       string             `json:"post_text"`
+	PostFormat     string             `json:"post_format"`
+	MediaTokens    []store.MediaToken `json:"media_tokens"`
+	ButtonText     string             `json:"button_text"`
+	PubChannels    []int64            `json:"pub_channels"`
+	SubChannels    []int64            `json:"sub_channels"`
+	PublishNow     bool               `json:"publish_now"`
+	PublishAt      string             `json:"publish_at"`
+	FinishMode     string             `json:"finish_mode"`
+	FinishAt       string             `json:"finish_at"`
+	FinishCount    int                `json:"finish_count"`
+	Winners        int                `json:"winners"`
+	WinnersMessage string             `json:"winners_message"`
+	Referral       bool               `json:"referral"`
+	Captcha        bool               `json:"captcha"`
+	ResultsInPost  bool               `json:"results_in_post"`
+	ResultsText    string             `json:"results_text"`
+	SaveDraft      bool               `json:"save_draft"`
+}
+
+// CreateTrackingReq — запрос трекинг-ссылки из миниаппа.
+type CreateTrackingReq struct {
+	Mode       string   `json:"mode"`
+	ChannelID  int64    `json:"channel_id"`
+	ChannelIDs []int64  `json:"channel_ids"`
+	Name       string   `json:"name"`
+	Cost       float64  `json:"cost"`
+	LinkType   string   `json:"link_type"`
+	PostRef    string   `json:"post_ref"`
 }
 
 // ParticipateResult — ответ API участия (зеркалит handlers.ParticipateResult;
@@ -421,6 +461,141 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			"notifiable": pr.Notifiable,
 			"bot":        d.BotUsername,
 		})
+	})
+
+	// ---------- API действий из миниаппа (хаб, rev Great-Gifts-стиль) ----------
+
+	// Создание розыгрыша (полный функционал) из миниаппа.
+	mux.HandleFunc("/app/api/giveaways/create", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req CreateGiveawayReq
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		if d.CreateGiveaway == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		gid, vmsg, err := d.CreateGiveaway(r.Context(), userID, req)
+		if err != nil {
+			log.Warn("app create giveaway", "err", err, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "giveaway_id": gid})
+	})
+
+	// Создание трекинг-ссылки (ads unique/super, contest пачкой).
+	mux.HandleFunc("/app/api/tracking/create", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req CreateTrackingReq
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		if d.CreateTracking == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		codes, vmsg, err := d.CreateTracking(r.Context(), userID, req)
+		if err != nil {
+			log.Warn("app create tracking", "err", err, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "codes": codes,
+			"bot": d.BotUsername})
+	})
+
+	// Добавление канала по ссылке/@username.
+	mux.HandleFunc("/app/api/channels/add", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			Link string `json:"link"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil || req.Link == "" {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		if d.AddChannel == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		title, vmsg, err := d.AddChannel(r.Context(), userID, req.Link)
+		if err != nil {
+			log.Warn("app add channel", "err", err, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "title": title})
+	})
+
+	// Загрузка медиа (multipart: file=..., kind=image|video) → токен.
+	mux.HandleFunc("/app/api/upload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if d.UploadMedia == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, `{"error":"bad form"}`, http.StatusBadRequest)
+			return
+		}
+		file, hdr, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, `{"error":"no file"}`, http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		kind := r.FormValue("kind")
+		if kind != "image" && kind != "video" {
+			kind = "image"
+		}
+		data, err := io.ReadAll(io.LimitReader(file, 50<<20))
+		if err != nil {
+			http.Error(w, `{"error":"read"}`, http.StatusBadRequest)
+			return
+		}
+		token, attType, err := d.UploadMedia(r.Context(), data, hdr.Filename, kind)
+		if err != nil {
+			log.Warn("app upload", "err", err, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Не удалось загрузить файл (до 50 МБ, JPG/PNG/MP4)"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "token": token, "type": attType})
 	})
 
 	// ---------- API аналитики для мини-аппа (rev 13.11) ----------

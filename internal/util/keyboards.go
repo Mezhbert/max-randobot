@@ -16,6 +16,7 @@ import (
 // Главное меню
 const (
 	CBMainMenu         = "menu"
+	CBOldMenu          = "old_menu"
 	CBCreateGiveaway   = "create"
 	CBMyGiveaways      = "my_giveaways"
 	CBMyChannels       = "my_channels"

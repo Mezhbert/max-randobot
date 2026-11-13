@@ -397,14 +397,36 @@ func (b *Bot) rejectUnexpectedDraftInput(ctx context.Context, uid int64, g store
 // sendMainMenu отправляет главное меню пользователю. Если есть незаконченный
 // черновик — первой строкой «📝 Продолжить черновик» (мануал §11).
 func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
+	if b.botUsername != "" {
+		// Миниапп — основной интерфейс: одна большая кнопка + поддержка.
+		kb := model.NewKeyboard()
+		kb.AddRow().AddLink("📱 Открыть приложение", util.StartappLink(b.botUsername, "analytics"))
+		if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
+			kb.AddRow().AddCallBack("📝 Продолжить черновик", util.CBGwList)
+		}
+		kb.AddRow().
+			AddCallBack("🆘 Поддержка", util.CBSupport).
+			AddCallBack("☰ Ещё (старое меню)", util.CBOldMenu)
+		_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
+		return
+	}
 	kb := util.MainMenuKeyboard()
 	if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
 		kb = util.MainMenuWithDraftKeyboard()
 	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
+}
+
+// showOldMenu — старое кнопочное меню (fallback, если приложение недоступно).
+func (b *Bot) showOldMenu(ctx context.Context, uid int64) {
+	b.sendMainMenuText(ctx, uid, "Старое меню (все разделы):", util.MainMenuKeyboard())
+}
+
+// sendMainMenuText — меню с произвольной клавиатурой.
+func (b *Bot) sendMainMenuText(ctx context.Context, userID int64, text string, kb *model.Keyboard) {
 	if b.botUsername != "" {
-		// Миниапп на видном месте: аналитика, ссылки, розыгрыши.
 		row := kb.AddRow()
-		row.AddLink("📱 Открыть миниапп", util.StartappLink(b.botUsername, "analytics"))
+		row.AddLink("📱 Открыть приложение", util.StartappLink(b.botUsername, "analytics"))
 	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 }
@@ -417,6 +439,6 @@ func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 		"отсеет ботов, начислит билеты за приглашённых друзей и честно выберет победителей.\n\n" +
 		"📈 **Трекинг** — своя ссылка на каждую рекламную закупку. Видно, сколько переходов " +
 		"и подписчиков принесла каждая и какой закуп окупился.\n\n" +
-		"С чего начнём?"
+		"Все функции — в приложении 👇"
 	b.sendMainMenu(ctx, userID, text)
 }

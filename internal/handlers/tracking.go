@@ -18,6 +18,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/maxbot/giveawaybot/internal/fsm"
 
 	"github.com/maxbot/giveawaybot/internal/store"
 	"github.com/maxbot/giveawaybot/internal/util"
@@ -785,4 +788,224 @@ func (b *Bot) SendGiveawayPostToOwner(ctx context.Context, uid int64, g store.Gi
 	}
 	_ = b.api.SendText(ctx, uid, "⬆️ Пост розыгрыша «"+ifEmpty(g.Name, "без названия")+"» — как будет выглядеть в канале.")
 	return nil
+}
+
+// GiveawayDraftFromApp — поля создания розыгрыша из миниаппа (все необязательные
+// кроме поста/канала публикации; дефолты — как в чат-мастере).
+type GiveawayDraftFromApp struct {
+	Name           string   `json:"name"`
+	PostText       string   `json:"post_text"`
+	PostFormat     string   `json:"post_format"`
+	MediaTokens    []store.MediaToken `json:"media_tokens"`
+	ButtonText     string   `json:"button_text"`
+	PubChannels    []int64  `json:"pub_channels"`
+	SubChannels    []int64  `json:"sub_channels"`
+	PublishNow     bool     `json:"publish_now"`
+	PublishAt      string   `json:"publish_at"` // DD.MM.YYYY HH:MM (МСК) или ISO
+	FinishMode     string   `json:"finish_mode"` // time | count
+	FinishAt       string   `json:"finish_at"`
+	FinishCount    int      `json:"finish_count"`
+	Winners        int      `json:"winners"`
+	WinnersMessage string   `json:"winners_message"`
+	Referral       bool     `json:"referral"`
+	Captcha        bool     `json:"captcha"`
+	ResultsInPost  bool     `json:"results_in_post"`
+	ResultsText    string   `json:"results_text"`
+	SaveDraft      bool     `json:"save_draft"` // true → черновик, не планировать
+}
+
+// CreateGiveawayFromApp — создание розыгрыша из миниаппа: пишет поля черновика,
+// валидирует (engine.Confirm) и планирует/публикует. Возвращает id и ошибку
+// валидации (авторский текст).
+func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayDraftFromApp) (int64, string, error) {
+	g, err := b.db.CreateDraftGiveaway(ctx, uid, "")
+	if err != nil {
+		return 0, "", err
+	}
+	set := func(field string, val any) {
+		if err == nil {
+			err = b.db.UpdateGiveawayFieldAny(ctx, g.ID, field, val)
+		}
+	}
+	if in.Name != "" {
+		set("name", in.Name)
+	}
+	if in.PostText != "" {
+		set("post_text", in.PostText)
+	}
+	if in.PostFormat != "" {
+		set("post_format", in.PostFormat)
+	}
+	if len(in.MediaTokens) > 0 {
+		set("media_tokens", in.MediaTokens)
+	}
+	button := in.ButtonText
+	if button == "" {
+		button = "Участвовать"
+	}
+	set("button_text", button)
+	if len(in.PubChannels) > 0 {
+		set("publish_channel_ids", in.PubChannels)
+	}
+	if len(in.SubChannels) > 0 {
+		set("subscribe_channel_ids", in.SubChannels)
+	} else if len(in.PubChannels) > 0 {
+		// Канал публикации всегда входит в подписки (как в чат-мастере).
+		set("subscribe_channel_ids", in.PubChannels)
+	}
+	set("publish_now", in.PublishNow)
+	if !in.PublishNow && in.PublishAt != "" {
+		t, perr := util.ParseMoscowTime(in.PublishAt)
+		if perr != nil {
+			return g.ID, "Дата публикации: " + perr.Error(), nil
+		}
+		set("publish_at", t)
+	}
+	finishMode := in.FinishMode
+	if finishMode == "" {
+		finishMode = "time"
+	}
+	set("finish_mode", finishMode)
+	switch finishMode {
+	case "count":
+		if in.FinishCount >= 10 {
+			set("finish_participants_count", in.FinishCount)
+		}
+	default:
+		if in.FinishAt != "" {
+			t, perr := util.ParseMoscowTime(in.FinishAt)
+			if perr != nil {
+				return g.ID, "Дата итогов: " + perr.Error(), nil
+			}
+			set("finish_at", t)
+		} else {
+			// Дефолт: завтра 21:00 МСК.
+			tom := time.Now().In(util.MoscowLocation()).AddDate(0, 0, 1)
+			set("finish_at", time.Date(tom.Year(), tom.Month(), tom.Day(), 21, 0, 0, 0, util.MoscowLocation()).UTC())
+		}
+	}
+	winners := in.Winners
+	if winners < 1 {
+		winners = 1
+	}
+	set("winners_count", winners)
+	set("winners_message", in.WinnersMessage)
+	set("referral_enabled", in.Referral)
+	captcha := "none"
+	if in.Captcha {
+		captcha = "all"
+	}
+	set("captcha_mode", captcha)
+	set("results_in_original_post", in.ResultsInPost)
+	if in.ResultsText != "" {
+		set("results_post_text", in.ResultsText)
+	}
+	if err != nil {
+		return g.ID, "", err
+	}
+	if in.SaveDraft {
+		return g.ID, "", nil
+	}
+	if err := b.engine.Confirm(ctx, g.ID); err != nil {
+		var ve *fsm.ValidationError
+		if e, ok := err.(*fsm.ValidationError); ok {
+			ve = e
+			return g.ID, ve.Msg, nil
+		}
+		return g.ID, "", err
+	}
+	// «Сразу» — немедленная публикация, без ожидания тика.
+	if in.PublishNow && b.publishNow != nil {
+		b.publishNow(ctx, g.ID)
+	}
+	return g.ID, "", nil
+}
+
+// CreateTrackingLinkFromApp — трекинг-ссылка из миниаппа: один вызов на любой
+// тип (уникальная/супер/конкурс(пачка)) — та же логика, что в чат-флоу.
+type TrackingLinkFromApp struct {
+	Mode      string  `json:"mode"`       // ads | contest
+	ChannelID int64   `json:"channel_id"` // ads
+	ChannelIDs []int64 `json:"channel_ids"` // contest
+	Name      string  `json:"name"`
+	Cost      float64 `json:"cost"`
+	LinkType  string  `json:"link_type"` // unique | super
+	PostRef   string  `json:"post_ref"`
+}
+
+// CreateTrackingLinkFromApp возвращает коды созданных ссылок.
+func (b *Bot) CreateTrackingLinkFromApp(ctx context.Context, uid int64, in TrackingLinkFromApp) ([]string, string, error) {
+	if err := util.ValidateUTMSource(in.Name); err != nil {
+		return nil, err.Error(), nil
+	}
+	botName := b.botUsername
+	if botName == "" {
+		botName = "ВАШ_БОТ"
+	}
+	var codes []string
+	make := func(chID int64, linkType, postRef string, cost float64) string {
+		code := util.RandomCode(10)
+		if _, err := b.db.CreateUTMLink(ctx, uid, chID, in.Name, "referral", in.Name,
+			"", "", postRef, code, cost, 0, linkType); err != nil {
+			return ""
+		}
+		return code
+	}
+	if in.Mode == "contest" {
+		for _, chID := range in.ChannelIDs {
+			if _, err := b.db.GetChannel(ctx, chID, uid); err != nil {
+				continue
+			}
+			if c := make(chID, "contest", "", 0); c != "" {
+				codes = append(codes, c)
+			}
+		}
+		if len(codes) == 0 {
+			return nil, "Не выбраны каналы", nil
+		}
+		return codes, "", nil
+	}
+	if _, err := b.db.GetChannel(ctx, in.ChannelID, uid); err != nil {
+		return nil, "Канал не найден", nil
+	}
+	linkType := in.LinkType
+	if linkType == "" {
+		linkType = "unique"
+	}
+	if c := make(in.ChannelID, linkType, in.PostRef, in.Cost); c != "" {
+		return []string{c}, "", nil
+	}
+	return nil, "Не удалось создать ссылку", nil
+}
+
+// AddChannelFromApp — добавить канал из миниаппа по ссылке/@username.
+// Возвращает название канала (или авторскую ошибку).
+func (b *Bot) AddChannelFromApp(ctx context.Context, uid int64, link string) (string, string, error) {
+	text := strings.TrimSpace(link)
+	if !isChannelLink(text) {
+		return "", "Похоже, это не ссылка на канал. Отправьте @username или https://max.ru/channel", nil
+	}
+	chat, err := b.api.GetChatByLink(ctx, text)
+	if err != nil {
+		return "", "Канал по ссылке не найден (он должен быть публичным)", nil
+	}
+	info, isAdmin, err := b.api.CheckChannelAdmin(ctx, chat.ChatID)
+	if err != nil {
+		return "", "Не удалось получить доступ к каналу. Добавьте бота админом и повторите", nil
+	}
+	if !isAdmin {
+		return "", "Бот НЕ администратор в этом канале. Добавьте бота админом и повторите", nil
+	}
+	c, err := b.db.AddChannel(ctx, store.Channel{
+		OwnerUserID: uid, ChatID: chat.ChatID, Title: info.Title, Link: info.Link,
+		IsPublic: info.IsPublic, IsBotAdmin: true,
+	})
+	if err != nil {
+		// Уже добавлен — не ошибка, вернём название.
+		if ch, gerr := b.db.GetChannelByChat(ctx, uid, chat.ChatID); gerr == nil {
+			return ifEmpty(ch.Title, "канал"), "", nil
+		}
+		return "", "Не удалось сохранить канал", nil
+	}
+	return ifEmpty(c.Title, "канал"), "", nil
 }

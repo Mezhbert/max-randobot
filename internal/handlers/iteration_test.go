@@ -1612,3 +1612,106 @@ func TestUTM_UserAddedCreatesSubscriber(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, ret.StillIn, "user_removed зафиксировал отписку")
 }
+
+// TestCreateGiveawayFromApp_Full — handlers-логика создания розыгрыша из
+// миниаппа: полный набор полей → scheduled с публикацией «сразу».
+func TestCreateGiveawayFromApp_Full(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6975
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: -697500, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	// publish_now требует подключённого планировщика (в main сеттится из main).
+	sch := scheduler.New(mock, s, nil)
+	b.SetPublishNow(sch.PublishGiveawayNow)
+
+	gid, vmsg, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
+		Name: "Из миниаппа", PostText: "Пост из приложения", ButtonText: "Жми",
+		PubChannels: []int64{ch.ID},
+		PublishNow:  true,
+		FinishMode:  "time", FinishAt: util.FormatMoscowTime(time.Now().Add(48 * time.Hour)),
+		Winners:     5, WinnersMessage: "Пишите в лс",
+		Captcha:     true, ResultsInPost: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, vmsg, "валидация должна пройти: %s", vmsg)
+	require.NotZero(t, gid)
+
+	g, err := s.GetGiveawayAny(ctx, gid)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusActive, g.Status, "publish_now → опубликован немедленно")
+	assert.Equal(t, "Из миниаппа", g.Name)
+	assert.Equal(t, "Жми", g.ButtonText)
+	assert.Equal(t, 5, g.WinnersCount)
+	assert.Equal(t, store.CaptchaAll, g.CaptchaMode)
+	assert.Equal(t, []int64{ch.ID}, g.SubscribeChannelIDs, "канал публикации зеркалится в подписки")
+	// Пост реально отправлен в канал (мок).
+	sentToChannel := false
+	for _, r := range mock.SnapshotSends() {
+		if r.Method == "SendToChat" && r.ChatID == -697500 {
+			sentToChannel = true
+		}
+	}
+	assert.True(t, sentToChannel, "пост должен уйти в канал публикации")
+
+	// Валидация: нет поста и каналов → авторская ошибка, ничего не создано.
+	_, vmsg2, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{})
+	require.NoError(t, err)
+	assert.NotEmpty(t, vmsg2, "пустой запрос должен дать ошибку валидации")
+
+	// Черновик: save_draft=true остаётся draft.
+	gid3, vmsg3, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
+		PostText: "Черновик", PubChannels: []int64{ch.ID}, SaveDraft: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, vmsg3)
+	g3, _ := s.GetGiveawayAny(ctx, gid3)
+	assert.Equal(t, store.StatusDraft, g3.Status)
+}
+
+// TestCreateTrackingFromApp — трекинг-ссылки из миниаппа: супер и конкурсная пачка.
+func TestCreateTrackingFromApp(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 6976
+	testutil.EnsureUser(t, s, uid, "creator")
+	ch1, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: -697601, Title: "Один", IsBotAdmin: true})
+	require.NoError(t, err)
+	ch2, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: -697602, Title: "Два", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	b.SetUsername("test_bot")
+
+	// Суперссылка.
+	codes, vmsg, err := b.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{
+		Mode: "ads", ChannelID: ch1.ID, Name: "Супер закуп", Cost: 900,
+		LinkType: "super", PostRef: "https://max.ru/one/42",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, vmsg)
+	require.Len(t, codes, 1)
+	l, _ := s.GetUTMLinkByCode(ctx, codes[0])
+	assert.Equal(t, "super", l.LinkType)
+	assert.Equal(t, "https://max.ru/one/42", l.PostRef)
+	assert.InDelta(t, 900.0, l.Cost, 0.01)
+
+	// Конкурсная пачка.
+	codes2, vmsg2, err := b.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{
+		Mode: "contest", ChannelIDs: []int64{ch1.ID, ch2.ID}, Name: "Новый год",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, vmsg2)
+	require.Len(t, codes2, 2, "по ссылке на каждый канал")
+	for _, c := range codes2 {
+		l, _ := s.GetUTMLinkByCode(ctx, c)
+		assert.Equal(t, "contest", l.LinkType)
+	}
+
+	// Пустое название — авторская ошибка.
+	_, vmsg3, _ := b.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{Mode: "ads", ChannelID: ch1.ID})
+	assert.NotEmpty(t, vmsg3)
+}
