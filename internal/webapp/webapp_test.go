@@ -385,3 +385,64 @@ func TestAppAPI_CreateGiveawayAndTracking(t *testing.T) {
 func futureMSK(hours int) string {
 	return time.Now().Add(time.Duration(hours) * time.Hour).In(msk()).Format("02.01.2006 15:04")
 }
+
+// TestAnalyticsAPI_DeleteLink — удаление ссылки со всей статистикой:
+// только владелец; клики/подписчики/атрибуции/сама ссылка исчезают,
+// соседние ссылки не задеты.
+func TestAnalyticsAPI_DeleteLink(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const owner, other = 5300, 5301
+	require.NoError(t, s.UpsertUser(ctx, store.User{UserID: owner, FirstName: "Owner"}))
+	require.NoError(t, s.UpsertUser(ctx, store.User{UserID: other, FirstName: "Other"}))
+	require.NoError(t, s.UpsertUser(ctx, store.User{UserID: 7002, FirstName: "Кликер"}))
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: owner, ChatID: -53100, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	keepID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Остающаяся", "referral", "Остающаяся", "", "", "", "keepcode1", 0, 0, "unique")
+	require.NoError(t, err)
+	delID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Удаляемая", "referral", "Удаляемая", "", "", "", "delcode1", 100, 0, "unique")
+	require.NoError(t, err)
+
+	// Данные удаляемой ссылки: клик + подписчик + атрибуция.
+	require.NoError(t, s.UTMRecordClick(ctx, delID, 7002))
+	require.NoError(t, s.UpsertUTMSubscriber(ctx, delID, 7002, ch.ChatID))
+	// И то же для остающейся — должна быть нетронута.
+	require.NoError(t, s.UTMRecordClick(ctx, keepID, 7002))
+
+	token := "test-token"
+	ownerInit := signedInitData(t, token, owner)
+	otherInit := signedInitData(t, token, other)
+	d := &Deps{DB: s, BotToken: token}
+	h := Handler(d, nil)
+
+	// Чужой юзер — 404.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/app/api/analytics/link/delete?init_data="+url.QueryEscape(otherInit),
+		strings.NewReader(`{"link_id":`+strconv.FormatInt(delID, 10)+`}`)))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	// Владелец — удаляет.
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, httptest.NewRequest("POST", "/app/api/analytics/link/delete?init_data="+url.QueryEscape(ownerInit),
+		strings.NewReader(`{"link_id":`+strconv.FormatInt(delID, 10)+`}`)))
+	require.Equal(t, http.StatusOK, rec2.Code)
+	assert.Contains(t, rec2.Body.String(), `"ok":true`)
+
+	// Ссылка и её данные исчезли; соседняя цела.
+	_, err = s.GetUTMLinkByCode(ctx, "delcode1")
+	assert.Error(t, err, "удаляемая ссылка исчезла")
+	keep, err := s.GetUTMLinkByCode(ctx, "keepcode1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), keep.Clicks, "соседняя ссылка не задета")
+
+	var delClicks, delSubs, delAttr int
+	_ = s.Pool().QueryRow(ctx, `SELECT COUNT(*) FROM utm_clicks WHERE utm_link_id=$1`, delID).Scan(&delClicks)
+	_ = s.Pool().QueryRow(ctx, `SELECT COUNT(*) FROM utm_subscribers WHERE utm_link_id=$1`, delID).Scan(&delSubs)
+	_ = s.Pool().QueryRow(ctx, `SELECT COUNT(*) FROM user_utm_attribution WHERE utm_link_id=$1`, delID).Scan(&delAttr)
+	assert.Zero(t, delClicks, "клики удаляемой ссылки стёрты")
+	assert.Zero(t, delSubs, "подписчики удалены")
+	assert.Zero(t, delAttr, "атрибуции удалены")
+}

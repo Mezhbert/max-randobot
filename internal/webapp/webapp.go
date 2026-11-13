@@ -809,6 +809,37 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		writeJSON(w, map[string]any{"ok": true})
 	})
 
+	// Удаление ссылки со всей её статистикой (только владелец).
+	mux.HandleFunc("/app/api/analytics/link/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			LinkID int64 `json:"link_id"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil || req.LinkID <= 0 {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		link, err := d.DB.GetUTMLinkByID(r.Context(), req.LinkID)
+		if err != nil || link.OwnerUserID != userID {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		if err := d.DB.DeleteUTMLink(r.Context(), req.LinkID); err != nil {
+			log.Warn("app delete link", "err", err, "id", req.LinkID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Не удалось удалить"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
 	// Детальная статистика одной ссылки + подписчики + кликнувшие.
 	mux.HandleFunc("/app/api/analytics/link/", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))

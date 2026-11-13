@@ -443,3 +443,26 @@ func (s *Store) CountUTMLinksByName(ctx context.Context, ownerUserID, channelID 
 	`, ownerUserID, channelID, source).Scan(&n)
 	return n, err
 }
+
+// DeleteUTMLink — удалить ссылку со ВСЕЙ её статистикой: клики, подписчики,
+// атрибуции юзеров, затем сама ссылка. Касается только этой ссылки.
+func (s *Store) DeleteUTMLink(ctx context.Context, utmLinkID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx, `DELETE FROM utm_clicks WHERE utm_link_id=$1`, utmLinkID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM utm_subscribers WHERE utm_link_id=$1`, utmLinkID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM user_utm_attribution WHERE utm_link_id=$1`, utmLinkID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM utm_links WHERE id=$1`, utmLinkID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
