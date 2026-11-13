@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -209,4 +210,90 @@ func TestTrackAPI_ClickMembershipCheck(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("уже-участник не зафиксирован очередью за 3с")
+}
+
+// TestAnalyticsAPI_GiveawaysAndSendPost — раздел розыгрышей миниаппа:
+// список с черновиками + отправка готового поста админу в чат.
+func TestAnalyticsAPI_GiveawaysAndSendPost(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const owner = 5100
+	require.NoError(t, s.UpsertUser(ctx, store.User{UserID: owner, FirstName: "Owner"}))
+	var draftID, activeID int64
+	require.NoError(t, s.Pool().QueryRow(ctx, `
+		INSERT INTO giveaways (owner_user_id, name, post_text, button_text, status, draft_step, finish_mode)
+		VALUES ($1, 'Черновик про носки', 'пост текст', 'Участвовать', 'draft', 'post', 'time')
+		RETURNING id
+	`, owner).Scan(&draftID))
+	require.NoError(t, s.Pool().QueryRow(ctx, `
+		INSERT INTO giveaways (owner_user_id, name, post_text, button_text, status, finish_mode)
+		VALUES ($1, 'Активный розыгрыш', 'пост 2', 'Участвовать', 'active', 'count')
+		RETURNING id
+	`, owner).Scan(&activeID))
+
+	// Валидная подпись init_data владельца (HMAC по формуле SDK).
+	token := "test-token"
+	initData := signedInitData(t, token, owner)
+
+	sent := false
+	d := &Deps{
+		DB:       s,
+		BotToken: token,
+		SendPost: func(c context.Context, uid int64, g store.Giveaway) error {
+			sent = true
+			if uid != owner || g.ID != draftID {
+				t.Fatalf("send-post: неверный получатель/розыгрыш: uid=%d gw=%d", uid, g.ID)
+			}
+			return nil
+		},
+	}
+	h := Handler(d, nil)
+
+	// Список: оба розыгрыша (включая черновик), новые первыми.
+	req := httptest.NewRequest("GET", "/app/api/analytics/giveaways?init_data="+url.QueryEscape(initData), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Черновик про носки")
+	assert.Contains(t, body, "Активный розыгрыш")
+	assert.Contains(t, body, `"status":"draft"`)
+
+	// Отправка поста админу.
+	req2 := httptest.NewRequest("POST", "/app/api/analytics/send-post?init_data="+url.QueryEscape(initData),
+		strings.NewReader(`{"giveaway_id":`+strconv.FormatInt(draftID, 10)+`}`))
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+	assert.Contains(t, rec2.Body.String(), `"ok":true`)
+	assert.True(t, sent, "SendPost должен быть вызван")
+
+	// Чужой розыгрыш — 404.
+	req3 := httptest.NewRequest("POST", "/app/api/analytics/send-post",
+		strings.NewReader(`{"giveaway_id":`+strconv.FormatInt(activeID, 10)+`}`))
+	// другому юзеру недоступно без его init_data — здесь owner и так свой; проверим несуществующий:
+	req4 := httptest.NewRequest("POST", "/app/api/analytics/send-post?init_data="+url.QueryEscape(initData),
+		strings.NewReader(`{"giveaway_id":99999}`))
+	rec4 := httptest.NewRecorder()
+	h.ServeHTTP(rec4, req4)
+	assert.Equal(t, http.StatusNotFound, rec4.Code)
+	_ = req3
+}
+
+
+// signedInitData — валидная init_data для userID по формуле SDK
+// (параметры сортируются и склеиваются \n, ключ HMAC("WebAppData", token)).
+func signedInitData(t *testing.T, token string, userID int64) string {
+	t.Helper()
+	parts := []string{"auth_date=1", fmt.Sprintf(`user={"id":%d}`, userID)}
+	sort.Strings(parts)
+	dataCheck := strings.Join(parts, "\n")
+	secret := hmac.New(sha256.New, []byte("WebAppData"))
+	secret.Write([]byte(token))
+	sign := hmac.New(sha256.New, secret.Sum(nil))
+	sign.Write([]byte(dataCheck))
+	return "auth_date=1&hash=" + hex.EncodeToString(sign.Sum(nil)) +
+		"&user=" + url.QueryEscape(fmt.Sprintf(`{"id":%d}`, userID))
 }

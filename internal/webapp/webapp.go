@@ -53,6 +53,10 @@ type Deps struct {
 	// → регистрация, без сообщений от бота). Реализация в handlers.
 	Participate func(giveawayID, userID int64) ParticipateResult
 
+	// SendPost — отправить готовый пост розыгрыша админу в чат (превью
+	// точным видом: текст + медиа + кнопка). Реализация в handlers.
+	SendPost func(ctx context.Context, userID int64, g store.Giveaway) error
+
 	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
 	// (maxapi.IsSubscriber). Первичная проверка в момент клика по
 	// трекинг-ссылке: уже-участники фиксируются сразу (user_added для них не
@@ -524,6 +528,89 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		}
 		dyn, _ := d.DB.ChannelDynamics(r.Context(), chID, 30)
 		writeJSON(w, map[string]any{"links": links, "dynamics": dyn})
+	})
+
+	// Розыгрыши/посты (включая черновики) для миниаппа: фильтр по статусу,
+	// сортировка имя/дата (SQL и так отдаёт новые первыми по updated_at).
+	mux.HandleFunc("/app/api/analytics/giveaways", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		items, err := d.DB.ListGiveaways(r.Context(), userID, "")
+		if err != nil {
+			writeJSON(w, map[string]any{"error": "db"})
+			return
+		}
+		type gwOut struct {
+			ID      int64  `json:"id"`
+			Name    string `json:"name"`
+			Status  string `json:"status"`
+			When    string `json:"when"`
+			Parts   int    `json:"parts"`
+			Winners int    `json:"winners"`
+		}
+		out := make([]gwOut, 0, len(items))
+		for _, g := range items {
+			parts, _ := d.DB.CountParticipants(r.Context(), g.ID)
+			when := g.UpdatedAt
+			switch g.Status {
+			case store.StatusActive:
+				if g.FinishAt != nil {
+					when = *g.FinishAt
+				}
+			case store.StatusScheduled:
+				if g.PublishAt != nil {
+					when = *g.PublishAt
+				}
+			}
+			name := g.Name
+			if name == "" {
+				name = "без названия"
+			}
+			out = append(out, gwOut{
+				ID: g.ID, Name: name, Status: g.Status,
+				When: when.In(msk()).Format("02.01.2006 15:04"),
+				Parts: parts, Winners: g.WinnersCount,
+			})
+		}
+		writeJSON(w, map[string]any{"giveaways": out})
+	})
+
+	// Отправить готовый пост розыгрыша админу в чат (кнопка из миниаппа).
+	// Реализация переиспользует превью мастера: пост точным видом + медиа.
+	mux.HandleFunc("/app/api/analytics/send-post", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			GiveawayID int64 `json:"giveaway_id"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.GiveawayID <= 0 {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		g, err := d.DB.GetGiveaway(r.Context(), req.GiveawayID, userID)
+		if err != nil {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		if d.SendPost == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if err := d.SendPost(r.Context(), userID, g); err != nil {
+			writeJSON(w, map[string]any{"ok": false, "error": "send failed"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
 	})
 
 	// Детальная статистика одной ссылки + подписчики + кликнувшие.

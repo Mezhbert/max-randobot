@@ -72,7 +72,7 @@
   var backBtn = api.BackButton;
 
   var app = document.getElementById('app');
-  var state = { view: 'channels', channels: [], sort: 'date', filter: 'all', dynDays: 14 };
+  var state = { view: 'channels', channels: [], sort: 'date', filter: 'all', dynDays: 14, gwSort: 'date', gwFilter: 'all' };
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -93,10 +93,97 @@
   function pct(a, b) { return b > 0 ? Math.round(a / b * 100) + '%' : '—'; }
 
   // ---------- Экран 1: каналы ----------
+  function tabs(cur) {
+    return '<div class="toolbar" style="margin-bottom:10px">' +
+      '<div class="chip ' + (cur === 'an' ? 'on' : '') + '" data-a="tab-an">📊 Аналитика</div>' +
+      '<div class="chip ' + (cur === 'gw' ? 'on' : '') + '" data-a="tab-gw">🎁 Розыгрыши</div>' +
+      '</div>';
+  }
+
+  function renderGiveaways() {
+    state.view = 'giveaways';
+    if (backBtn) backBtn.hide();
+    app.innerHTML = header('🎁 Розыгрыши', 'посты, черновики, статистика') +
+      tabs('gw') +
+      '<div class="toolbar">' +
+      '<div class="chip ' + (state.gwSort === 'date' ? 'on' : '') + '" data-a="gwsort-date">Новые сверху</div>' +
+      '<div class="chip ' + (state.gwSort === 'name' ? 'on' : '') + '" data-a="gwsort-name">По имени</div>' +
+      '<span style="flex:1"></span>' +
+      ['all','draft','scheduled','active','finished'].map(function (f) {
+        return '<div class="chip ' + (state.gwFilter === f ? 'on' : '') + '" data-a="gwfilter-' + f + '">' +
+          ({ all:'Все', draft:'📝 Черновики', scheduled:'📅 Запланированные', active:'🟢 Идут', finished:'🏁 Завершённые' })[f] + '</div>';
+      }).join('') +
+      '</div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
+    bindToolbar();
+    GET('/app/api/analytics/giveaways').then(function (d) {
+      var gws = d.giveaways || [];
+      if (state.gwSort === 'name') {
+        gws.sort(function (a, b) { return a.name.localeCompare(b.name, 'ru'); });
+      }
+      if (state.gwFilter !== 'all') {
+        gws = gws.filter(function (g) { return g.status === state.gwFilter; });
+      }
+      var stMeta = { draft:['📝','черновик'], scheduled:['📅','запланирован'], active:['🟢','идёт'], finished:['🏁','завершён'], cancelled:['✖','отменён'] };
+      var html = gws.map(function (g) {
+        var m = stMeta[g.status] || ['', g.status];
+        return '<div class="card" data-a="gw" data-id="' + g.id + '">' +
+          '<div class="row"><div class="title">' + m[0] + ' ' + esc(g.name) + '</div>' +
+          '<span class="badge">' + m[1] + '</span></div>' +
+          '<div class="meta">' + esc(g.when) + ' · участников: ' + g.parts + ' · победителей: ' + g.winners + '</div>' +
+          '</div>';
+      }).join('');
+      document.getElementById('list').innerHTML = html ||
+        '<div class="empty">Розыгрышей этого типа нет.<br>Создайте в боте: «Создать 🎲»</div>';
+      app.querySelectorAll('.card[data-a="gw"]').forEach(function (c) {
+        c.onclick = function () {
+          var g = gws.filter(function (x) { return String(x.id) === c.getAttribute('data-id'); })[0];
+          if (g) renderGiveaway(g);
+        };
+      });
+    }).catch(function () {
+      document.getElementById('list').innerHTML = '<div class="empty">Не удалось загрузить.</div>';
+    });
+  }
+
+  function renderGiveaway(g) {
+    state.view = 'giveaway';
+    if (backBtn) backBtn.show();
+    app.innerHTML = header(g.name, 'розыгрыш', true) +
+      '<div class="card" style="cursor:default">' +
+      '<div class="stats">' +
+      '<div class="stat"><div class="num">' + g.parts + '</div><div class="lbl">участников</div></div>' +
+      '<div class="stat"><div class="num">' + g.winners + '</div><div class="lbl">победителей</div></div>' +
+      '<div class="stat"><div class="num" style="font-size:12px;padding-top:6px">' + esc(g.when) + '</div><div class="lbl">' + esc(g.status) + '</div></div>' +
+      '</div></div>' +
+      '<div class="card" data-a="sendpost" data-id="' + g.id + '">' +
+      '<div class="row"><div class="title">📤 Отправить пост мне в чат</div><span>→</span></div>' +
+      '<div class="meta">готовый пост точным видом (текст, медиа, кнопка)</div>' +
+      '</div>' +
+      '<div id="sendmsg" class="meta" style="text-align:center;margin-top:6px"></div>';
+    if (backBtn) backBtn.onClick(function () { renderGiveaways(); });
+    var hb = document.getElementById('hb');
+    if (hb) hb.onclick = function () { renderGiveaways(); };
+    var sp = app.querySelector('.card[data-a="sendpost"]');
+    if (sp) sp.onclick = function () {
+      sp.querySelector('.title').textContent = '⏳ Отправляю…';
+      fetch('/app/api/analytics/send-post?init_data=' + encodeURIComponent(initData), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ giveaway_id: parseInt(g.id, 10) })
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        document.getElementById('sendmsg').textContent =
+          d.ok ? '✅ Пост отправлен — проверьте чат с ботом' : '⚠️ ' + (d.error || 'не удалось отправить');
+        sp.querySelector('.title').textContent = '📤 Отправить пост мне в чат';
+      }).catch(function () {
+        document.getElementById('sendmsg').textContent = '⚠️ Ошибка сети';
+        sp.querySelector('.title').textContent = '📤 Отправить пост мне в чат';
+      });
+    };
+  }
+
   function renderChannels() {
     state.view = 'channels';
     if (backBtn) backBtn.hide();
-    app.innerHTML = header('📊 Аналитика', 'каналы и трекинг-ссылки') +
+    app.innerHTML = header('📊 Аналитика', 'каналы и трекинг-ссылки') + tabs('an') +
       '<div class="toolbar">' +
       '<div class="chip ' + (state.sort === 'date' ? 'on' : '') + '" data-a="sort-date">Новые сверху</div>' +
       '<div class="chip ' + (state.sort === 'name' ? 'on' : '') + '" data-a="sort-name">По имени</div>' +
@@ -286,6 +373,11 @@
         else if (a.indexOf('filter-') === 0) { state.filter = a.slice(7); refresh(); }
         else if (a === 'dyn-14') { state.dynDays = 14; refresh(); }
         else if (a === 'dyn-30') { state.dynDays = 30; refresh(); }
+        else if (a === 'tab-an') { renderChannels(); }
+        else if (a === 'tab-gw') { renderGiveaways(); }
+        else if (a === 'gwsort-date') { state.gwSort = 'date'; renderGiveaways(); }
+        else if (a === 'gwsort-name') { state.gwSort = 'name'; renderGiveaways(); }
+        else if (a.indexOf('gwfilter-') === 0) { state.gwFilter = a.slice(9); renderGiveaways(); }
       };
     });
   }

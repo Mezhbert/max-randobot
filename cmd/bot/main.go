@@ -111,6 +111,8 @@ func main() {
 		},
 		// Первичная проверка подписки в момент клика по трекинг-ссылке.
 		CheckSubscriber: api.IsSubscriber,
+		// Отправка готового поста админу в чат (кнопка из миниаппа).
+		SendPost: bot.SendGiveawayPostToOwner,
 	}
 	go func() {
 		ic, cancel := context.WithTimeout(context.Background(), 15*time.Second)

@@ -770,3 +770,19 @@ func utmSessChannelList(sess store.UserSession) []int64 {
 	}
 	return res
 }
+
+// SendGiveawayPostToOwner — отправить готовый пост розыгрыша админу в чат
+// (кнопка из миниаппа): текст + медиа + превью-кнопка участия точным видом.
+func (b *Bot) SendGiveawayPostToOwner(ctx context.Context, uid int64, g store.Giveaway) error {
+	buttonText := ifEmpty(g.ButtonText, "Участвовать")
+	mediaSimple := make([]util.MediaTokenSimple, 0, len(g.MediaTokens))
+	for _, mt := range g.MediaTokens {
+		mediaSimple = append(mediaSimple, util.MediaTokenSimple{Type: mt.Type, Token: mt.Token})
+	}
+	attachments := util.GiveawayAttachments(buttonText, g.ID, mediaSimple, true)
+	if err := b.api.SendWithAttachments(ctx, uid, g.PostText, attachments, model.TextFormat(g.PostFormat)); err != nil {
+		return err
+	}
+	_ = b.api.SendText(ctx, uid, "⬆️ Пост розыгрыша «"+ifEmpty(g.Name, "без названия")+"» — как будет выглядеть в канале.")
+	return nil
+}
