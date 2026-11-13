@@ -64,7 +64,13 @@
   #tabbar .tab{flex:1;background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;padding:4px 0}
   #tabbar .tab .ico{font-size:21px;display:block;margin-bottom:2px}
   #tabbar .tab.on{color:var(--accent)}
-  .fab{position:fixed;right:14px;bottom:86px;width:56px;height:56px;border-radius:50%;background:var(--accent);color:#fff;border:none;font-size:27px;box-shadow:0 6px 20px rgba(124,92,255,.45);z-index:49;cursor:pointer}
+  .fab{position:fixed;right:16px;bottom:104px;width:58px;height:58px;border-radius:50%;background:var(--accent);color:#fff;border:none;font-size:28px;box-shadow:0 6px 22px rgba(124,92,255,.5);z-index:49;cursor:pointer}
+  .iconbtn{width:34px;height:34px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--muted);font-size:15px;cursor:pointer;flex:none;display:flex;align-items:center;justify-content:center}
+  .dropdown{position:absolute;right:12px;top:56px;background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:6px;min-width:210px;z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  .dropdown .ditem{padding:10px 12px;border-radius:10px;font-size:14px;cursor:pointer;color:var(--text)}
+  .dropdown .ditem:active,.dropdown .ditem.on{background:rgba(124,92,255,.18);color:var(--accent)}
+  .dropdown .dsep{font-size:10px;color:var(--muted);padding:6px 12px 2px;text-transform:uppercase;letter-spacing:.4px}
+  header{position:relative}
 </style>
 </head>
 <body>
@@ -95,7 +101,6 @@
     location.replace('/app/results.html?start_param=' + encodeURIComponent(sp)); return;
   }
   if (sp.indexOf('u_') === 0) {
-    // Трекинг-клик: спиннер-заставка → POST /app/api/track → редирект.
     document.body.innerHTML = '<div style="display:flex;min-height:100vh;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:#0e1117;color:#e8ecf5;font-family:-apple-system,sans-serif"><div style="width:44px;height:44px;border-radius:50%;border:3px solid rgba(124,92,255,.2);border-top-color:#7c5cff;animation:r .8s linear infinite"></div><div id="t1" style="font-size:16px;font-weight:600">Открываю канал…</div><a id="go" style="display:none;padding:10px 22px;border-radius:12px;background:#7c5cff;color:#fff;text-decoration:none;font-size:14px;font-weight:600">Перейти сейчас</a></div><style>@keyframes r{to{transform:rotate(360deg)}}</style>';
     var code = sp.slice(2);
     fetch('/app/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -113,7 +118,7 @@
     }).catch(function () {
       var t = document.getElementById('t1'); if (t) t.textContent = 'Ошибка соединения';
     });
-    throw new Error('track-redirect'); // не запускать хаб
+    throw new Error('track-redirect');
   }
 })();
 </script>
@@ -159,27 +164,53 @@
     if (backBtn) backBtn.hide();
     fab.classList.remove('hidden');
     fab.onclick = function () { renderCreateGiveaway(); };
-    app.innerHTML = header('🎁 Розыгрыши', 'посты, черновики, статистика') +
-      '<div class="toolbar">' +
-      '<div class="chip ' + (state.gwSort === 'date' ? 'on' : '') + '" data-a="gws-d">Новые сверху</div>' +
-      '<div class="chip ' + (state.gwSort === 'name' ? 'on' : '') + '" data-a="gws-n">По имени</div>' +
-      '<span style="flex:1"></span>' +
-      ['all','draft','scheduled','active','finished'].map(function (f) {
-        return '<div class="chip ' + (state.gwFilter === f ? 'on' : '') + '" data-a="gwf-' + f + '">' +
-          ({ all:'Все', draft:'📝', scheduled:'📅', active:'🟢', finished:'🏁' })[f] + '</div>';
-      }).join('') + '</div>' +
+    var filterNames = { all:'Все розыгрыши', draft:'Черновики', scheduled:'Запланированные', active:'Идут сейчас', finished:'Завершённые' };
+    app.innerHTML = header('🎁 Розыгрыши', filterNames[state.gwFilter], false).replace('<header>', '<header style="position:relative">' + '<button class="iconbtn" id="gw-filter" style="margin-left:auto">⚙</button>'.replace('<button','<button')) ;
+    // header() уже вставил иконку? нет — соберём руками:
+    app.innerHTML = '<header style="position:relative"><div><h1>🎁 Розыгрыши</h1><div class="sub">' + filterNames[state.gwFilter] + '</div></div>' +
+      '<button class="iconbtn" id="gw-filter">⚙</button></header>' +
+      '<div id="gw-dd"></div>' +
       '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
+    document.getElementById('gw-filter').onclick = function (e) {
+      e.stopPropagation();
+      renderGwDropdown(filterNames);
+    };
+    function renderGwDropdown(names) {
+      var dd = document.getElementById('gw-dd');
+      if (dd.innerHTML) { dd.innerHTML = ''; return; }
+      var items = '';
+      items += '<div class="dsep">Показать</div>';
+      ['all','draft','scheduled','active','finished'].forEach(function (f) {
+        items += '<div class="ditem ' + (state.gwFilter === f ? 'on' : '') + '" data-f="' + f + '">' + names[f] + '</div>';
+      });
+      items += '<div class="dsep">Сортировка</div>';
+      items += '<div class="ditem ' + (state.gwSort === 'date' ? 'on' : '') + '" data-s="date">Сначала новые</div>';
+      items += '<div class="ditem ' + (state.gwSort === 'name' ? 'on' : '') + '" data-s="name">По имени (А→Я)</div>';
+      dd.innerHTML = '<div class="dropdown">' + items + '</div>';
+      dd.querySelectorAll('[data-f]').forEach(function (el) {
+        el.onclick = function () { state.gwFilter = el.getAttribute('data-f'); renderGiveaways(); };
+      });
+      dd.querySelectorAll('[data-s]').forEach(function (el) {
+        el.onclick = function () { state.gwSort = el.getAttribute('data-s'); renderGiveaways(); };
+      });
+      setTimeout(function () {
+        document.addEventListener('click', function close() { dd.innerHTML = ''; document.removeEventListener('click', close); });
+      }, 10);
+    }
     bind();
     GET('/app/api/analytics/giveaways').then(function (d) {
       var gws = d.giveaways || [];
       if (state.gwSort === 'name') gws.sort(function (a, b) { return a.name.localeCompare(b.name, 'ru'); });
       if (state.gwFilter !== 'all') gws = gws.filter(function (g) { return g.status === state.gwFilter; });
-      var m = { draft:['📝','черновик'], scheduled:['📅','запланирован'], active:['🟢','идёт'], finished:['🏁','завершён'], cancelled:['✖','отменён'] };
+      var m = { draft:['Черновик',''], scheduled:['Запланирован','📅'], active:['Идёт','🟢'], finished:['Завершён','🏁'], cancelled:['Отменён','✖'] };
       document.getElementById('list').innerHTML = gws.map(function (g) {
-        var s = m[g.status] || ['', g.status];
+        var s = m[g.status] || [g.status, ''];
+        var when = g.status === 'draft' ? 'изменён ' + esc(g.when) :
+                   g.status === 'scheduled' ? 'старт ' + esc(g.when) :
+                   g.status === 'active' ? 'итоги ' + esc(g.when) : 'итоги ' + esc(g.when);
         return '<div class="card tap" data-a="gw" data-id="' + g.id + '">' +
-          '<div class="row"><div class="title">' + s[0] + ' ' + esc(g.name) + '</div><span class="badge">' + s[1] + '</span></div>' +
-          '<div class="meta">' + esc(g.when) + ' · 👥 ' + g.parts + ' · 🏆 ' + g.winners + '</div></div>';
+          '<div class="row"><div class="title">' + esc(g.name) + '</div><span class="badge ' + (g.status === 'active' ? 'pub' : g.status === 'draft' ? '' : '') + '">' + s[1] + ' ' + s[0] + '</span></div>' +
+          '<div class="meta">' + when + ' · участников: ' + g.parts + ' · победителей: ' + g.winners + '</div></div>';
       }).join('') || '<div class="empty">Пока пусто.<br>Нажмите «＋» — создайте первый розыгрыш.</div>';
       app.querySelectorAll('.card[data-a="gw"]').forEach(function (c) {
         c.onclick = function () {
@@ -433,19 +464,34 @@
   function renderChannel(id, title) {
     state.view = 'detail'; state.chID = id; state.chTitle = title;
     if (backBtn) backBtn.show();
-    app.innerHTML = header(title, 'ссылки и динамика', true) +
-      '<div class="toolbar">' +
-      '<div class="chip ' + (state.sort === 'date' ? 'on' : '') + '" data-a="sort-date">Новые сверху</div>' +
-      '<div class="chip ' + (state.sort === 'name' ? 'on' : '') + '" data-a="sort-name">По имени</div>' +
-      '<span style="flex:1"></span>' +
-      '<div class="chip" data-a="dyn-14">14д</div><div class="chip" data-a="dyn-30">30д</div></div>' +
-      '<div class="toolbar">' +
-      ['all','unique','super','contest'].map(function (f) {
-        return '<div class="chip ' + (state.filter === f ? 'on' : '') + '" data-a="filter-' + f + '">' +
-          ({ all: 'Все', unique: '🔗', super: '⚡', contest: '🏁' })[f] + '</div>';
-      }).join('') + '</div>' +
-      '<div id="dyn"></div><div class="sect">Ссылки</div><div id="list"><div class="skel"></div></div>';
-    bind();
+    var filterNames = { all:'Все ссылки', unique:'Уникальные', super:'Суперссылки', contest:'Конкурсные' };
+    app.innerHTML = '<header style="position:relative"><button class="back" id="hb">←</button>' +
+      '<div><h1>' + esc(title) + '</h1><div class="sub" id="ch-sub">' + filterNames[state.filter] + '</div></div>' +
+      '<button class="iconbtn" id="ch-filter">⚙</button></header>' +
+      '<div id="ch-dd"></div><div id="dyn"></div>' +
+      '<div class="sect">Ссылки</div><div id="list"><div class="skel"></div></div>';
+    document.getElementById('ch-filter').onclick = function (e) {
+      e.stopPropagation();
+      var dd = document.getElementById('ch-dd');
+      if (dd.innerHTML) { dd.innerHTML = ''; return; }
+      var items = '<div class="dsep">Тип ссылок</div>';
+      ['all','unique','super','contest'].forEach(function (f) {
+        items += '<div class="ditem ' + (state.filter === f ? 'on' : '') + '" data-f="' + f + '">' + filterNames[f] + '</div>';
+      });
+      items += '<div class="dsep">Сортировка</div>';
+      items += '<div class="ditem ' + (state.sort === 'date' ? 'on' : '') + '" data-s="date">Сначала новые</div>';
+      items += '<div class="ditem ' + (state.sort === 'name' ? 'on' : '') + '" data-s="name">По имени (А→Я)</div>';
+      dd.innerHTML = '<div class="dropdown">' + items + '</div>';
+      dd.querySelectorAll('[data-f]').forEach(function (el) {
+        el.onclick = function () { state.filter = el.getAttribute('data-f'); renderChannel(state.chID, state.chTitle); };
+      });
+      dd.querySelectorAll('[data-s]').forEach(function (el) {
+        el.onclick = function () { state.sort = el.getAttribute('data-s'); renderChannel(state.chID, state.chTitle); };
+      });
+      setTimeout(function () {
+        document.addEventListener('click', function close() { dd.innerHTML = ''; document.removeEventListener('click', close); });
+      }, 10);
+    };
     if (backBtn) backBtn.onClick(function () { renderTrackingTab(); });
     document.getElementById('hb').onclick = renderTrackingTab;
     GET('/app/api/analytics/channel/' + id + '&sort=' + (state.sort === 'name' ? 'name' : 'date'))
@@ -454,12 +500,12 @@
         renderDynamics(dyn, state.dynDays);
         var links = d.links || [];
         if (state.filter !== 'all') links = links.filter(function (l) { return l.type === state.filter; });
-        var tm = { unique:['🔗','уникальная'], super:['⚡','супер'], contest:['🏁','конкурсная'] };
+        var tm = { unique:['Уникальная',''], super:['Супер',''], contest:['Конкурсная',''] };
         document.getElementById('list').innerHTML = links.map(function (l) {
-          var m = tm[l.type] || ['🔗',''];
+          var m = tm[l.type] || [l.type, ''];
           return '<div class="card tap" data-a="link" data-id="' + l.id + '">' +
-            '<div class="row"><div class="title">' + m[0] + ' ' + esc(l.name) + '</div>' +
-            '<span class="badge ' + (l.type === 'contest' ? 'contest' : '') + '">' + m[1] + '</span></div>' +
+            '<div class="row"><div class="title">' + esc(l.name) + '</div>' +
+            '<span class="badge ' + (l.type === 'contest' ? 'contest' : l.type === 'super' ? 'pub' : '') + '">' + m[0] + '</span></div>' +
             (l.post_ref ? '<div class="linkline">⚡ ' + esc(l.post_ref) + '</div>' : '') +
             '<div class="stats">' +
             '<div class="stat"><div class="num">' + fmt(l.clicks) + '</div><div class="lbl">клики</div></div>' +
@@ -484,10 +530,12 @@
         '<div class="u" style="height:' + Math.max(hU, d.Unsubs > 0 ? 3 : 0) + 'px"></div></div>';
     }).join('');
     var labels = dyn.map(function (d, i) { return '<span>' + (i % (dyn.length > 14 ? 5 : 2) === 0 ? d.Day.slice(0, 5) : '') + '</span>'; }).join('');
-    el.innerHTML = '<div class="card"><div class="row"><div class="title">Динамика, ' + days + ' дней</div>' +
+    el.innerHTML = '<div class="card"><div class="row"><div class="title tap" id="dyn-title" style="cursor:pointer">Динамика · ' + days + ' дней ▾</div>' +
       '<div class="meta" style="margin:0">＋' + totJ + ' <span style="opacity:.55">|</span> −' + totU + '</div></div>' +
       '<div class="bars">' + bars + '</div><div class="xaxis">' + labels + '</div>' +
       '<div class="meta" style="margin-top:6px">🟪 подписки · 🟥 отписки (МСК)</div></div>';
+    var t = document.getElementById('dyn-title');
+    if (t) t.onclick = function () { state.dynDays = state.dynDays === 14 ? 30 : 14; renderChannel(state.chID, state.chTitle); };
   }
 
   function renderLink(id) {
@@ -543,12 +591,25 @@
     if (backBtn) backBtn.hide();
     fab.classList.remove('hidden');
     fab.onclick = function () { renderTrackingCreate(); };
-    app.innerHTML = header('🔗 Трекинг', 'ссылки, подписки, отписки, CPA') +
-      '<div class="toolbar">' +
-      '<div class="chip ' + (state.sort === 'date' ? 'on' : '') + '" data-a="sort-date">Новые сверху</div>' +
-      '<div class="chip ' + (state.sort === 'name' ? 'on' : '') + '" data-a="sort-name">По имени</div></div>' +
+    app.innerHTML = '<header style="position:relative"><div><h1>🔗 Трекинг</h1><div class="sub">ссылки, подписки, отписки, цена подписчика</div></div>' +
+      '<button class="iconbtn" id="tr-filter">⚙</button></header>' +
+      '<div id="tr-dd"></div>' +
       '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
-    bind();
+    document.getElementById('tr-filter').onclick = function (e) {
+      e.stopPropagation();
+      var dd = document.getElementById('tr-dd');
+      if (dd.innerHTML) { dd.innerHTML = ''; return; }
+      dd.innerHTML = '<div class="dropdown">' +
+        '<div class="dsep">Сортировка</div>' +
+        '<div class="ditem ' + (state.sort === 'date' ? 'on' : '') + '" data-s="date">Сначала новые</div>' +
+        '<div class="ditem ' + (state.sort === 'name' ? 'on' : '') + '" data-s="name">По имени (А→Я)</div></div>';
+      dd.querySelectorAll('[data-s]').forEach(function (el) {
+        el.onclick = function () { state.sort = el.getAttribute('data-s'); renderTrackingTab(); };
+      });
+      setTimeout(function () {
+        document.addEventListener('click', function close() { dd.innerHTML = ''; document.removeEventListener('click', close); });
+      }, 10);
+    };
     GET('/app/api/analytics/channels').then(function (d) {
       var chs = d.channels || [];
       if (state.sort === 'name') chs.sort(function (a, b) { return a.title.localeCompare(b.title, 'ru'); });
@@ -580,11 +641,7 @@
       '<button class="btn" id="ch-add">➕ Подключить канал</button>' +
       '<div class="msg" id="ch-msg"></div>' +
       '<div class="meta">Перед этим добавьте бота админом в канал (права «Читать все сообщения» и «Публиковать, редактировать и удалять сообщения»). Приватный канал — перешлите пост из него боту в чат.</div></div>' +
-      '<div class="toolbar">' +
-      '<div class="chip ' + (state.sort === 'date' ? 'on' : '') + '" data-a="sort-date">Новые сверху</div>' +
-      '<div class="chip ' + (state.sort === 'name' ? 'on' : '') + '" data-a="sort-name">По имени</div></div>' +
       '<div id="list"><div class="skel"></div></div>';
-    bind();
     document.getElementById('ch-add').onclick = function () {
       var link = document.getElementById('ch-link').value.trim();
       if (!link) return showMsg('ch-msg', 'Введите ссылку', true);
@@ -758,19 +815,8 @@
   });
 
   function bind() {
-    app.querySelectorAll('.chip[data-a]').forEach(function (c) {
-      c.onclick = function () {
-        var a = c.getAttribute('data-a') || '';
-        if (a === 'sort-date') { state.sort = 'date'; refresh(); }
-        else if (a === 'sort-name') { state.sort = 'name'; refresh(); }
-        else if (a.indexOf('filter-') === 0) { state.filter = a.slice(7); refresh(); }
-        else if (a === 'dyn-14') { state.dynDays = 14; refresh(); }
-        else if (a === 'dyn-30') { state.dynDays = 30; refresh(); }
-        else if (a === 'gws-d') { state.gwSort = 'date'; renderGiveaways(); }
-        else if (a === 'gws-n') { state.gwSort = 'name'; renderGiveaways(); }
-        else if (a.indexOf('gwf-') === 0) { state.gwFilter = a.slice(4); renderGiveaways(); }
-      };
-    });
+    // Фильтры/сортировки переехали в дропдауны иконок ⚙; чипы-тулбары больше
+    // не рендерятся в основных списках.
   }
   function refresh() {
     if (state.view === 'detail' && state.chID) renderChannel(state.chID, state.chTitle);
