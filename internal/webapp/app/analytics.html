@@ -100,6 +100,45 @@
                 gwSort: 'date', gwFilter: 'all',
                 chID: null, chTitle: '', view: 'tab' };
 
+  // ---------- Черновики форм (localStorage): выйти и вернуться на то же место ----------
+  var DRAFT_GW_KEY = 'rm_gw_draft_v1';
+  var DRAFT_TR_KEY = 'rm_tr_draft_v1';
+  function saveDraft(key, obj) {
+    try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {}
+  }
+  function loadDraft(key) {
+    try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+  }
+  function clearDraft(key) {
+    try { localStorage.removeItem(key); } catch (e) {}
+  }
+  function autosaveDraft(key, fieldIds) {
+    fieldIds.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('input', function () { persistDraft(key, fieldIds); });
+    });
+  }
+  function persistDraft(key, fieldIds, extra) {
+    var d = loadDraft(key) || {};
+    fieldIds.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) d[id] = el.value;
+    });
+    if (extra) Object.keys(extra).forEach(function (k) { d[k] = extra[k]; });
+    saveDraft(key, d);
+  }
+  function restoreDraft(key, fieldIds) {
+    var d = loadDraft(key);
+    if (!d) return false;
+    var any = false;
+    fieldIds.forEach(function (id) {
+      if (d[id]) { var el = document.getElementById(id); if (el) { el.value = d[id]; any = true; } }
+    });
+    return any;
+  }
+
+
   // ЕДИНАЯ регистрация BackButton: Bridge добавляет onClick-обработчики,
   // не заменяя — рендеры накапливали их, и «назад» уводил на главную.
   var curBack = null;
@@ -448,8 +487,15 @@
     app.innerHTML = '<header style="position:relative"><button class="back" id="hb">←</button>' +
       '<div><h1>' + esc(title) + '</h1></div>' +
       '<button class="iconbtn" id="ch-filter">⚙</button></header>' +
-      '<div id="ch-dd"></div><div id="dyn"></div>' +
+      '<div id="ch-dd"></div>' +
+      '<button class="btn" id="ch-newlink" style="margin-bottom:12px">＋ Создать ссылку для этого канала</button>' +
+      '<div id="dyn"></div>' +
       '<div class="sect">Ссылки</div><div id="list"><div class="skel"></div></div>';
+    document.getElementById('ch-newlink').onclick = function () {
+      // Предвыбрать этот канал в форме создания (черновик adsCh).
+      persistDraft(DRAFT_TR_KEY, ['t-name','t-cost','t-post','t-name2'], { adsCh: id });
+      renderTrackingCreate();
+    };
     document.getElementById('ch-filter').onclick = function (e) {
       e.stopPropagation();
       var dd = document.getElementById('ch-dd');
@@ -835,43 +881,6 @@
   function switchTab(tab) {
     state.tab = tab;
 
-  // ---------- Черновики форм (localStorage): выйти и вернуться на то же место ----------
-  var DRAFT_GW_KEY = 'rm_gw_draft_v1';
-  var DRAFT_TR_KEY = 'rm_tr_draft_v1';
-  function saveDraft(key, obj) {
-    try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {}
-  }
-  function loadDraft(key) {
-    try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
-  }
-  function clearDraft(key) {
-    try { localStorage.removeItem(key); } catch (e) {}
-  }
-  function autosaveDraft(key, fieldIds) {
-    fieldIds.forEach(function (id) {
-      var el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener('input', function () { persistDraft(key, fieldIds); });
-    });
-  }
-  function persistDraft(key, fieldIds, extra) {
-    var d = loadDraft(key) || {};
-    fieldIds.forEach(function (id) {
-      var el = document.getElementById(id);
-      if (el) d[id] = el.value;
-    });
-    if (extra) Object.keys(extra).forEach(function (k) { d[k] = extra[k]; });
-    saveDraft(key, d);
-  }
-  function restoreDraft(key, fieldIds) {
-    var d = loadDraft(key);
-    if (!d) return false;
-    var any = false;
-    fieldIds.forEach(function (id) {
-      if (d[id]) { var el = document.getElementById(id); if (el) { el.value = d[id]; any = true; } }
-    });
-    return any;
-  }
     tabbar.querySelectorAll('.tab').forEach(function (t) {
       t.classList.toggle('on', t.getAttribute('data-tab') === tab);
     });
