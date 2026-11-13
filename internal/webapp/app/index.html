@@ -680,12 +680,32 @@
       '<div class="card tap" data-a="go-support"><div class="row"><div class="title">🆘 Поддержка</div><span>→</span></div>' +
       '<div class="meta">написать разработчикам</div></div>' +
       '<div class="card"><div class="meta">RandoMaster — розыгрыши и трекинг для каналов MAX.<br>Все функции — в этом приложении; чат бота остаётся для уведомлений и постов.</div></div>';
-    app.querySelector('[data-a="go-help"]').onclick = function () { location.href = '/app/help.html'; };
+    app.querySelector('[data-a="go-help"]').onclick = renderHelp;
     app.querySelector('[data-a="go-support"]').onclick = function () {
       var txt = 'Вопрос по RandoMaster';
       try { api.shareContent && api.shareContent({ text: txt }); } catch (e) {}
       try { if (api.openMaxLink) api.openMaxLink('https://max.ru/:share?text=' + encodeURIComponent(txt)); } catch (e) {}
     };
+  }
+
+  // ---------- Справка (внутренний экран: аппаратный «назад» не закрывает апп) ----------
+  function renderHelp() {
+    state.view = 'detail';
+    fab.classList.add('hidden');
+    if (backBtn) backBtn.show();
+    app.innerHTML = header('📚 Справка', 'как всё работает', true) +
+      '<div class="card"><div class="title">🎁 Розыгрыши</div>' +
+      '<div class="meta">Создайте розыгрыш (кнопка «＋»): текст поста, фото/видео, каналы публикации и подписки, победители, время итогов. Пост выходит в каналы с кнопкой участия; бот проверяет подписки, показывает капчу, честно выбирает победителей и уведомляет их. Готовый пост можно отправить себе в чат из карточки розыгрыша.</div></div>' +
+      '<div class="card"><div class="title">🔗 Трекинг</div>' +
+      '<div class="meta">Ссылка на каждую закупку: кто кликнул, кто подписался, кто отписался и когда. Уникальная — ведёт на последний пост канала; Супер — на конкретный пост (только публичный канал); Конкурсная — пачкой по одному на каждый выбранный канал. Стоимость размещения считает цену подписчика (грязную и чистую).</div></div>' +
+      '<div class="card"><div class="title">📢 Каналы</div>' +
+      '<div class="meta">Добавляйте каналы, где бот админ (права «Читать все сообщения» и «Публиковать»). Публичные — по @username или ссылке; приватные — перешлите пост из канала боту в чат.</div></div>' +
+      '<div class="card"><div class="title">📊 Показатели</div>' +
+      '<div class="meta">Клики — переходы по ссылке. Подписки — вступившие в канал. Удержание — сколько подписчиков осталось через 1/3/7/14/30 дней. CPA грязный — стоимость/все подписавшиеся; чистый — стоимость/оставшиеся. Конверсия — подписки/клики.</div></div>' +
+      '<div class="card"><div class="title">🆘 Поддержка</div>' +
+      '<div class="meta">Вопросы и пожелания — напишите боту в чат, мы отвечаем.</div></div>';
+    if (backBtn) backBtn.onClick(renderMore);
+    document.getElementById('hb').onclick = renderMore;
   }
 
   // ---------- Создание трекинг-ссылки ----------
