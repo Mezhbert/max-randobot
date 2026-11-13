@@ -83,6 +83,7 @@
 
   if (sp.indexOf('part_') === 0 || sp.indexOf('g_') === 0) { go('/app/participate.html', sp); return; }
   if (sp.indexOf('results_') === 0 || sp.indexOf('r_') === 0) { go('/app/results.html', sp); return; }
+  if (sp.indexOf('analytics') === 0) { location.replace('/app/analytics.html'); return; }
 
   if (sp.indexOf('u_') === 0) { runTrack(sp.slice(2), initData); return; }
 

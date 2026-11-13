@@ -43,16 +43,16 @@ const (
 	CBGwKickPart     = "gw_kick:"                    // + giveaway_id:user_id (удалить участника)
 	CBGwCSVParts     = "gw_csv:"                     // + giveaway_id (экспорт участников CSV)
 
-	// UTM-трекинг (общее)
-	CBUTMQuickCreate = "utm_quick"      // трекинг: выбор канала (главное меню)
-	CBUTMQuickChSel  = "utm_qch:"       // + channel_id — канал выбран
-	CBUTMBuildYes    = "utm_build_yes"  // после названия: настроить метки конструктором
-	CBUTMBuildNo     = "utm_build_no"   // после названия: простая ссылка
-	CBUTMStageSkip   = "utm_stage_skip" // билдер: пропустить текущий шаг
-	CBUTMGW          = "utm_gw:"        // + giveaway_id — привязать ссылку к розыгрышу
-	CBUTMGWSkip      = "utm_gw_skip"    // билдер: без привязки к розыгрышу
-	CBUTMSkipPost    = "utm_post_skip"  // легаси: пропуск поста (маппится в stage-skip)
-	CBUTMSkipCost    = "utm_cost_skip"  // легаси: без стоимости
+	// UTM-трекинг (флоу по ревизии 13.11)
+	CBUTMQuickCreate = "utm_quick"     // Трекинг: старт (шаг «Конкурс/Реклама»)
+	CBUTMMode        = "utm_mode:"     // + ads|contest — выбранная механика
+	CBUTMQuickChSel  = "utm_qch:"      // + channel_id — канал выбран (реклама)
+	CBUTMToggle      = "utm_qt:"       // + channel_id — тоггл канала (конкурс)
+	CBUTMReady       = "utm_ready"     // конкурс: каналы выбраны → название
+	CBUTMBack        = "utm_back"      // ← Назад (на предыдущий шаг флоу)
+	CBUTMSkipCost    = "utm_cost_skip" // шаг стоимости: пропустить
+	CBUTMType        = "utm_type:"     // + unique|super — тип ссылки
+	CBUTMGenContest  = "utm_gen_cont"  // конкурс: сгенерировать ссылки
 
 	// Каналы
 	CBChannelAdd       = "ch_add"
@@ -354,41 +354,24 @@ func CancelKeyboard() *model.Keyboard {
 	return kb
 }
 
-// CostKeyboard — шаг билдера: стоимость выхода (пропуск/отмена).
-func CostKeyboard() *model.Keyboard {
-	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("⏭ Без стоимости", CBUTMSkipCost)
-	kb.AddRow().AddCallBack("✖ Отмена", CBMainMenu)
-	return kb
-}
-
-// PostRefKeyboard — шаг билдера трекинг-ссылки: пост-источник (пропуск/отмена).
-func PostRefKeyboard() *model.Keyboard {
-	kb := model.NewKeyboard()
-	kb.AddRow().AddCallBack("⏭ Без поста-источника", CBUTMSkipPost)
-	kb.AddRow().AddCallBack("✖ Отмена", CBMainMenu)
-	return kb
-}
-
-// ChannelUTMKeyboard — меню канала: создание ссылки (название → опциональный
-// конструктор меток) + аналитика.
+// ChannelUTMKeyboard — «Ссылки и статистика канала» (ревизия 13.11):
+// новая ссылка (полный флоу) + ссылки + динамика; детали — в миниаппе.
 func ChannelUTMKeyboard(channelID int64) *model.Keyboard {
 	id := strconv.FormatInt(channelID, 10)
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("➕ Новая ссылка", CBUTMCreate+id)
 	kb.AddRow().
-		AddCallBack("📊 Статистика", CBUTMStats+id).
+		AddCallBack("🔗 Ссылки", CBUTMStats+id).
 		AddCallBack("📈 Динамика", CBUTMDyn+id)
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb
 }
 
-// ChannelUTMStatsKeyboard — клавиатура на экране статистики (экспорт + назад).
+// ChannelUTMStatsKeyboard — клавиатура на экране ссылок (экспорт + назад).
 func ChannelUTMStatsKeyboard(channelID int64) *model.Keyboard {
 	id := strconv.FormatInt(channelID, 10)
 	kb := model.NewKeyboard()
 	kb.AddRow().AddCallBack("📎 Экспорт CSV", CBUTMExport+id)
-	kb.AddRow().AddCallBack("🔗 Создать UTM", CBUTMCreate+id)
 	kb.AddRow().AddCallBack("← К каналу", CBChannelUTM+id)
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb
@@ -400,7 +383,7 @@ func TrackingLinkKeyboard(link string, channelID int64) *model.Keyboard {
 	kb := model.NewKeyboard()
 	kb.AddRow().AddClipboard("📋 Скопировать ссылку", link)
 	if channelID > 0 {
-		kb.AddRow().AddCallBack("📊 Статистика канала", CBChannelUTM+strconv.FormatInt(channelID, 10))
+		kb.AddRow().AddCallBack("📊 Ссылки и статистика канала", CBChannelUTM+strconv.FormatInt(channelID, 10))
 	}
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb

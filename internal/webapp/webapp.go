@@ -419,6 +419,143 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		})
 	})
 
+	// ---------- API аналитики для мини-аппа (rev 13.11) ----------
+
+	// Каналы владельца со сводной статистикой ссылок.
+	mux.HandleFunc("/app/api/analytics/channels", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		channels, err := d.DB.ListChannels(r.Context(), userID)
+		if err != nil {
+			writeJSON(w, map[string]any{"error": "db"})
+			return
+		}
+		type chOut struct {
+			ID       int64  `json:"id"`
+			Title    string `json:"title"`
+			IsPublic bool   `json:"is_public"`
+			Admin    bool   `json:"admin"`
+			Links    int    `json:"links"`
+			Clicks   int64  `json:"clicks"`
+			Signups  int64  `json:"signups"`
+			AddedAt  string `json:"added_at"`
+		}
+		out := make([]chOut, 0, len(channels))
+		for _, c := range channels {
+			stats, _ := d.DB.ListUTMStats(r.Context(), userID, c.ID)
+			var clicks, signups int64
+			for _, st := range stats {
+				clicks += st.Clicks
+				signups += st.Signups
+			}
+			title := c.Title
+			if title == "" {
+				title = fmt.Sprintf("канал #%d", c.ChatID)
+			}
+			out = append(out, chOut{
+				ID: c.ID, Title: title, IsPublic: c.IsPublic, Admin: c.IsBotAdmin,
+				Links: len(stats), Clicks: clicks, Signups: signups,
+				AddedAt: c.CreatedAt.In(msk()).Format("02.01.2006"),
+			})
+		}
+		writeJSON(w, map[string]any{"channels": out})
+	})
+
+	// Ссылки канала (сорт name|date) + динамика 30 дней.
+	mux.HandleFunc("/app/api/analytics/channel/", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		chID, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/app/api/analytics/channel/"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"bad id"}`, http.StatusBadRequest)
+			return
+		}
+		if _, err := d.DB.GetChannel(r.Context(), chID, userID); err != nil {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		stats, err := d.DB.ListUTMStats(r.Context(), userID, chID)
+		if err != nil {
+			writeJSON(w, map[string]any{"error": "db"})
+			return
+		}
+		// Сортировка: date DESC (SQL) — по умолчанию; name — по алфавиту.
+		if r.URL.Query().Get("sort") == "name" {
+			sort.Slice(stats, func(i, j int) bool { return stats[i].Source < stats[j].Source })
+		}
+		type linkOut struct {
+			ID      int64   `json:"id"`
+			Name    string  `json:"name"`
+			Type    string  `json:"type"`
+			PostRef string  `json:"post_ref"`
+			Cost    float64 `json:"cost"`
+			Clicks  int64   `json:"clicks"`
+			Signups int64   `json:"signups"`
+			StillIn int     `json:"still_in"`
+			Ret1d   int     `json:"ret_1d"`
+			Ret3d   int     `json:"ret_3d"`
+			Ret7d   int     `json:"ret_7d"`
+			Ret14d  int     `json:"ret_14d"`
+			Ret30d  int     `json:"ret_30d"`
+			Conv    float64 `json:"conv"`
+		}
+		links := make([]linkOut, 0, len(stats))
+		for _, st := range stats {
+			ret, err := d.DB.GetUTMLinkRetention(r.Context(), st.ID)
+			if err != nil {
+				continue
+			}
+			conv := 0.0
+			if st.Clicks > 0 {
+				conv = float64(st.Signups) / float64(st.Clicks) * 100
+			}
+			links = append(links, linkOut{
+				ID: st.ID, Name: st.Source, Type: st.LinkType, PostRef: st.PostRef, Cost: st.Cost,
+				Clicks: st.Clicks, Signups: st.Signups, StillIn: ret.StillIn,
+				Ret1d: ret.Retained1d, Ret3d: ret.Retained3d, Ret7d: ret.Retained7d,
+				Ret14d: ret.Retained14d, Ret30d: ret.Retained30d, Conv: conv,
+			})
+		}
+		dyn, _ := d.DB.ChannelDynamics(r.Context(), chID, 30)
+		writeJSON(w, map[string]any{"links": links, "dynamics": dyn})
+	})
+
+	// Детальная статистика одной ссылки + подписчики + кликнувшие.
+	mux.HandleFunc("/app/api/analytics/link/", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		linkID, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/app/api/analytics/link/"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"bad id"}`, http.StatusBadRequest)
+			return
+		}
+		link, err := d.DB.GetUTMLinkByID(r.Context(), linkID)
+		if err != nil || link.OwnerUserID != userID {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		ret, _ := d.DB.GetUTMLinkRetention(r.Context(), linkID)
+		subs, _ := d.DB.ListUTMSubscribers(r.Context(), linkID)
+		clickers, _ := d.DB.ListUTMClickers(r.Context(), linkID)
+		conv := 0.0
+		if link.Clicks > 0 {
+			conv = float64(link.Signups) / float64(link.Clicks) * 100
+		}
+		writeJSON(w, map[string]any{
+			"link": link, "retention": ret, "subscribers": subs, "clickers": clickers,
+			"conv": conv,
+		})
+	})
+
 	// Лог запросов мини-аппа (диагностика QA: видно, что реально приходит от
 	// клиента; init_data не логируем — только факт наличия).
 	return logRequests(mux, log)
@@ -454,6 +591,8 @@ func miniAppRoute(sp string) (string, bool) {
 		return "/app/participate.html", true
 	case strings.HasPrefix(sp, "results_"), strings.HasPrefix(sp, "r_"):
 		return "/app/results.html", true
+	case strings.HasPrefix(sp, "analytics"):
+		return "/app/analytics.html", true
 	}
 	return "", false
 }
@@ -526,4 +665,12 @@ func serve(w http.ResponseWriter, name string) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// msk — зона МСК для форматирования дат в API миниаппа.
+func msk() *time.Location {
+	if loc, err := time.LoadLocation("Europe/Moscow"); err == nil {
+		return loc
+	}
+	return time.FixedZone("MSK", 3*3600)
 }

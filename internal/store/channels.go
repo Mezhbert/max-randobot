@@ -27,7 +27,7 @@ func (s *Store) AddChannel(ctx context.Context, c Channel) (Channel, error) {
 func (s *Store) ListChannels(ctx context.Context, ownerUserID int64) ([]Channel, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, owner_user_id, chat_id, title, link, is_public, is_bot_admin, admin_checked_at, created_at, updated_at
-		FROM channels WHERE owner_user_id=$1 ORDER BY created_at
+		FROM channels WHERE owner_user_id=$1 ORDER BY created_at DESC
 	`, ownerUserID)
 	if err != nil {
 		return nil, err

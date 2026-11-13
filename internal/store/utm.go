@@ -16,6 +16,7 @@ type UTMLink struct {
 	UTMTerm     string // utm_term (ключевая фраза)
 	UTMContent  string // utm_content (элемент: баннер/текст)
 	GiveawayID  int64  // привязка к розыгрышу (retention после итогов)
+	LinkType    string // unique (на канал) | super (на пост) | contest
 	PostRef     string // ссылка/название поста-источника
 	Code        string // код диплинка (без префикса utm_)
 	Cost        float64 // стоимость выхода (₽), для CPA
@@ -28,12 +29,12 @@ type UTMLink struct {
 // CreateUTMLink — генерация UTM-ссылки для отслеживания источников подписок.
 // channelID=0 → NULL (легаси-ссылка без привязки к каналу).
 // Возвращает ID созданной/обновлённой записи. code — БЕЗ префикса "utm_".
-func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64, source, medium, campaign, term, content, postRef, code string, cost float64, giveawayID int64) (int64, error) {
+func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64, source, medium, campaign, term, content, postRef, code string, cost float64, giveawayID int64, linkType string) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO utm_links (owner_user_id, channel_id, source, medium, campaign,
-			utm_term, utm_content, post_ref, code, cost, giveaway_id)
-		VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, 0))
+			utm_term, utm_content, post_ref, code, cost, giveaway_id, link_type)
+		VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, 0), $12)
 		ON CONFLICT (code) DO UPDATE
 		  SET source = EXCLUDED.source,
 		      medium = EXCLUDED.medium,
@@ -41,9 +42,10 @@ func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64,
 		      utm_term = EXCLUDED.utm_term,
 		      utm_content = EXCLUDED.utm_content,
 		      post_ref = EXCLUDED.post_ref,
-		      giveaway_id = COALESCE(EXCLUDED.giveaway_id, utm_links.giveaway_id)
+		      giveaway_id = COALESCE(EXCLUDED.giveaway_id, utm_links.giveaway_id),
+		      link_type  = EXCLUDED.link_type
 		RETURNING id
-	`, ownerUserID, channelID, source, medium, campaign, term, content, postRef, code, cost, giveawayID).Scan(&id)
+	`, ownerUserID, channelID, source, medium, campaign, term, content, postRef, code, cost, giveawayID, linkType).Scan(&id)
 	return id, err
 }
 
@@ -52,11 +54,11 @@ func (s *Store) GetUTMLinkByID(ctx context.Context, id int64) (UTMLink, error) {
 	var u UTMLink
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign,
-		       utm_term, utm_content, COALESCE(giveaway_id,0), post_ref, code, cost,
+		       utm_term, utm_content, COALESCE(giveaway_id,0), post_ref, code, cost, link_type,
 		       clicks, signups, COALESCE(unsubs,0), COALESCE(enabled,true)
 		FROM utm_links WHERE id=$1
 	`, id).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign,
-		&u.UTMTerm, &u.UTMContent, &u.GiveawayID, &u.PostRef, &u.Code, &u.Cost,
+		&u.UTMTerm, &u.UTMContent, &u.GiveawayID, &u.PostRef, &u.Code, &u.Cost, &u.LinkType,
 		&u.Clicks, &u.Signups, &u.Unsubs, &u.Enabled)
 	return u, wrapNotFound(err)
 }
@@ -66,11 +68,11 @@ func (s *Store) GetUTMLinkByCode(ctx context.Context, code string) (UTMLink, err
 	var u UTMLink
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign,
-		       utm_term, utm_content, COALESCE(giveaway_id,0), post_ref, code, cost,
+		       utm_term, utm_content, COALESCE(giveaway_id,0), post_ref, code, cost, link_type,
 		       clicks, signups, COALESCE(unsubs,0), COALESCE(enabled,true)
 		FROM utm_links WHERE code=$1
 	`, code).Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign,
-		&u.UTMTerm, &u.UTMContent, &u.GiveawayID, &u.PostRef, &u.Code, &u.Cost,
+		&u.UTMTerm, &u.UTMContent, &u.GiveawayID, &u.PostRef, &u.Code, &u.Cost, &u.LinkType,
 		&u.Clicks, &u.Signups, &u.Unsubs, &u.Enabled)
 	return u, wrapNotFound(err)
 }
@@ -165,6 +167,7 @@ type UTMStat struct {
 	UTMTerm   string
 	UTMContent string
 	GiveawayID int64
+	LinkType  string
 	PostRef   string
 	Code      string
 	Cost      float64
@@ -177,7 +180,7 @@ type UTMStat struct {
 func (s *Store) ListUTMStats(ctx context.Context, ownerUserID, channelID int64) ([]UTMStat, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, source, medium, campaign, utm_term, utm_content, COALESCE(giveaway_id,0),
-		       post_ref, code, cost, clicks, signups, COALESCE(unsubs,0)
+		       post_ref, code, cost, link_type, clicks, signups, COALESCE(unsubs,0)
 		FROM utm_links
 		WHERE owner_user_id=$1 AND channel_id=$2
 		ORDER BY created_at DESC
@@ -190,7 +193,7 @@ func (s *Store) ListUTMStats(ctx context.Context, ownerUserID, channelID int64) 
 	for rows.Next() {
 		var u UTMStat
 		if err := rows.Scan(&u.ID, &u.Source, &u.Medium, &u.Campaign, &u.UTMTerm, &u.UTMContent,
-			&u.GiveawayID, &u.PostRef, &u.Code, &u.Cost, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
+			&u.GiveawayID, &u.PostRef, &u.Code, &u.Cost, &u.LinkType, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
 			return nil, err
 		}
 		res = append(res, u)
@@ -202,7 +205,7 @@ func (s *Store) ListUTMStats(ctx context.Context, ownerUserID, channelID int64) 
 func (s *Store) ListUTMStatsAll(ctx context.Context, ownerUserID int64) ([]UTMStat, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, source, medium, campaign, utm_term, utm_content, COALESCE(giveaway_id,0),
-		       post_ref, code, cost, clicks, signups, COALESCE(unsubs,0)
+		       post_ref, code, cost, link_type, clicks, signups, COALESCE(unsubs,0)
 		FROM utm_links
 		WHERE owner_user_id=$1
 		ORDER BY created_at DESC
@@ -215,7 +218,7 @@ func (s *Store) ListUTMStatsAll(ctx context.Context, ownerUserID int64) ([]UTMSt
 	for rows.Next() {
 		var u UTMStat
 		if err := rows.Scan(&u.ID, &u.Source, &u.Medium, &u.Campaign, &u.UTMTerm, &u.UTMContent,
-			&u.GiveawayID, &u.PostRef, &u.Code, &u.Cost, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
+			&u.GiveawayID, &u.PostRef, &u.Code, &u.Cost, &u.LinkType, &u.Clicks, &u.Signups, &u.Unsubs); err != nil {
 			return nil, err
 		}
 		res = append(res, u)
@@ -316,6 +319,7 @@ type UTMLinkRetention struct {
 	Retained3d    int
 	Retained7d    int
 	Retained14d   int
+	Retained30d   int
 	GiveawayEndAt *time.Time // время окончания привязанного розыгрыша (если закончился)
 	RetainedAfterGiveaway int
 }
@@ -332,9 +336,10 @@ func (s *Store) GetUTMLinkRetention(ctx context.Context, utmLinkID int64) (UTMLi
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '1 day'),
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '3 days'),
 		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '7 days'),
-		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '14 days')
+		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '14 days'),
+		  COUNT(*) FILTER (WHERE unsubscribed_at IS NULL OR unsubscribed_at >= subscribed_at + interval '30 days')
 		FROM utm_subscribers WHERE utm_link_id = $1
-	`, utmLinkID).Scan(&r.Subscribed, &r.StillIn, &r.WasMemberAtClick, &r.Retained1d, &r.Retained3d, &r.Retained7d, &r.Retained14d)
+	`, utmLinkID).Scan(&r.Subscribed, &r.StillIn, &r.WasMemberAtClick, &r.Retained1d, &r.Retained3d, &r.Retained7d, &r.Retained14d, &r.Retained30d)
 	if err != nil {
 		return r, err
 	}
@@ -353,4 +358,77 @@ func (s *Store) GetUTMLinkRetention(ctx context.Context, utmLinkID int64) (UTMLi
 		`, utmLinkID, *end).Scan(&r.RetainedAfterGiveaway)
 	}
 	return r, nil
+}
+
+// UTMSubscriberView — подписчик ссылки для мини-аппа.
+type UTMSubscriberView struct {
+	UserID        int64
+	FirstName     string
+	Username      string
+	SubscribedAt  string
+	UnsubscribedAt string // пусто = подписан
+	WasMember     bool   // уже был участником на момент клика
+}
+
+// ListUTMSubscribers — подписчики ссылки с именами (миниапп).
+func (s *Store) ListUTMSubscribers(ctx context.Context, utmLinkID int64) ([]UTMSubscriberView, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT us.user_id, COALESCE(u.first_name,''), COALESCE(u.username,''),
+		       to_char(us.subscribed_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YY HH24:MI'),
+		       COALESCE(to_char(us.unsubscribed_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YY HH24:MI'), ''),
+		       us.was_subscribed_at_click
+		FROM utm_subscribers us
+		JOIN users u ON u.user_id = us.user_id
+		WHERE us.utm_link_id = $1
+		ORDER BY us.subscribed_at DESC
+		LIMIT 500
+	`, utmLinkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []UTMSubscriberView
+	for rows.Next() {
+		var v UTMSubscriberView
+		if err := rows.Scan(&v.UserID, &v.FirstName, &v.Username, &v.SubscribedAt, &v.UnsubscribedAt, &v.WasMember); err != nil {
+			return nil, err
+		}
+		res = append(res, v)
+	}
+	return res, rows.Err()
+}
+
+// ListClickers — кликнувшие по ссылке (для списка юзеров в миниаппе):
+// включая не подписавшихся.
+type UTMClickerView struct {
+	UserID    int64
+	FirstName string
+	Username  string
+	ClickedAt string
+	ClickedMSK bool
+}
+
+func (s *Store) ListUTMClickers(ctx context.Context, utmLinkID int64) ([]UTMClickerView, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.user_id, COALESCE(u.first_name,''), COALESCE(u.username,''),
+		       to_char(c.started_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YY HH24:MI')
+		FROM utm_clicks c
+		JOIN users u ON u.user_id = c.user_id
+		WHERE c.utm_link_id = $1 AND c.user_id <> 0
+		ORDER BY c.started_at DESC
+		LIMIT 500
+	`, utmLinkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []UTMClickerView
+	for rows.Next() {
+		var v UTMClickerView
+		if err := rows.Scan(&v.UserID, &v.FirstName, &v.Username, &v.ClickedAt); err != nil {
+			return nil, err
+		}
+		res = append(res, v)
+	}
+	return res, rows.Err()
 }

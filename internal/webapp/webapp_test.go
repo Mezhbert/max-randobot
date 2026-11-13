@@ -163,7 +163,7 @@ func TestTrackAPI_ClickMembershipCheck(t *testing.T) {
 	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: 1, ChatID: -424242, Title: "Ch", IsBotAdmin: true})
 	require.NoError(t, err)
 	linkID, err := s.CreateUTMLink(ctx, 1, ch.ID, "Проверка", "referral", "Проверка",
-		"", "", "", "clickcheck", 0, 0)
+		"", "", "", "clickcheck", 0, 0, "unique")
 	require.NoError(t, err)
 
 	// Валидная подпись init_data по формуле SDK: данные — параметры,

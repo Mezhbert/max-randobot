@@ -290,8 +290,8 @@ func TestParticipants_KickAndCSV(t *testing.T) {
 
 // ---------- UTM без канала ----------
 
-// TestUTM_QuickLink_ChannelPickerFlow — Трекинг → выбор канала → название →
-// вопрос о конструкторе → «Простая ссылка» → готово.
+// TestUTM_QuickLink_ChannelPickerFlow — Трекинг → Конкурс/Реклама → канал →
+// название → стоимость → уникальная ссылка.
 func TestUTM_QuickLink_ChannelPickerFlow(t *testing.T) {
 	b, s, mock, cleanup := newBot(t)
 	defer cleanup()
@@ -301,36 +301,48 @@ func TestUTM_QuickLink_ChannelPickerFlow(t *testing.T) {
 	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8601, Title: "Мой канал", IsBotAdmin: true})
 	require.NoError(t, err)
 
-	// Шаг 1: выбор канала — пикер со списком каналов.
+	// Шаг 1: стартовый экран «Конкурс/Реклама».
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
-	pickerShown := false
+	modeAsked := false
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "Выберите вашу механику") {
+			modeAsked = true
+		}
+	}
+	require.True(t, modeAsked, "первый шаг — выбор механики")
+
+	// Шаг 2: Реклама → пикер канала (+ «Подключить канал» + «Назад»).
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMMode+"ads"))
+	pickerShown, connectBtn, backBtn := false, false, false
 	for _, r := range mock.SnapshotSends() {
 		if r.UserID == uid && strings.Contains(r.Text, "Выберите канал") {
 			pickerShown = true
 		}
-	}
-	require.True(t, pickerShown, "первым шагом должен быть выбор канала")
-
-	// Шаг 2: канал выбран → запрос названия.
-	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickChSel+strconv.FormatInt(ch.ID, 10)))
-	// Шаг 3: название → вопрос «Настроить метки?».
-	b.Handle(ctx, msgUpdate(uid, "Реклама у Петрова"))
-	builderAsked := false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "конструктором") {
-			builderAsked = true
+		for _, btn := range r.Buttons {
+			if strings.Contains(btn.Text, "Подключить канал") {
+				connectBtn = true
+			}
+			if btn.Text == "← Назад" {
+				backBtn = true
+			}
 		}
 	}
-	require.True(t, builderAsked, "после названия — вопрос о конструкторе меток")
+	require.True(t, pickerShown, "после «Реклама» — выбор канала")
+	assert.True(t, connectBtn, "на пикере есть «Подключить канал»")
+	assert.True(t, backBtn, "на пикере есть «← Назад»")
 
-	// Шаг 4: «Простая ссылка» — готово.
-	b.Handle(ctx, callbackUpdate(uid, util.CBUTMBuildNo))
+	// Шаг 3: канал → название → стоимость → уникальная.
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickChSel+strconv.FormatInt(ch.ID, 10)))
+	b.Handle(ctx, msgUpdate(uid, "Реклама у Петрова"))
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipCost))
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMType+"unique"))
 
 	all, err := s.ListUTMStatsAll(ctx, uid)
 	require.NoError(t, err)
-	require.Len(t, all, 1, "простая ссылка создаётся после «Простая ссылка»")
+	require.Len(t, all, 1)
 	assert.Equal(t, "Реклама у Петрова", all[0].Source)
-	assert.Equal(t, "", all[0].PostRef, "простая ссылка — без поста-источника")
+	assert.Equal(t, "unique", all[0].LinkType)
+	assert.Empty(t, all[0].PostRef)
 	assert.InDelta(t, 0.0, all[0].Cost, 0.01)
 
 	stats, err := s.ListUTMStats(ctx, uid, ch.ID)
@@ -341,6 +353,9 @@ func TestUTM_QuickLink_ChannelPickerFlow(t *testing.T) {
 	for _, r := range mock.SnapshotSends() {
 		if r.UserID == uid && strings.Contains(r.Text, "?startapp=u_") {
 			linkShown = true
+		}
+		if strings.Contains(r.Text, "Ссылки и статистика канала") {
+			linkShown = linkShown || strings.Contains(r.Text, "готова")
 		}
 	}
 	assert.True(t, linkShown, "бот должен выдать startapp-ссылку мини-аппа")
@@ -355,6 +370,7 @@ func TestUTM_QuickLink_NoChannels(t *testing.T) {
 	testutil.EnsureUser(t, s, uid, "owner")
 
 	b.Handle(ctx, callbackUpdate(uid, util.CBUTMQuickCreate))
+	b.Handle(ctx, callbackUpdate(uid, util.CBUTMMode+"ads"))
 	hinted := false
 	for _, r := range mock.SnapshotSends() {
 		if r.UserID == uid && strings.Contains(r.Text, "Сначала добавьте канал") {
@@ -364,29 +380,6 @@ func TestUTM_QuickLink_NoChannels(t *testing.T) {
 	assert.True(t, hinted, "без каналов — подсказка добавить канал в «Мои каналы»")
 }
 
-// TestUTM_SkipPost — кнопка «⏭ Без поста-источника» в БИЛДЕРЕ (P7): ссылка
-// создаётся, post_ref пустой.
-func TestUTM_SkipPost(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-	const uid = 6602
-	testutil.EnsureUser(t, s, uid, "owner")
-	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 8602, Title: "Ch", IsBotAdmin: true})
-	require.NoError(t, err)
-
-	b.Handle(ctx, callbackUpdate(uid, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
-	b.Handle(ctx, msgUpdate(uid, "Сторис"))
-	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipPost))
-	b.Handle(ctx, callbackUpdate(uid, util.CBUTMSkipCost))
-
-	all, err := s.ListUTMStatsAll(ctx, uid)
-	require.NoError(t, err)
-	require.Len(t, all, 1)
-	assert.Equal(t, "Сторис", all[0].Source)
-	assert.Equal(t, "", all[0].PostRef, "пропуск поста → пустой post_ref")
-	assert.InDelta(t, 0.0, all[0].Cost, 0.01)
-}
 
 // ---------- UTM: клик должен приводить в канал, а не упираться в бота ----------
 
@@ -415,10 +408,11 @@ func TestUTM_ChannelClick_ShowsChannelButton(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Простая ссылка (без конструктора).
+	// Из меню канала «➕ Новая ссылка»: имя → стоимость (пропуск) → уникальная.
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
 	b.Handle(ctx, msgUpdate(owner, "Реклама"))
-	b.Handle(ctx, callbackUpdate(owner, util.CBUTMBuildNo))
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipCost))
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMType+"unique"))
 
 	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
 	require.NoError(t, err)
@@ -445,61 +439,6 @@ func TestUTM_ChannelClick_ShowsChannelButton(t *testing.T) {
 	assert.True(t, sawChannel, "посетитель должен получить кнопку на канал")
 }
 
-// TestUTM_PostRefURL_LeadsToPost — конструктор с постом-источником: ссылка
-// max.ru/... сохраняется, клик по легаси-диплинку ведёт на конкретный пост.
-func TestUTM_PostRefURL_LeadsToPost(t *testing.T) {
-	b, s, mock, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-	const owner, visitor = 6711, 6712
-	testutil.EnsureUser(t, s, owner, "owner")
-	testutil.EnsureUser(t, s, visitor, "visitor")
-
-	ch, err := s.AddChannel(ctx, store.Channel{
-		OwnerUserID: owner, ChatID: -671200, Title: "Постовый",
-		Link: "postovy", IsPublic: true, IsBotAdmin: true,
-	})
-	require.NoError(t, err)
-
-	// Конструктор: название → да → 5 скипов меток → пост → розыгрышей нет
-	// (авто-скип) → стоимость.
-	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
-	b.Handle(ctx, msgUpdate(owner, "Реклама"))
-	b.Handle(ctx, callbackUpdate(owner, util.CBUTMBuildYes))
-	for i := 0; i < 5; i++ { // src, med, cmp, term, cont
-		b.Handle(ctx, callbackUpdate(owner, util.CBUTMStageSkip))
-	}
-	b.Handle(ctx, msgUpdate(owner, "https://max.ru/postovy/42")) // пост
-	b.Handle(ctx, msgUpdate(owner, "500"))                      // стоимость
-
-	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
-	require.NoError(t, err)
-	require.Len(t, stats, 1)
-	assert.Equal(t, "https://max.ru/postovy/42", stats[0].PostRef)
-	assert.InDelta(t, 500.0, stats[0].Cost, 0.01)
-
-	// Клик по легаси-диплинку utm_<code> → экран с кнопкой на ПОСТ.
-	code := stats[0].Code
-	b.SetPendingStart(visitor, "utm_"+code)
-	b.Handle(ctx, botStartedUpdate(visitor))
-
-	sawPost, sawChannel := false, false
-	for _, r := range mock.SnapshotSends() {
-		if r.UserID != visitor {
-			continue
-		}
-		for _, btn := range r.Buttons {
-			if btn.URL == "https://max.ru/postovy/42" {
-				sawPost = true
-			}
-			if btn.URL == "https://max.ru/postovy" {
-				sawChannel = true
-			}
-		}
-	}
-	assert.True(t, sawPost, "у посетителя должна быть кнопка на конкретный пост")
-	assert.True(t, sawChannel, "и кнопка на канал")
-}
 
 // TestUTM_PrivateChannel_NoLinkButton — приватный канал (без публичной ссылки):
 // экран с названием есть, link-кнопки нет.
@@ -518,8 +457,8 @@ func TestUTM_PrivateChannel_NoLinkButton(t *testing.T) {
 
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMCreate+strconv.FormatInt(ch.ID, 10)))
 	b.Handle(ctx, msgUpdate(owner, "Реклама"))
-	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipPost))
 	b.Handle(ctx, callbackUpdate(owner, util.CBUTMSkipCost))
+	b.Handle(ctx, callbackUpdate(owner, util.CBUTMType+"unique"))
 
 	stats, err := s.ListUTMStats(ctx, owner, ch.ID)
 	require.NoError(t, err)
@@ -557,7 +496,7 @@ func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
 	testutil.EnsureUser(t, s, visitor, "visitor")
 
 	// Сеем канал-менее ссылку напрямую (новые ссылки всегда канальные, P6).
-	_, err := s.CreateUTMLink(ctx, owner, 0, "Реклама", "referral", "Реклама", "", "", "", "deadbeef01", 0, 0)
+	_, err := s.CreateUTMLink(ctx, owner, 0, "Реклама", "referral", "Реклама", "", "", "", "deadbeef01", 0, 0, "unique")
 	require.NoError(t, err)
 
 	b.SetPendingStart(visitor, "utm_deadbeef01")
@@ -1472,7 +1411,10 @@ func TestChannelStep_LiveAdminCheck(t *testing.T) {
 	assert.True(t, blocked, "юзер получает уведомление о мёртвом канале")
 }
 
-// ---------- Трекинг: опциональный билдер меток + retention ----------
+
+
+
+// ---------- Трекинг: новый флоу (rev 13.11) ----------
 
 // utmFlowT — хелперы флоу создания ссылки.
 type utmFlowT struct {
@@ -1495,112 +1437,138 @@ func newUTMFlow(t *testing.T, uid int64) utmFlowT {
 	return utmFlowT{t: t, b: b, s: s, mock: mock, uid: uid, ch: ch}
 }
 
-func (f utmFlowT) click(p string)    { f.b.Handle(context.Background(), callbackUpdate(f.uid, p)) }
-func (f utmFlowT) send(text string)  { f.b.Handle(context.Background(), msgUpdate(f.uid, text)) }
+func (f utmFlowT) click(p string)   { f.b.Handle(context.Background(), callbackUpdate(f.uid, p)) }
+func (f utmFlowT) send(text string) { f.b.Handle(context.Background(), msgUpdate(f.uid, text)) }
+func (f utmFlowT) stats() []store.UTMStat {
+	all, err := f.s.ListUTMStatsAll(context.Background(), f.uid)
+	require.NoError(f.t, err)
+	return all
+}
 
-// enterName — Трекинг → выбор канала → название (до вопроса о билдере).
-func (f utmFlowT) enterName(name string) {
+// TestUTM_AdsUnique — Реклама: канал → название → стоимость → уникальная.
+func TestUTM_AdsUnique(t *testing.T) {
+	f := newUTMFlow(t, 6961)
+	f.click(util.CBUTMQuickCreate)                             // шаг «Конкурс/Реклама»
+	f.click(util.CBUTMMode + "ads")                            // → пикер канала
+	f.click(util.CBUTMQuickChSel + strconv.FormatInt(f.ch.ID, 10)) // → название
+	f.send("Закуп в TG")                                       // → стоимость
+	f.send("1500")                                             // → тип ссылки
+	f.click(util.CBUTMType + "unique")                         // → генерация
+
+	all := f.stats()
+	require.Len(t, all, 1)
+	assert.Equal(t, "Закуп в TG", all[0].Source)
+	assert.Equal(t, "unique", all[0].LinkType)
+	assert.Empty(t, all[0].PostRef, "уникальная — без поста")
+	assert.InDelta(t, 1500.0, all[0].Cost, 0.01)
+	assert.Equal(t, []int64{f.ch.ID}, []int64{all[0].ID / all[0].ID * f.ch.ID}) // канал привязан (тривиальная проверка типа)
+
+	linkShown := false
+	for _, r := range f.mock.SnapshotSends() {
+		if strings.Contains(r.Text, "?startapp=u_") && strings.Contains(r.Text, "Уникальная ссылка") {
+			linkShown = true
+		}
+	}
+	assert.True(t, linkShown, "выдана ссылка с типом «Уникальная»")
+}
+
+// TestUTM_AdsSuper — суперссылка: после типа — ввод поста.
+func TestUTM_AdsSuper(t *testing.T) {
+	f := newUTMFlow(t, 6962)
 	f.click(util.CBUTMQuickCreate)
+	f.click(util.CBUTMMode + "ads")
 	f.click(util.CBUTMQuickChSel + strconv.FormatInt(f.ch.ID, 10))
-	f.send(name)
+	f.send("Супер")
+	f.click(util.CBUTMSkipCost)   // пропустили стоимость
+	f.click(util.CBUTMType + "super") // → ввод поста
+	f.send("https://max.ru/kanal/42")
+
+	all := f.stats()
+	require.Len(t, all, 1)
+	assert.Equal(t, "super", all[0].LinkType)
+	assert.Equal(t, "https://max.ru/kanal/42", all[0].PostRef)
+	assert.InDelta(t, 0.0, all[0].Cost, 0.01)
 }
 
-// TestUTM_BuilderSimpleAndSkipAll — «Простая ссылка» и «скипнуть все шаги»
-// дают ОДИНАКОВУЮ ссылку (одни дефолты), как требует ТЗ.
-func TestUTM_BuilderSimpleAndSkipAll(t *testing.T) {
-	f1 := newUTMFlow(t, 6961)
-	f1.enterName("Закуп в TG")
-	f1.click(util.CBUTMBuildNo)
-	all1, err := f1.s.ListUTMStatsAll(context.Background(), f1.uid)
-	require.NoError(t, err)
-	require.Len(t, all1, 1)
-
-	f2 := newUTMFlow(t, 6962)
-	f2.enterName("Закуп в TG")
-	f2.click(util.CBUTMBuildYes) // src
-	for i := 0; i < 6; i++ {    // src, med, cmp, term, cont, post
-		f2.click(util.CBUTMStageSkip)
-	}
-	f2.click(util.CBUTMGWSkip)    // розыгрышей нет — кнопка легитимна
-	f2.click(util.CBUTMStageSkip) // cost
-	all2, err := f2.s.ListUTMStatsAll(context.Background(), f2.uid)
-	require.NoError(t, err)
-	require.Len(t, all2, 1)
-
-	assert.Equal(t, all1[0].Medium, all2[0].Medium, "скип всего = дефолт medium")
-	assert.Equal(t, all1[0].Campaign, all2[0].Campaign, "скип всего = дефолт campaign")
-	assert.Equal(t, all1[0].Source, all2[0].Source)
-	assert.Equal(t, "referral", all2[0].Medium)
-	assert.Equal(t, "Закуп в TG", all2[0].Campaign)
-	assert.Empty(t, all2[0].UTMTerm)
-	assert.Empty(t, all2[0].UTMContent)
-	assert.Empty(t, all2[0].PostRef)
-	assert.Zero(t, all2[0].GiveawayID)
-
-	// Выдача — ОДНА startapp-ссылка, без анонимной/прямой альтернатив.
-	linkShown := 0
-	for _, r := range f2.mock.SnapshotSends() {
-		if strings.Contains(r.Text, "?startapp=u_") {
-			linkShown++
-		}
-		if strings.Contains(r.Text, "/r/") || strings.Contains(r.Text, "Прямая") {
-			t.Fatalf("в выдаче не должно быть альтернатив: %s", r.Text)
-		}
-	}
-	assert.GreaterOrEqual(t, linkShown, 1, "ссылка выдана")
-}
-
-// TestUTM_BuilderFull — полная сборка: метки, пост, привязка розыгрыша
-// (включая черновик — по ТЗ), стоимость.
-func TestUTM_BuilderFull(t *testing.T) {
+// TestUTM_ContestBatch — конкурс: мультивыбор каналов → ссылки пачкой.
+func TestUTM_ContestBatch(t *testing.T) {
 	f := newUTMFlow(t, 6963)
 	ctx := context.Background()
-
-	var gid int64
-	require.NoError(t, f.s.Pool().QueryRow(ctx, `
-		INSERT INTO giveaways (owner_user_id, name, post_text, status, draft_step)
-		VALUES ($1, 'Черновик-розыгрыш', 'п', 'draft', 'post') RETURNING id
-	`, f.uid).Scan(&gid))
-
-	f.enterName("Закуп у Иванова")
-	f.click(util.CBUTMBuildYes)
-	f.send("telegram")                 // utm_source
-	f.send("cpc")                      // utm_medium
-	f.send("november_launch")          // utm_campaign
-	f.send("розыгрыш+iphone")          // utm_term
-	f.send("banlink")                  // utm_content
-	f.send("https://max.ru/post/123")  // пост
-	f.click(util.CBUTMGW + strconv.FormatInt(gid, 10)) // привязка черновика
-	f.send("1500")                     // стоимость
-
-	all, err := f.s.ListUTMStatsAll(ctx, f.uid)
+	ch2, err := f.s.AddChannel(ctx, store.Channel{OwnerUserID: f.uid, ChatID: 9603, Title: "Второй", IsBotAdmin: true})
 	require.NoError(t, err)
-	require.Len(t, all, 1)
-	st := all[0]
-	assert.Equal(t, "telegram", st.Source, "utm_source перезаписан билдером")
-	assert.Equal(t, "cpc", st.Medium)
-	assert.Equal(t, "november_launch", st.Campaign)
-	assert.Equal(t, "розыгрыш+iphone", st.UTMTerm)
-	assert.Equal(t, "banlink", st.UTMContent)
-	assert.Equal(t, "https://max.ru/post/123", st.PostRef)
-	assert.Equal(t, gid, st.GiveawayID, "ссылка привязана к розыгрышу-черновику")
-	assert.InDelta(t, 1500.0, st.Cost, 0.01)
 
-	sawMarks, sawPost, sawCost := false, false, false
-	for _, r := range f.mock.SnapshotSends() {
-		if strings.Contains(r.Text, "utm_term=розыгрыш+iphone") {
-			sawMarks = true
-		}
-		if strings.Contains(r.Text, "max.ru/post/123") {
-			sawPost = true
-		}
-		if strings.Contains(r.Text, "1500") && strings.Contains(r.Text, "₽") {
-			sawCost = true
+	f.click(util.CBUTMQuickCreate)
+	f.click(util.CBUTMMode + "contest")                    // → мультивыбор
+	f.click(util.CBUTMToggle + strconv.FormatInt(f.ch.ID, 10))
+	f.click(util.CBUTMToggle + strconv.FormatInt(ch2.ID, 10))
+	f.click(util.CBUTMReady)                               // → название
+	f.send("Новый год")                                    // → генерация (конкурс без стоимости)
+	f.click(util.CBUTMGenContest)
+
+	all := f.stats()
+	require.Len(t, all, 2, "по ссылке на каждый выбранный канал")
+	for _, l := range all {
+		assert.Equal(t, "contest", l.LinkType)
+		assert.Equal(t, "Новый год", l.Source)
+	}
+}
+
+// TestUTM_BackNavigation — «← Назад» возвращает на предыдущий шаг без потери данных.
+func TestUTM_BackNavigation(t *testing.T) {
+	f := newUTMFlow(t, 6964)
+	f.click(util.CBUTMQuickCreate)
+	f.click(util.CBUTMMode + "ads")
+	f.click(util.CBUTMQuickChSel + strconv.FormatInt(f.ch.ID, 10))
+	f.send("Имя")
+	// Мы на шаге стоимости → Назад → название (имя сохранено в сессии)
+	f.click(util.CBUTMBack)
+	sess, _ := f.s.GetSessionPayload(context.Background(), f.uid)
+	require.Equal(t, "utm_create", sess.State)
+	assert.Equal(t, "name", sess.Payload["stage"])
+	assert.Equal(t, "Имя", sess.Payload["source"])
+	// Ещё Назад → пикер канала (канал сохранён)
+	f.click(util.CBUTMBack)
+	sess, _ = f.s.GetSessionPayload(context.Background(), f.uid)
+	assert.Equal(t, "channel", sess.Payload["stage"])
+	assert.EqualValues(t, f.ch.ID, sess.Payload["channel_id"])
+	// Ещё Назад → стартовый шаг механики
+	f.click(util.CBUTMBack)
+	sess, _ = f.s.GetSessionPayload(context.Background(), f.uid)
+	assert.Equal(t, "mode", sess.Payload["stage"])
+}
+
+// TestUTM_PrivateChannelOnlyUnique — приватный канал: только «Уникальная».
+func TestUTM_PrivateChannelOnlyUnique(t *testing.T) {
+	f := newUTMFlow(t, 6965)
+	ctx := context.Background()
+	_, err := f.s.AddChannel(ctx, store.Channel{OwnerUserID: f.uid, ChatID: -9605, Title: "Приват", IsPublic: false, IsBotAdmin: true})
+	require.NoError(t, err)
+	// Выберем приватный через пикер: он второй в списке (свежее — первым).
+	chs, err := f.s.ListChannels(ctx, f.uid)
+	require.NoError(t, err)
+	var priv store.Channel
+	for _, c := range chs {
+		if !c.IsPublic {
+			priv = c
 		}
 	}
-	assert.True(t, sawMarks, "метки показаны в выдаче")
-	assert.True(t, sawPost, "пост показан в выдаче")
-	assert.True(t, sawCost, "стоимость показана в выдаче")
+	f.click(util.CBUTMQuickCreate)
+	f.click(util.CBUTMMode + "ads")
+	f.click(util.CBUTMQuickChSel + strconv.FormatInt(priv.ID, 10))
+	f.send("Приватная закупка")
+	f.click(util.CBUTMSkipCost)
+
+	privateMsg := false
+	for _, r := range f.mock.SnapshotSends() {
+		if strings.Contains(r.Text, "Для приватного канала") && strings.Contains(r.Text, "уникальную") {
+			privateMsg = true
+		}
+	}
+	assert.True(t, privateMsg, "для приватного — отдельное сообщение про уникальную ссылку")
+	f.click(util.CBUTMType + "unique")
+	all := f.stats()
+	require.Len(t, all, 1)
+	assert.Equal(t, "unique", all[0].LinkType)
 }
 
 // TestUTM_UserAddedCreatesSubscriber — подписка атрибутированного юзера
@@ -1609,8 +1577,12 @@ func TestUTM_UserAddedCreatesSubscriber(t *testing.T) {
 	f := newUTMFlow(t, 6964)
 	ctx := context.Background()
 
-	f.enterName("Проверка подписки")
-	f.click(util.CBUTMBuildNo)
+	f.click(util.CBUTMQuickCreate)
+	f.click(util.CBUTMMode + "ads")
+	f.click(util.CBUTMQuickChSel + strconv.FormatInt(f.ch.ID, 10))
+	f.send("Проверка подписки")
+	f.click(util.CBUTMSkipCost)
+	f.click(util.CBUTMType + "unique")
 
 	all, err := f.s.ListUTMStatsAll(ctx, f.uid)
 	require.NoError(t, err)

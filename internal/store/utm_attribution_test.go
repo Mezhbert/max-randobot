@@ -31,7 +31,7 @@ func TestUTM_AccountSignupByChatID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Трекинг-ссылка на канал + клик юзера 101 (атрибуция).
-	linkID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Реклама у Иванова", "referral", "Реклама у Иванова", "", "", "", "ab12cd34ef", 1500, 0)
+	linkID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Реклама у Иванова", "referral", "Реклама у Иванова", "", "", "", "ab12cd34ef", 1500, 0, "unique")
 	require.NoError(t, err)
 	require.NoError(t, s.UpsertUser(ctx, User{UserID: 101}))
 	require.NoError(t, s.UTMRecordClick(ctx, linkID, 101))
@@ -83,7 +83,7 @@ func TestUTM_Retention(t *testing.T) {
 	`, owner).Scan(&gid))
 
 	linkID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Закуп", "referral", "giveaway_1",
-		"", "", "", "retention1", 600, gid)
+		"", "", "", "retention1", 600, gid, "unique")
 	require.NoError(t, err)
 
 	// Трое подписались по ссылке (в разное время).
@@ -136,7 +136,7 @@ func TestUTM_ClickMembership(t *testing.T) {
 	require.NoError(t, err)
 
 	linkID, err := s.CreateUTMLink(ctx, owner, ch.ID, "Проверка", "referral", "Проверка",
-		"", "", "", "clickcode1", 0, 0)
+		"", "", "", "clickcode1", 0, 0, "unique")
 	require.NoError(t, err)
 
 	// Клик; очередь проверила — юзер УЖЕ участник канала.

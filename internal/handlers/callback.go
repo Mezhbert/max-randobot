@@ -255,70 +255,152 @@ func (b *Bot) handleSubPayload(ctx context.Context, uid int64, p string) {
 		// Выбор канала для генерации UTM-ссылки
 		b.showUTMMenu(ctx, uid, p)
 
-	case p == util.CBUTMBuildYes:
-		// Конструктор меток: первый шаг (utm_source).
-		sess, err := b.db.GetSessionPayload(ctx, uid)
-		if err != nil || sess.State != store.SessionUTMCreate {
+	case strings.HasPrefix(p, util.CBUTMMode):
+		// Стартовый шаг: Конкурс / Реклама.
+		mode := strings.TrimPrefix(p, util.CBUTMMode)
+		if mode != "ads" && mode != "contest" {
 			return
 		}
-		payload := map[string]any{"stage": "src"}
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
+			"stage": "channel", "mode": mode,
+		})
+		sess, _ := b.db.GetSessionPayload(ctx, uid)
+		if mode == "contest" {
+			payload := map[string]any{"stage": "channels", "mode": mode}
+			_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
+			ns, _ := b.db.GetSessionPayload(ctx, uid)
+			b.utmShowContestPicker(ctx, uid, ns)
+			return
+		}
+		_ = sess
+		b.utmShowChannelPicker(ctx, uid, sess)
+
+	case p == util.CBUTMBack:
+		b.utmBack(ctx, uid)
+
+	case strings.HasPrefix(p, util.CBUTMQuickChSel):
+		// Реклама: канал выбран (radio) → название.
+		idStr := strings.TrimPrefix(p, util.CBUTMQuickChSel)
+		chID, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return
+		}
+		if _, err := b.db.GetChannel(ctx, chID, uid); err != nil {
+			_ = b.api.SendText(ctx, uid, "Канал не найден.")
+			return
+		}
+		sess, _ := b.db.GetSessionPayload(ctx, uid)
+		payload := map[string]any{"stage": "name", "channel_id": float64(chID)}
 		for k, v := range sess.Payload {
-			if k != "stage" && k != "quick" {
+			if k != "stage" && k != "channel_id" && k != "channels" {
 				payload[k] = v
 			}
 		}
 		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
-		b.showUTMStage(ctx, uid, sess, "src")
+		b.utmAskName(ctx, uid)
 
-	case p == util.CBUTMBuildNo:
-		// Простая ссылка — без конструктора.
-		b.finishUTMLinkFromSession(ctx, uid)
+	case strings.HasPrefix(p, util.CBUTMToggle):
+		// Конкурс: тоггл канала в мультивыборе.
+		idStr := strings.TrimPrefix(p, util.CBUTMToggle)
+		chID, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return
+		}
+		sess, _ := b.db.GetSessionPayload(ctx, uid)
+		sel := utmSessChannels(sess)
+		if sel[chID] {
+			delete(sel, chID)
+		} else {
+			sel[chID] = true
+		}
+		arr := make([]any, 0, len(sel))
+		for id := range sel {
+			arr = append(arr, float64(id))
+		}
+		payload := map[string]any{"stage": "channels", "channels": arr}
+		for k, v := range sess.Payload {
+			if k != "stage" && k != "channels" {
+				payload[k] = v
+			}
+		}
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
+		ns, _ := b.db.GetSessionPayload(ctx, uid)
+		b.utmShowContestPicker(ctx, uid, ns)
 
-	case p == util.CBUTMStageSkip, p == util.CBUTMSkipPost:
-		b.utmStageSkip(ctx, uid)
-
-	case p == util.CBUTMSkipCost:
-		// Легаси-кнопка «Без стоимости» — финализируем без стоимости.
+	case p == util.CBUTMReady:
+		// Конкурс: каналы выбраны → название (фиксируем шаг в сессии).
 		sess, err := b.db.GetSessionPayload(ctx, uid)
 		if err != nil || sess.State != store.SessionUTMCreate {
 			return
 		}
-		payload := map[string]any{"stage": ""}
+		payload := map[string]any{"stage": "name"}
 		for k, v := range sess.Payload {
 			if k != "stage" {
 				payload[k] = v
 			}
 		}
 		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
-		b.finishUTMLinkFromSession(ctx, uid)
+		b.utmAskName(ctx, uid)
 
-	case p == util.CBUTMGWSkip:
-		sess, err := b.db.GetSessionPayload(ctx, uid)
-		if err != nil || sess.State != store.SessionUTMCreate {
+	case p == util.CBUTMSkipCost:
+		// Стоимость пропущена → тип ссылки.
+		sess, _ := b.db.GetSessionPayload(ctx, uid)
+		payload := map[string]any{"stage": "linktype", "cost": 0.0}
+		for k, v := range sess.Payload {
+			if k != "stage" && k != "cost" {
+				payload[k] = v
+			}
+		}
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
+		ns, _ := b.db.GetSessionPayload(ctx, uid)
+		b.utmAskLinkType(ctx, uid, ns)
+
+	case strings.HasPrefix(p, util.CBUTMType):
+		// Тип ссылки: уникальная — сразу генерация; супер — ввод поста.
+		lt := strings.TrimPrefix(p, util.CBUTMType)
+		if lt != "unique" && lt != "super" {
 			return
 		}
-		b.utmNextStage(ctx, uid, sess, "gw", "")
-
-	case strings.HasPrefix(p, util.CBUTMGW):
-		idStr := strings.TrimPrefix(p, util.CBUTMGW)
-		gid, err := strconv.ParseInt(idStr, 10, 64)
-		if err != nil {
+		sess, _ := b.db.GetSessionPayload(ctx, uid)
+		if lt == "unique" {
+			payload := map[string]any{"stage": "", "link_type": "unique"}
+			for k, v := range sess.Payload {
+				if k != "stage" && k != "link_type" {
+					payload[k] = v
+				}
+			}
+			_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
+			b.utmGenerate(ctx, uid)
 			return
 		}
-		b.pickUTMGiveaway(ctx, uid, gid)
+		payload := map[string]any{"stage": "post", "link_type": "super"}
+		for k, v := range sess.Payload {
+			if k != "stage" && k != "link_type" {
+				payload[k] = v
+			}
+		}
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, payload)
+		ns, _ := b.db.GetSessionPayload(ctx, uid)
+		b.utmAskPost(ctx, uid, ns)
 
-	case strings.HasPrefix(p, util.CBUTMQuickChSel):
-		// Трекинг: канал выбран → спрашиваем название.
-		idStr := strings.TrimPrefix(p, util.CBUTMQuickChSel)
+	case p == util.CBUTMGenContest:
+		b.utmGenerate(ctx, uid)
+
+	case strings.HasPrefix(p, util.CBUTMCreate):
+		// Из меню канала: новая ссылка на этот канал (флоу Рекламы).
+		idStr := strings.TrimPrefix(p, util.CBUTMCreate)
 		chID, err := strconv.ParseInt(idStr, 10, 64)
 		if err != nil {
 			return
 		}
-		b.pickQuickUTMChannel(ctx, uid, chID)
-
-	case strings.HasPrefix(p, util.CBUTMCreate):
-		// Начать создание UTM-ссылки на канал
-		b.startCreateUTM(ctx, uid, p)
+		if _, err := b.db.GetChannel(ctx, chID, uid); err != nil {
+			_ = b.api.SendText(ctx, uid, "Канал не найден.")
+			return
+		}
+		_ = b.db.SetSessionPayload(ctx, uid, store.SessionUTMCreate, map[string]any{
+			"stage": "name", "mode": "ads", "channel_id": float64(chID),
+		})
+		b.utmAskName(ctx, uid)
 
 	case strings.HasPrefix(p, util.CBUTMDyn):
 		b.showChannelDynamics(ctx, uid, p)
