@@ -546,7 +546,8 @@
     document.getElementById('hb').onclick = function () { renderChannel(state.chID, state.chTitle); };
     GET('/app/api/analytics/link/' + id).then(function (d) {
       var l = d.link || {}, r = d.retention || {};
-      document.querySelector('header .sub').textContent = l.Source || '';
+      var sub = document.querySelector('header .sub');
+      if (sub) sub.textContent = l.Source || '';
       var cpaD = '—', cpaC = '—';
       if (l.Cost > 0 && r.Subscribed > 0) cpaD = (l.Cost / r.Subscribed).toFixed(1) + ' ₽';
       if (l.Cost > 0 && r.StillIn > 0) cpaC = (l.Cost / r.StillIn).toFixed(1) + ' ₽';
