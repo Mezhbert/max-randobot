@@ -439,7 +439,6 @@ func (a *API) PinChatMessage(ctx context.Context, chatID int64, messageID string
 func (a *API) RegisterCommands(ctx context.Context) error {
 	commands := []model.BotCommand{
 		{Name: "/menu", Description: "О боте и вход в приложение"},
-		{Name: "/stop", Description: "Остановить текущее действие"},
 	}
 	a.rl.wait(ctx)
 	res, err := a.Bots.PatchCommands(ctx, model.BotPatchCommands{Commands: commands})

@@ -904,6 +904,8 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 		return g.ID, "", err
 	}
 	if in.SaveDraft {
+		// Черновик: админу тоже уходит пост в чат — видно, что сохранилось.
+		go b.SendGiveawayPostToOwner(context.Background(), uid, mustGiveaway(b.db, g.ID))
 		return g.ID, "", nil
 	}
 	if err := b.engine.Confirm(ctx, g.ID); err != nil {
@@ -918,7 +920,34 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 	if in.PublishNow && b.publishNow != nil {
 		b.publishNow(ctx, g.ID)
 	}
+	// Готовый пост — админу в чат (не только в канал): видно итог, можно
+	// переслать/проверить; вслед сообщение-подтверждение со статусом.
+	go func() {
+		c := context.Background()
+		if err := b.SendGiveawayPostToOwner(c, uid, mustGiveaway(b.db, g.ID)); err != nil {
+			b.log.Debug("app create: post to owner", "err", err, "user", uid)
+			return
+		}
+		gg, err := b.db.GetGiveawayAny(c, g.ID)
+		if err != nil {
+			return
+		}
+		status := "✅ Розыгрыш опубликован! Пост уже в каналах."
+		if gg.Status == store.StatusScheduled {
+			status = "✅ Розыгрыш запланирован — пост выйдет в каналы автоматически."
+		}
+		_ = b.api.SendText(c, uid, status+"\n\n⬆️ Готовый пост — выше; кнопки в карточке розыгрыша в приложении.")
+	}()
 	return g.ID, "", nil
+}
+
+// mustGiveaway — перечитать розыгрыш (для фоновой отправки поста админу).
+func mustGiveaway(db *store.Store, id int64) store.Giveaway {
+	g, err := db.GetGiveawayAny(context.Background(), id)
+	if err != nil {
+		return store.Giveaway{ID: id}
+	}
+	return g
 }
 
 // CreateTrackingLinkFromApp — трекинг-ссылка из миниаппа: один вызов на любой
