@@ -249,7 +249,14 @@
       '<div class="msg" id="f-msg"></div>';
     document.getElementById('hb').onclick = renderGiveaways;
 
-    var media = [];
+    // Черновик формы: восстановить значения после прошлого визита.
+    var GW_FIELDS = ['f-post','f-name','f-btn','f-winners','f-finat','f-fincnt','f-pubat','f-winmsg'];
+    var media = (loadDraft(DRAFT_GW_KEY) || {}).media_tokens || [];
+    if (restoreDraft(DRAFT_GW_KEY, GW_FIELDS) || media.length) {
+      showMsg('f-msg', '📝 Восстановлен несохранённый черновик — поля заполнены', false);
+    }
+    autosaveDraft(DRAFT_GW_KEY, GW_FIELDS);
+    if (media.length) { setTimeout(function () { if (document.getElementById('f-media')) renderMedia(); }, 50); }
     var fileInput = document.getElementById('f-file');
     document.getElementById('f-addmedia').onclick = function () { fileInput.click(); };
     fileInput.onchange = function () {
@@ -271,6 +278,7 @@
         });
     };
     function renderMedia() {
+      persistDraft(DRAFT_GW_KEY, GW_FIELDS, { media_tokens: media });
       var el = document.getElementById('f-media');
       el.innerHTML = media.map(function (m, i) {
         return '<div class="thumb">' + (m.type === 'video' ? '🎬' : '🖼') +
@@ -353,6 +361,7 @@
       showMsg('f-msg', '⏳ Сохраняю…');
       POST('/app/api/giveaways/create', body).then(function (d) {
         if (d.ok) {
+          clearDraft(DRAFT_GW_KEY);
           showMsg('f-msg', saveDraft ? '✅ Черновик сохранён' : '✅ Розыгрыш создан! Пост уже в каналах.');
           setTimeout(renderGiveaways, 1200);
         } else showMsg('f-msg', '⚠️ ' + (d.error || 'Ошибка'), true);
@@ -422,7 +431,8 @@
   }
 
   function renderChannel(id, title) {
-    state.view = 'detail'; state.chID = id; state.chTitle = title;
+    state.view = 'detail'; state.chID = id;
+    fab.classList.add('hidden'); state.chTitle = title;
     if (backBtn) backBtn.show();
     var filterNames = { all:'Все ссылки', unique:'Уникальные', super:'Суперссылки', contest:'Конкурсные' };
     app.innerHTML = '<header style="position:relative"><button class="back" id="hb">←</button>' +
@@ -500,6 +510,7 @@
 
   function renderLink(id) {
     state.view = 'detail';
+    fab.classList.add('hidden');
     if (backBtn) backBtn.show();
     app.innerHTML = header('Статистика ссылки', '', true) + '<div id="body"><div class="skel"></div></div>';
     if (backBtn) backBtn.onClick(function () { renderChannel(state.chID, state.chTitle); });
@@ -704,6 +715,13 @@
     if (backBtn) backBtn.onClick(renderMore);
     document.getElementById('hb').onclick = renderMore;
 
+    // Черновик трекинг-формы.
+    var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
+    if (restoreDraft(DRAFT_TR_KEY, TR_FIELDS)) {
+      showMsg('t-msg', '📝 Восстановлен несохранённый черновик', false);
+    }
+    autosaveDraft(DRAFT_TR_KEY, TR_FIELDS);
+
     var adsCh = 0, contestSel = [];
     GET('/app/api/analytics/channels').then(function (d) {
       var chs = (d.channels || []).filter(function (c) { return c.admin; });
@@ -770,6 +788,7 @@
       showMsg('t-msg', '⏳ Создаю…');
       POST('/app/api/tracking/create', body).then(function (d) {
         if (!d.ok) return showMsg('t-msg', '⚠️ ' + (d.error || 'ошибка'), true);
+        clearDraft(DRAFT_TR_KEY);
         var bot = d.bot || '';
         var links = (d.codes || []).map(function (c) { return 'https://max.ru/' + bot + '?startapp=u_' + c; });
         showMsg('t-msg', '✅ Готово!');
@@ -789,6 +808,44 @@
   // ============ таб-бар ============
   function switchTab(tab) {
     state.tab = tab;
+
+  // ---------- Черновики форм (localStorage): выйти и вернуться на то же место ----------
+  var DRAFT_GW_KEY = 'rm_gw_draft_v1';
+  var DRAFT_TR_KEY = 'rm_tr_draft_v1';
+  function saveDraft(key, obj) {
+    try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {}
+  }
+  function loadDraft(key) {
+    try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+  }
+  function clearDraft(key) {
+    try { localStorage.removeItem(key); } catch (e) {}
+  }
+  function autosaveDraft(key, fieldIds) {
+    fieldIds.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('input', function () { persistDraft(key, fieldIds); });
+    });
+  }
+  function persistDraft(key, fieldIds, extra) {
+    var d = loadDraft(key) || {};
+    fieldIds.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) d[id] = el.value;
+    });
+    if (extra) Object.keys(extra).forEach(function (k) { d[k] = extra[k]; });
+    saveDraft(key, d);
+  }
+  function restoreDraft(key, fieldIds) {
+    var d = loadDraft(key);
+    if (!d) return false;
+    var any = false;
+    fieldIds.forEach(function (id) {
+      if (d[id]) { var el = document.getElementById(id); if (el) { el.value = d[id]; any = true; } }
+    });
+    return any;
+  }
     tabbar.querySelectorAll('.tab').forEach(function (t) {
       t.classList.toggle('on', t.getAttribute('data-tab') === tab);
     });
