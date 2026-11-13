@@ -219,6 +219,9 @@ func (b *Bot) showAnalyticsMenu(ctx context.Context, uid int64, tab string) {
 		b.showAnalyticsGiveaways(ctx, uid)
 	default:
 		kb := model.NewKeyboard()
+		if b.botUsername != "" {
+			kb.AddRow().AddLink("📱 Открыть миниапп", util.StartappLink(b.botUsername, "analytics"))
+		}
 		kb.AddRow().AddCallBack("🎁 Розыгрыши", util.CBAnalyticsTab+"giveaways")
 		kb.AddRow().AddCallBack("📢 Каналы (трекинг-ссылки)", util.CBAnalyticsTab+"channels")
 		kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)

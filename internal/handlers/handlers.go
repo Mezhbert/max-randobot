@@ -401,6 +401,11 @@ func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
 	if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
 		kb = util.MainMenuWithDraftKeyboard()
 	}
+	if b.botUsername != "" {
+		// Миниапп на видном месте: аналитика, ссылки, розыгрыши.
+		row := kb.AddRow()
+		row.AddLink("📱 Открыть миниапп", util.StartappLink(b.botUsername, "analytics"))
+	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 }
 
