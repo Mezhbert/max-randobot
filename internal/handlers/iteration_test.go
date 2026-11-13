@@ -38,16 +38,16 @@ func TestMenu_InlineAlways(t *testing.T) {
 	// /menu → SendTextWithKeyboard с инлайн-кнопками.
 	b.Handle(ctx, msgUpdate(uid, "/menu"))
 	assert.Greater(t, sendsByMethod(mock, "SendTextWithKeyboard"), 0,
-		"меню должно отправляться inline-клавиатурой")
+		"приветствие должно отправляться inline-клавиатурой")
 
-	// Никаких reply-методов в API больше нет — проверяем, что не падает.
+	// /menu = welcome: что за сервис + вход в приложение.
 	found := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == uid && strings.Contains(r.Text, "Главное меню") {
+		if r.UserID == uid && strings.Contains(r.Text, "RandoMaster") {
 			found = true
 		}
 	}
-	assert.True(t, found)
+	assert.True(t, found, "/menu должен выдавать приветствие о боте")
 }
 
 // TestMenu_TextFallback — подпись кнопки меню, отправленная текстом,
@@ -504,7 +504,7 @@ func TestUTM_QuickClick_ShowsStartMenu(t *testing.T) {
 
 	sawStart := false
 	for _, r := range mock.SnapshotSends() {
-		if r.UserID == visitor && strings.Contains(r.Text, "розыгрыши") {
+		if r.UserID == visitor && strings.Contains(r.Text, "RandoMaster") {
 			sawStart = true
 		}
 	}

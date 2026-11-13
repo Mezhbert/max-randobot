@@ -238,9 +238,9 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 		b.sendStartScreen(ctx, uid)
 		return
 	}
-	// /menu — только меню, без описания.
+	// /menu — приветствие «что это за бот» + вход в приложение (как у Greats Gift).
 	if text == "/menu" {
-		b.sendMainMenu(ctx, uid, "Главное меню:")
+		b.sendWelcome(ctx, uid)
 		return
 	}
 	// /stop — явная остановка активного действия: отменить создание
@@ -429,11 +429,30 @@ func (b *Bot) sendMainMenuText(ctx context.Context, userID int64, text string, k
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 }
 
-// sendStartScreen — приветствие при /start (текст по мануалу §11).
+// sendWelcome — приветствие при /start и /menu (в стиле Greats Gift):
+// что за сервис + все функции в Mini App + кнопка входа.
+func (b *Bot) sendWelcome(ctx context.Context, userID int64) {
+	text := " Добро пожаловать в RandoMaster 🎲 — умный сервис розыгрышей и трекинга для MAX.\n\n" +
+		"🚀 Что умеет сервис\n" +
+		"— Создание и запуск розыгрышей: быстро, прозрачно, удобно\n" +
+		"— Проверка подписок и защита от ботов (капча)\n" +
+		"— Честный выбор победителей и уведомления\n" +
+		"— Трекинг-ссылки: клики, подписки, отписки, цена подписчика\n\n" +
+		"Все функции доступны в удобном интерфейсе Mini App.\n\n" +
+		"Нажмите кнопку ниже, чтобы открыть приложение и управлять розыгрышами."
+	kb := model.NewKeyboard()
+	if b.botUsername != "" {
+		kb.AddRow().AddLink("📱 Открыть приложение", util.StartappLink(b.botUsername, "analytics"))
+	} else {
+		kb.AddRow().AddCallBack("🆘 Поддержка", util.CBSupport)
+	}
+	if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
+		kb.AddRow().AddCallBack("📝 Продолжить черновик", util.CBGwList)
+	}
+	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
+}
+
+// sendStartScreen — приветствие при bot_started (тот же текст).
 func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
-	text := "**RandoMaster** — розыгрыши и трекинг для ваших каналов в MAX.\n\n" +
-		"🎁 Розыгрыши — пост с кнопкой участия за минуту: проверка подписок, капча, честные победители.\n" +
-		"🔗 Трекинг — ссылка на каждую закупку: клики, подписки, отписки, цена подписчика.\n\n" +
-		"👉 Откройте приложение — кнопка 📱 рядом с полем ввода (или в профиле бота)."
-	b.sendMainMenu(ctx, userID, text)
+	b.sendWelcome(ctx, userID)
 }
