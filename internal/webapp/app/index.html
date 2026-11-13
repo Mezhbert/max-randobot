@@ -730,30 +730,30 @@
   function renderTrackingCreate() {
     state.view = 'create';
     if (backBtn) backBtn.show();
-    app.innerHTML = header('🔗 Трекинг-ссылка', 'создание', true) +
-      '<label class="lbl" style="margin-top:0">Механика</label>' +
+    app.innerHTML = header('Трекинг-ссылка', '', true) +
+      '<label class="lbl" style="margin-top:0">Шаг 1 · Канал, на который будет вести ссылка *</label><div id="t-chs"></div>' +
+      '<div id="t-rest" class="hidden">' +
+      '<label class="lbl">Шаг 2 · Механика</label>' +
       '<div class="seg" id="t-mode"><div class="chip on" data-v="ads">📣 Реклама</div><div class="chip" data-v="contest">🏁 Конкурс</div></div>' +
       '<div id="t-ads">' +
-      '<label class="lbl">Канал</label><div id="t-ch"></div>' +
       '<label class="lbl">Название ссылки *</label>' +
       '<input class="inp" id="t-name" placeholder="Например: Реклама у Иванова">' +
-      '<label class="lbl">Стоимость размещения, ₽ (посчитаем цену за подписчика)</label>' +
+      '<label class="lbl">Стоимость размещения, ₽ — посчитаем цену за подписчика (необязательно)</label>' +
       '<input class="inp" id="t-cost" type="number" placeholder="1500">' +
       '<div id="t-type-w"><label class="lbl">Тип ссылки</label>' +
-      '<div class="seg" id="t-type"><div class="chip on" data-v="unique">🔗 Уникальная</div><div class="chip" data-v="super">⚡ Суперссылка</div></div>' +
+      '<div class="seg" id="t-type"><div class="chip on" data-v="unique">Уникальная (на канал)</div><div class="chip" data-v="super">Супер (на конкретный пост)</div></div>' +
       '<div id="t-post-w" class="hidden"><label class="lbl">Ссылка на пост (https://max.ru/channel/post)</label>' +
       '<input class="inp" id="t-post" placeholder="https://max.ru/mychannel/42"></div></div>' +
       '</div>' +
       '<div id="t-contest" class="hidden">' +
-      '<label class="lbl">Каналы конкурса (можно несколько — своя ссылка каждому)</label><div id="t-chs"></div>' +
-      '<label class="lbl">Название (группы ссылок) *</label>' +
+      '<label class="lbl">Название (для всей группы ссылок) *</label>' +
       '<input class="inp" id="t-name2" placeholder="Например: Новый год">' +
-      '<div class="meta">Конкурсные ссылки ведут на последний пост канала.</div>' +
+      '<div class="meta">Конкурс — это когда люди выполняют условия розыгрыша (подписка на ваши каналы), а вы среди них выбираете победителя. Ссылки этого типа ведут на последний пост канала — туда, где вы опубликуете условия. Под каждый выбранный канал создаётся своя ссылка.</div>' +
       '</div>' +
       '<button class="btn" id="t-go">✅ Создать ссылку</button>' +
-      '<div class="msg" id="t-msg"></div><div id="t-result"></div>';
-    if (backBtn) backBtn.onClick(renderMore);
-    document.getElementById('hb').onclick = renderMore;
+      '<div class="msg" id="t-msg"></div><div id="t-result"></div></div>';
+    if (backBtn) backBtn.onClick(renderTrackingTab);
+    document.getElementById('hb').onclick = renderTrackingTab;
 
     // Черновик трекинг-формы.
     var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
@@ -765,84 +765,89 @@
     var adsCh = 0, contestSel = [];
     GET('/app/api/analytics/channels').then(function (d) {
       var chs = (d.channels || []).filter(function (c) { return c.admin; });
-      function renderAds() {
-        if (!adsCh && chs.length) { adsCh = chs[0].id; }
-        document.getElementById('t-ch').innerHTML = chs.map(function (c) {
-          return '<div class="chip ' + (adsCh === c.id ? 'on' : '') + '" data-cid="' + c.id + '">' +
-            (adsCh === c.id ? '✓ ' : '') + esc(c.title) + (c.is_public ? '' : ' 🔒') + '</div>';
-        }).join('') || '<div class="meta">Нет каналов — добавьте во вкладке «📢 Каналы»</div>';
-        document.querySelectorAll('[data-cid]').forEach(function (el) {
-          el.onclick = function () { adsCh = parseInt(el.getAttribute('data-cid'), 10); renderAds(); };
-        });
-        var pub = chs.filter(function (c) { return c.id === adsCh; })[0];
-        var typeW = document.getElementById('t-type-w');
-        if (pub && !pub.is_public) { typeW.classList.add('hidden'); segSet('t-type', 'unique'); typeChanged(); }
-        else { typeW.classList.remove('hidden'); }
-      }
-      function renderContest() {
+
+      // Шаг 1: выбор канала (клик по нему открывает остальную форму).
+      function renderChPick() {
         document.getElementById('t-chs').innerHTML = chs.map(function (c) {
-          return '<div class="chip ' + (contestSel.indexOf(c.id) > -1 ? 'on' : '') + '" data-tid="' + c.id + '">' +
-            (contestSel.indexOf(c.id) > -1 ? '✅ ' : '') + esc(c.title) + '</div>';
-        }).join('') || '<div class="meta">Нет каналов</div>';
-        document.querySelectorAll('[data-tid]').forEach(function (el) {
+          return '<div class="chip ' + (adsCh === c.id ? 'on' : '') + '" data-pid="' + c.id + '" data-pub="' + (c.is_public ? 1 : 0) + '">' +
+            (adsCh === c.id ? '✓ ' : '') + esc(c.title) + '</div>';
+        }).join('') || '<div class="meta">Нет каналов — добавьте во вкладке «📻 Каналы»</div>';
+        document.querySelectorAll('[data-pid]').forEach(function (el) {
           el.onclick = function () {
-            var id = parseInt(el.getAttribute('data-tid'), 10);
-            var i = contestSel.indexOf(id);
-            if (i > -1) contestSel.splice(i, 1); else contestSel.push(id);
-            renderContest();
+            adsCh = parseInt(el.getAttribute('data-pid'), 10);
+            document.getElementById('t-rest').classList.remove('hidden');
+            // Приватный канал: супер-ссылка невозможна — прячем выбор типа.
+            var isPub = el.getAttribute('data-pub') === '1';
+            document.getElementById('t-type-w').classList.toggle('hidden', !isPub);
+            if (!isPub) segSet('t-type', 'unique');
+            typeChanged();
+            persistDraft(DRAFT_TR_KEY, TR_FIELDS, { adsCh: adsCh });
+            document.getElementById('t-chs').scrollIntoView({ behavior: 'smooth', block: 'start' });
           };
         });
+        // Восстановить выбранный канал из черновика.
+        var d0 = loadDraft(DRAFT_TR_KEY) || {};
+        if (!adsCh && d0.adsCh && chs.some(function (c) { return c.id === d0.adsCh; })) {
+          adsCh = d0.adsCh;
+          var el = document.querySelector('[data-pid="' + adsCh + '"]');
+          if (el) {
+            document.getElementById('t-rest').classList.remove('hidden');
+            var isPub = el.getAttribute('data-pub') === '1';
+            document.getElementById('t-type-w').classList.toggle('hidden', !isPub);
+            if (!isPub) segSet('t-type', 'unique');
+            typeChanged();
+          }
+        }
       }
-      renderAds(); renderContest();
-    });
-    function segSet(id, v) {
-      document.querySelectorAll('#' + id + ' .chip').forEach(function (c) {
-        c.classList.toggle('on', c.getAttribute('data-v') === v);
-      });
-    }
-    segBind('t-mode', function (v) {
-      document.getElementById('t-ads').classList.toggle('hidden', v !== 'ads');
-      document.getElementById('t-contest').classList.toggle('hidden', v !== 'contest');
-    });
-    segBind('t-type', function () { typeChanged(); });
-    function typeChanged() {
-      document.getElementById('t-post-w').classList.toggle('hidden', segVal('t-type') !== 'super');
-    }
-    typeChanged();
+      renderChPick();
 
-    document.getElementById('t-go').onclick = function () {
-      var mode = segVal('t-mode');
-      var body;
-      if (mode === 'contest') {
-        body = { mode: 'contest', channel_ids: contestSel, name: document.getElementById('t-name2').value.trim() };
-        if (!body.name) return showMsg('t-msg', 'Введите название', true);
-        if (!body.channel_ids.length) return showMsg('t-msg', 'Выберите каналы', true);
-      } else {
-        body = { mode: 'ads', channel_id: adsCh, name: document.getElementById('t-name').value.trim(),
-                 cost: parseFloat(document.getElementById('t-cost').value || '0') || 0,
-                 link_type: segVal('t-type'), post_ref: document.getElementById('t-post').value.trim() };
-        if (!adsCh) return showMsg('t-msg', 'Выберите канал', true);
-        if (!body.name) return showMsg('t-msg', 'Введите название', true);
-        if (body.link_type === 'super' && !body.post_ref) return showMsg('t-msg', 'Вставьте ссылку на пост', true);
+      function segSet(id, v) {
+        document.querySelectorAll('#' + id + ' .chip').forEach(function (c) {
+          c.classList.toggle('on', c.getAttribute('data-v') === v);
+        });
       }
-      showMsg('t-msg', '⏳ Создаю…');
-      POST('/app/api/tracking/create', body).then(function (d) {
-        if (!d.ok) return showMsg('t-msg', '⚠️ ' + (d.error || 'ошибка'), true);
-        clearDraft(DRAFT_TR_KEY);
-        var bot = d.bot || '';
-        var links = (d.codes || []).map(function (c) { return 'https://max.ru/' + bot + '?startapp=u_' + c; });
-        showMsg('t-msg', '✅ Готово!');
-        document.getElementById('t-result').innerHTML =
-          '<div class="card">' + links.map(function (l) {
-            return '<div class="linkline" style="font-size:13px;color:var(--text)">' + esc(l) + '</div>';
-          }).join('') +
-          '<button class="btn sec sm" id="t-copy" style="margin-top:10px">📋 Скопировать</button></div>';
-        document.getElementById('t-copy').onclick = function () {
-          if (navigator.clipboard) navigator.clipboard.writeText(links.join('\n'));
-          this.textContent = '✅ Скопировано';
-        };
+      segBind('t-mode', function (v) {
+        document.getElementById('t-ads').classList.toggle('hidden', v !== 'ads');
+        document.getElementById('t-contest').classList.toggle('hidden', v !== 'contest');
       });
-    };
+      segBind('t-type', function () { typeChanged(); });
+      function typeChanged() {
+        document.getElementById('t-post-w').classList.toggle('hidden', segVal('t-type') !== 'super');
+      }
+      typeChanged();
+
+      document.getElementById('t-go').onclick = function () {
+        var mode = segVal('t-mode');
+        var body;
+        if (mode === 'contest') {
+          body = { mode: 'contest', channel_ids: [adsCh].concat(contestSel), name: document.getElementById('t-name2').value.trim() };
+          if (!body.name) return showMsg('t-msg', 'Введите название', true);
+        } else {
+          body = { mode: 'ads', channel_id: adsCh, name: document.getElementById('t-name').value.trim(),
+                   cost: parseFloat(document.getElementById('t-cost').value || '0') || 0,
+                   link_type: segVal('t-type'), post_ref: document.getElementById('t-post').value.trim() };
+          if (!body.name) return showMsg('t-msg', 'Введите название', true);
+          if (body.link_type === 'super' && !body.post_ref) return showMsg('t-msg', 'Вставьте ссылку на пост', true);
+        }
+        showMsg('t-msg', '⏳ Создаю…');
+        POST('/app/api/tracking/create', body).then(function (d) {
+          if (!d.ok) return showMsg('t-msg', '⚠️ ' + (d.error || 'ошибка'), true);
+          clearDraft(DRAFT_TR_KEY);
+          var bot = d.bot || '';
+          var links = (d.codes || []).map(function (c) { return 'https://max.ru/' + bot + '?startapp=u_' + c; });
+          showMsg('t-msg', '✅ Готово!');
+          document.getElementById('t-result').innerHTML =
+            '<div class="card">' + links.map(function (l) {
+              return '<div class="linkline" style="font-size:13px;color:var(--text)">' + esc(l) + '</div>';
+            }).join('') +
+            '<button class="btn sec sm" id="t-copy" style="margin-top:10px">📋 Скопировать</button></div>';
+          document.getElementById('t-copy').onclick = function () {
+            if (navigator.clipboard) navigator.clipboard.writeText(links.join('\n'));
+            this.textContent = '✅ Скопировано';
+          };
+        });
+      };
+    });
   }
 
   // ============ таб-бар ============
