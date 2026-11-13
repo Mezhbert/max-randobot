@@ -398,15 +398,13 @@ func (b *Bot) rejectUnexpectedDraftInput(ctx context.Context, uid int64, g store
 // черновик — первой строкой «📝 Продолжить черновик» (мануал §11).
 func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
 	if b.botUsername != "" {
-		// Миниапп — основной интерфейс: одна большая кнопка + поддержка.
+		// Миниапп — единственный интерфейс; вход — нативная кнопка приложения
+		// в профиле/чате бота (регистрируется на business.max.ru). Инлайн-кнопки
+		// в чате больше не выдаём: всё управление в приложении.
 		kb := model.NewKeyboard()
-		kb.AddRow().AddLink("📱 Открыть приложение", util.StartappLink(b.botUsername, "analytics"))
 		if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
 			kb.AddRow().AddCallBack("📝 Продолжить черновик", util.CBGwList)
 		}
-		kb.AddRow().
-			AddCallBack("🆘 Поддержка", util.CBSupport).
-			AddCallBack("☰ Ещё (старое меню)", util.CBOldMenu)
 		_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 		return
 	}
@@ -436,6 +434,6 @@ func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 	text := "**RandoMaster** — розыгрыши и трекинг для ваших каналов в MAX.\n\n" +
 		"🎁 Розыгрыши — пост с кнопкой участия за минуту: проверка подписок, капча, честные победители.\n" +
 		"🔗 Трекинг — ссылка на каждую закупку: клики, подписки, отписки, цена подписчика.\n\n" +
-		"Всё управление — в приложении 👇"
+		"👉 Откройте приложение — кнопка 📱 рядом с полем ввода (или в профиле бота)."
 	b.sendMainMenu(ctx, userID, text)
 }
