@@ -62,14 +62,7 @@ func (b *Bot) handleMenuAction(ctx context.Context, uid int64, p string) {
 	case util.CBAnalytics:
 		b.showAnalyticsMenu(ctx, uid, "")
 	case util.CBSupport:
-		kb := model.NewKeyboard()
-		if b.helpURL != "" {
-			kb.AddRow().AddLink("📚 Полная справка", b.helpURL)
-		}
-		kb.AddRow().AddCallBack("🏠 В меню", util.CBMainMenu)
-		_, _ = b.api.SendTextWithKeyboard(ctx, uid,
-			"🆘 Поддержка\n\n📚 Полное руководство — кнопка ниже (главы: создание, каналы, редактура, аналитика, FAQ).\n\n"+
-				"По другим вопросам: @your_support_contact", kb)
+		b.StartSupportDialog(ctx, uid)
 	case util.CBChannelAdd:
 		b.startAddChannel(ctx, uid)
 	case util.CBChannelRefresh:

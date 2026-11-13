@@ -61,6 +61,7 @@ type Deps struct {
 	CreateGiveaway   func(ctx context.Context, uid int64, in CreateGiveawayReq) (int64, string, error)
 	CreateTracking   func(ctx context.Context, uid int64, in CreateTrackingReq) ([]string, string, error)
 	AddChannel       func(ctx context.Context, uid int64, link string) (string, string, error)
+	StartSupport     func(ctx context.Context, uid int64)
 	UploadMedia      func(ctx context.Context, data []byte, filename, kind string) (string, string, error)
 
 	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
@@ -522,6 +523,26 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		}
 		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "codes": codes,
 			"bot": d.BotUsername})
+	})
+
+	// Поддержка: начать диалог (бот попросит сообщение в чате и перешлёт
+	// его разработчику).
+	mux.HandleFunc("/app/api/support/start", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if d.StartSupport == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		d.StartSupport(r.Context(), userID)
+		writeJSON(w, map[string]any{"ok": true})
 	})
 
 	// Добавление канала по ссылке/@username.

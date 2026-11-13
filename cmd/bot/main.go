@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -77,6 +78,12 @@ func main() {
 	sch := scheduler.New(api, db, slog.Default())
 
 	bot := handlers.New(api, db, slog.Default())
+	if sid := os.Getenv("SUPPORT_USER_ID"); sid != "" {
+		if id, err := strconv.ParseInt(sid, 10, 64); err == nil && id != 0 {
+			bot.SetSupportUser(id)
+			slog.Info("поддержка: обращения пересылаются", "user_id", id)
+		}
+	}
 	bot.SetDedup(dedup.New(dedupTTL(cfg.DedupTTL), 0))
 	bot.SetCounterUpdater(sch.UpdateParticipantCounter)
 	bot.SetPublishNow(sch.PublishGiveawayNow)
@@ -135,6 +142,7 @@ func main() {
 			})
 		},
 		AddChannel:  bot.AddChannelFromApp,
+		StartSupport: bot.StartSupportDialog,
 		UploadMedia: api.UploadMedia,
 	}
 	go func() {

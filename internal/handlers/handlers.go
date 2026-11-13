@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ type Bot struct {
 	pendingStarts map[int64]string                              // user_id → payload диплинка (до доставки bot_started в Handle)
 	partMu       sync.Mutex                                     // защита partClicks (троттл «Участвовать»)
 	partClicks   map[int64]int64                                // user_id → unix последнего клика участия
+	supportUserID int64                                         // кому пересылать обращения поддержки (SUPPORT_USER_ID)
 }
 
 // New создаёт обработчика.
@@ -90,6 +92,9 @@ func (b *Bot) SetCounterUpdater(f func(ctx context.Context, g *store.Giveaway)) 
 func (b *Bot) SetPublishNow(f func(ctx context.Context, giveawayID int64)) {
 	b.publishNow = f
 }
+
+// SetSupportUser задаёт user_id разработчика (пересылка обращений поддержки).
+func (b *Bot) SetSupportUser(id int64) { b.supportUserID = id }
 
 // SetDedup подключает дедупликатор апдейтов (защита от повторной обработки
 // ретраев webhook от MAX).
@@ -267,6 +272,10 @@ func (b *Bot) onMessageCreated(ctx context.Context, u model.Update) {
 
 	// Состояние юзера вне FSM (добавление канала и т.п.) — приоритет.
 	session, _ := b.db.GetSession(ctx, uid)
+	if session == store.SessionSupport {
+		b.handleSupportMessage(ctx, uid, msg)
+		return
+	}
 	switch session {
 	case store.SessionAddingChannel:
 		if b.handleAddChannelInput(ctx, uid, msg) {
@@ -455,4 +464,40 @@ func (b *Bot) sendWelcome(ctx context.Context, userID int64) {
 // sendStartScreen — приветствие при bot_started (тот же текст).
 func (b *Bot) sendStartScreen(ctx context.Context, userID int64) {
 	b.sendWelcome(ctx, userID)
+}
+
+
+// StartSupportDialog — «Связаться с поддержкой»: бот просит написать
+// сообщение, следующее сообщение юзера пересылается разработчику.
+func (b *Bot) StartSupportDialog(ctx context.Context, uid int64) {
+	_ = b.db.SetSession(ctx, uid, store.SessionSupport)
+	_ = b.api.SendText(ctx, uid, "🆘 Напишите ваше сообщение — вопрос, пожелание или проблему.\n\n"+
+		"Отправьте его следующим сообщением, и оно уйдёт напрямую разработчикам (ответ придёт сюда же).")
+}
+
+// handleSupportMessage — пересылка сообщения юзера разработчику (SUPPORT_USER_ID)
+// с контактами отправителя + подтверждение юзеру.
+func (b *Bot) handleSupportMessage(ctx context.Context, uid int64, msg model.MessageUpdate) {
+	_ = b.db.ClearSession(ctx, uid)
+	text := strings.TrimSpace(msg.Body.Text)
+	if text == "" {
+		_ = b.api.SendText(ctx, uid, "⚠️ Напишите сообщение текстом, пожалуйста. Нажмите «Поддержка» ещё раз.")
+		return
+	}
+	u, _ := b.db.GetUser(ctx, uid)
+	who := fmt.Sprintf("user_id=%d", uid)
+	if u.FirstName != "" {
+		who += " · " + u.FirstName
+	}
+	if u.Username != "" {
+		who += " · @" + u.Username
+	}
+	if b.supportUserID != 0 {
+		if err := b.api.SendText(ctx, b.supportUserID, "🆘 Обращение в поддержку\nОт: "+who+"\n\n"+text); err != nil {
+			b.log.Warn("support forward", "err", err, "to", b.supportUserID)
+			_ = b.api.SendText(ctx, uid, "⚠️ Не удалось отправить сообщение. Попробуйте позже.")
+			return
+		}
+	}
+	_ = b.api.SendText(ctx, uid, "✅ Ваше сообщение отправлено разработчикам. Ответ придёт в этот чат.")
 }

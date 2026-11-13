@@ -1715,3 +1715,38 @@ func TestCreateTrackingFromApp(t *testing.T) {
 	_, vmsg3, _ := b.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{Mode: "ads", ChannelID: ch1.ID})
 	assert.NotEmpty(t, vmsg3)
 }
+
+// TestSupport_ForwardToDeveloper — «Поддержка» → бот просит сообщение →
+// следующее сообщение пересылается разработчику (SUPPORT_USER_ID) с
+// контактами отправителя; юзеру — подтверждение.
+func TestSupport_ForwardToDeveloper(t *testing.T) {
+	b, s, mock, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid, dev = 6981, 6982
+	testutil.EnsureUser(t, s, uid, "Тестер")
+	testutil.EnsureUser(t, s, dev, "Разраб")
+	b.SetSupportUser(dev)
+
+	b.StartSupportDialog(ctx, uid)
+	st, err := s.GetSession(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, "support", st)
+
+	b.Handle(ctx, msgUpdate(uid, "Не работает кнопка"))
+	st, _ = s.GetSession(ctx, uid)
+	assert.Empty(t, st, "сессия закрывается после пересылки")
+
+	var toUser, toDev bool
+	for _, r := range mock.SnapshotSends() {
+		if r.UserID == uid && strings.Contains(r.Text, "отправлено разработчикам") {
+			toUser = true
+		}
+		if r.UserID == dev && strings.Contains(r.Text, "Обращение в поддержку") &&
+			strings.Contains(r.Text, "user_id=") && strings.Contains(r.Text, "Не работает кнопка") {
+			toDev = true
+		}
+	}
+	assert.True(t, toUser, "юзеру должно прийти подтверждение")
+	assert.True(t, toDev, "разрабу должно прийти обращение с контактами и текстом")
+}

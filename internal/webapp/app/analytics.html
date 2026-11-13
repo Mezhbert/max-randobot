@@ -643,9 +643,15 @@
       '<div class="meta">написать разработчикам</div></div>';
     app.querySelector('[data-a="go-help"]').onclick = renderHelp;
     app.querySelector('[data-a="go-support"]').onclick = function () {
-      var txt = 'Вопрос по RandoMaster';
-      try { api.shareContent && api.shareContent({ text: txt }); } catch (e) {}
-      try { if (api.openMaxLink) api.openMaxLink('https://max.ru/:share?text=' + encodeURIComponent(txt)); } catch (e) {}
+      fetch('/app/api/support/start?init_data=' + encodeURIComponent(initData), { method: 'POST' })
+        .then(function (r) { return r.json(); }).then(function (d) {
+          if (d.ok) {
+            // Бот уже написал «напишите ваше сообщение» — ведём юзера в чат.
+            try { if (api.openMaxLink) api.openMaxLink('https://max.ru/' + (window.BOT_NAME || '')); } catch (e) {}
+            var card = app.querySelector('[data-a="go-support"] .meta');
+            if (card) card.textContent = '✅ Бот написал вам в чат — продолжите там';
+          }
+        });
     };
   }
 
