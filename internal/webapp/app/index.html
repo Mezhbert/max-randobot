@@ -81,7 +81,7 @@
     <button class="tab on" data-tab="gw"><span class="ico">🎲</span>Розыгрыши</button>
     <button class="tab" data-tab="tr"><span class="ico">🔗</span>Трекинг</button>
     <button class="tab" data-tab="ch"><span class="ico">📻</span>Каналы</button>
-    <button class="tab" data-tab="me"><span class="ico">⚙️</span>Ещё</button>
+    <button class="tab" data-tab="me"><span class="ico">⚙️</span>Инфо</button>
   </nav>
 <script>
 (function () {
@@ -167,7 +167,7 @@
     fab.textContent = 'создать\nрозыгрыш';
     fab.onclick = function () { renderCreateGiveaway(); };
     var filterNames = { all:'Все розыгрыши', draft:'Черновики', scheduled:'Запланированные', active:'Идут сейчас', finished:'Завершённые' };
-    app.innerHTML = '<header style="position:relative"><div><h1>🎲 Розыгрыши</h1></div>' +
+    app.innerHTML = '<header style="position:relative"><div><h1>Розыгрыши</h1></div>' +
       '<button class="iconbtn" id="gw-filter">⚙</button></header>' +
       '<div id="gw-dd"></div>' +
       '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
@@ -593,7 +593,7 @@
     fab.classList.remove('hidden');
     fab.textContent = 'создать\nтрекинг-ссылку';
     fab.onclick = function () { renderTrackingCreate(); };
-    app.innerHTML = '<header style="position:relative"><div><h1>🔗 Трекинг</h1></div>' +
+    app.innerHTML = '<header style="position:relative"><div><h1>Трекинг</h1></div>' +
       '<button class="iconbtn" id="tr-filter">⚙</button></header>' +
       '<div id="tr-dd"></div>' +
       '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
@@ -637,7 +637,7 @@
     state.tab = 'ch'; state.view = 'tab';
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
-    app.innerHTML = header('📻 Мои каналы') +
+    app.innerHTML = header('Мои каналы') +
       '<div class="card"><label class="lbl" style="margin-top:0">Ссылка на канал (@username или https://max.ru/...)</label>' +
       '<input class="inp" id="ch-link" placeholder="@mychannel">' +
       '<button class="btn" id="ch-add">➕ Подключить канал</button>' +
@@ -676,12 +676,11 @@
     state.tab = 'me'; state.view = 'tab';
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
-    app.innerHTML = header('⚙️ Ещё') +
+    app.innerHTML = header('Инфо') +
       '<div class="card tap" data-a="go-help"><div class="row"><div class="title">📚 Справка</div><span>→</span></div>' +
       '<div class="meta">как всё работает</div></div>' +
       '<div class="card tap" data-a="go-support"><div class="row"><div class="title">🆘 Поддержка</div><span>→</span></div>' +
-      '<div class="meta">написать разработчикам</div></div>' +
-      '<div class="card"><div class="meta">RandoMaster — розыгрыши и трекинг для каналов MAX.<br>Все функции — в этом приложении; чат бота остаётся для уведомлений и постов.</div></div>';
+      '<div class="meta">написать разработчикам</div></div>';
     app.querySelector('[data-a="go-help"]').onclick = renderHelp;
     app.querySelector('[data-a="go-support"]').onclick = function () {
       var txt = 'Вопрос по RandoMaster';
