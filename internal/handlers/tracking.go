@@ -391,6 +391,14 @@ func (b *Bot) handleUTMCreateInput(ctx context.Context, uid int64, text string) 
 			_ = b.api.SendText(ctx, uid, "⚠️ "+err.Error())
 			return true
 		}
+		// Контроль дублей имён в канале: одинаковые названия путают статистику.
+		if chID := utmSessChannel(sess); chID != 0 {
+			if n, err := b.db.CountUTMLinksByName(ctx, uid, chID, source); err == nil && n > 0 {
+				_ = b.api.SendText(ctx, uid, "⚠️ Ссылка с таким названием в этом канале уже есть ("+
+					strconv.Itoa(n)+"). Придумайте другое название — так проще искать в статистике.")
+				return true
+			}
+		}
 		payload := map[string]any{"stage": "cost", "source": source}
 		for k, v := range sess.Payload {
 			if k != "stage" && k != "source" {
@@ -508,7 +516,7 @@ func (b *Bot) utmGenerate(ctx context.Context, uid int64) {
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		fmt.Sprintf("✅ %s для «%s» готова:\n\n⚡ %s\n\n%s%s\nНазвание: %s",
 			typeName, title, link, leads, costLine, source),
-		util.TrackingLinkKeyboard(link, chID))
+		util.TrackingLinkKeyboard(link, chID, false))
 }
 
 // utmGenerateContest — по ссылке на каждый выбранный канал (одним запросом).
@@ -550,7 +558,7 @@ func (b *Bot) utmGenerateContest(ctx context.Context, uid int64, sess store.User
 	_, _ = b.api.SendTextWithKeyboard(ctx, uid,
 		fmt.Sprintf("🏁 %s готова (ведут на последний пост канала):\n%s\nНазвание: %s",
 			word, sb.String(), source),
-		util.TrackingLinkKeyboard("", firstCh))
+		util.TrackingLinkKeyboard("", firstCh, true))
 }
 
 // ---------- экраны статистики ----------
@@ -966,6 +974,16 @@ type TrackingLinkFromApp struct {
 func (b *Bot) CreateTrackingLinkFromApp(ctx context.Context, uid int64, in TrackingLinkFromApp) ([]string, string, error) {
 	if err := util.ValidateUTMSource(in.Name); err != nil {
 		return nil, err.Error(), nil
+	}
+	// Контроль дублей имён: в канале (ads) или любом из выбранных (contest).
+	dupCh := in.ChannelID
+	if dupCh == 0 && len(in.ChannelIDs) > 0 {
+		dupCh = in.ChannelIDs[0]
+	}
+	if dupCh != 0 {
+		if n, err := b.db.CountUTMLinksByName(ctx, uid, dupCh, in.Name); err == nil && n > 0 {
+			return nil, "Ссылка «" + in.Name + "» в этом канале уже есть — придумайте другое название", nil
+		}
 	}
 	botName := b.botUsername
 	if botName == "" {

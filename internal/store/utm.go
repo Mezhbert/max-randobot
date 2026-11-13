@@ -432,3 +432,14 @@ func (s *Store) ListUTMClickers(ctx context.Context, utmLinkID int64) ([]UTMClic
 	}
 	return res, rows.Err()
 }
+
+// CountUTMLinksByName — сколько ссылок с таким названием уже есть у владельца
+// в канале (контроль дублей имён, чтобы не путаться в статистике).
+func (s *Store) CountUTMLinksByName(ctx context.Context, ownerUserID, channelID int64, source string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM utm_links
+		WHERE owner_user_id=$1 AND channel_id=$2 AND source=$3
+	`, ownerUserID, channelID, source).Scan(&n)
+	return n, err
+}

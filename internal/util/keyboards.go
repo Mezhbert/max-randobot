@@ -379,12 +379,19 @@ func ChannelUTMStatsKeyboard(channelID int64) *model.Keyboard {
 }
 
 // TrackingLinkKeyboard — экран готовой трекинг-ссылки: скопировать,
-// статистика канала, в меню.
-func TrackingLinkKeyboard(link string, channelID int64) *model.Keyboard {
+// статистика канала, в меню. contest=true — кнопка зовётся «Статистика
+// конкурсов канала» (выдача пачки конкурсных ссылок).
+func TrackingLinkKeyboard(link string, channelID int64, contest bool) *model.Keyboard {
 	kb := model.NewKeyboard()
-	kb.AddRow().AddClipboard("📋 Скопировать ссылку", link)
+	if link != "" {
+		kb.AddRow().AddClipboard("📋 Скопировать ссылку", link)
+	}
 	if channelID > 0 {
-		kb.AddRow().AddCallBack("📊 Ссылки и статистика канала", CBChannelUTM+strconv.FormatInt(channelID, 10))
+		label := "📊 Ссылки и статистика канала"
+		if contest {
+			label = "🏁 Статистика конкурсов канала"
+		}
+		kb.AddRow().AddCallBack(label, CBChannelUTM+strconv.FormatInt(channelID, 10))
 	}
 	kb.AddRow().AddCallBack("🏠 В меню", CBMainMenu)
 	return kb
