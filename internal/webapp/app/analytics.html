@@ -72,7 +72,7 @@
   <button class="fab hidden" id="fab">＋</button>
   <nav id="tabbar" class="hidden">
     <button class="tab on" data-tab="gw"><span class="ico">🎁</span>Розыгрыши</button>
-    <button class="tab" data-tab="an"><span class="ico">📊</span>Аналитика</button>
+    <button class="tab" data-tab="tr"><span class="ico">🔗</span>Трекинг</button>
     <button class="tab" data-tab="ch"><span class="ico">📢</span>Каналы</button>
     <button class="tab" data-tab="me"><span class="ico">⚙️</span>Ещё</button>
   </nav>
@@ -405,8 +405,8 @@
       }).join('') + '</div>' +
       '<div id="dyn"></div><div class="sect">Ссылки</div><div id="list"><div class="skel"></div></div>';
     bind();
-    if (backBtn) backBtn.onClick(function () { renderChannels(); });
-    document.getElementById('hb').onclick = renderChannels;
+    if (backBtn) backBtn.onClick(function () { renderTrackingTab(); });
+    document.getElementById('hb').onclick = renderTrackingTab;
     GET('/app/api/analytics/channel/' + id + '&sort=' + (state.sort === 'name' ? 'name' : 'date'))
       .then(function (d) {
         var dyn = (d.dynamics || []).slice(-state.dynDays);
@@ -496,6 +496,38 @@
     }).catch(function () { document.getElementById('body').innerHTML = '<div class="empty">Ошибка загрузки.</div>'; });
   }
 
+  // ============ Таб 2: ТРЕКИНГ (топ-таб, вторая по важности функция) ============
+  function renderTrackingTab() {
+    state.tab = 'tr'; state.view = 'tab';
+    if (backBtn) backBtn.hide();
+    fab.classList.remove('hidden');
+    fab.onclick = function () { renderTrackingCreate(); };
+    app.innerHTML = header('🔗 Трекинг', 'ссылки, подписки, отписки, CPA') +
+      '<div class="toolbar">' +
+      '<div class="chip ' + (state.sort === 'date' ? 'on' : '') + '" data-a="sort-date">Новые сверху</div>' +
+      '<div class="chip ' + (state.sort === 'name' ? 'on' : '') + '" data-a="sort-name">По имени</div></div>' +
+      '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
+    bind();
+    GET('/app/api/analytics/channels').then(function (d) {
+      var chs = d.channels || [];
+      if (state.sort === 'name') chs.sort(function (a, b) { return a.title.localeCompare(b.title, 'ru'); });
+      document.getElementById('list').innerHTML = chs.map(function (c) {
+        return '<div class="card tap" data-a="ch" data-id="' + c.id + '" data-t="' + esc(c.title) + '">' +
+          '<div class="row"><div class="title">' + esc(c.title) + '</div>' +
+          '<span class="badge ' + (c.is_public ? 'pub' : '') + '">' + (c.is_public ? 'публичный' : 'приватный') + '</span></div>' +
+          '<div class="meta">ссылок: ' + c.links + '</div>' +
+          '<div class="stats">' +
+          '<div class="stat"><div class="num">' + fmt(c.clicks) + '</div><div class="lbl">клики</div></div>' +
+          '<div class="stat"><div class="num">' + fmt(c.signups) + '</div><div class="lbl">подписки</div></div>' +
+          '<div class="stat"><div class="num">' + pct(c.signups, c.clicks) + '</div><div class="lbl">конверсия</div></div>' +
+          '</div></div>';
+      }).join('') || '<div class="empty">Ссылок пока нет.<br>Нажмите «＋» — создайте первую ссылку.</div>';
+      app.querySelectorAll('.card[data-a="ch"]').forEach(function (c) {
+        c.onclick = function () { renderChannel(parseInt(c.getAttribute('data-id'), 10), c.getAttribute('data-t')); };
+      });
+    }).catch(function () { document.getElementById('list').innerHTML = '<div class="empty">Не удалось загрузить.</div>'; });
+  }
+
   // ============ Таб 3: КАНАЛЫ ============
   function renderChannelsTab() {
     state.tab = 'ch'; state.view = 'tab';
@@ -532,7 +564,7 @@
             '<div class="meta">ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</div></div>';
         }).join('') || '<div class="empty">Каналов пока нет</div>';
         app.querySelectorAll('.card[data-a="ch"]').forEach(function (el) {
-          el.onclick = function () { switchTab('an'); renderChannel(parseInt(el.getAttribute('data-id'), 10), el.getAttribute('data-t')); };
+          el.onclick = function () { switchTab('tr'); renderChannel(parseInt(el.getAttribute('data-id'), 10), el.getAttribute('data-t')); };
         });
       });
     }
@@ -545,13 +577,17 @@
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
     app.innerHTML = header('⚙️ Ещё') +
-      '<div class="card tap" data-a="go-track"><div class="row"><div class="title">🔗 Трекинг-ссылки</div><span>→</span></div>' +
-      '<div class="meta">создать уникальную / супер / конкурсную ссылку</div></div>' +
       '<div class="card tap" data-a="go-help"><div class="row"><div class="title">📚 Справка</div><span>→</span></div>' +
       '<div class="meta">как всё работает</div></div>' +
+      '<div class="card tap" data-a="go-support"><div class="row"><div class="title">🆘 Поддержка</div><span>→</span></div>' +
+      '<div class="meta">написать разработчикам</div></div>' +
       '<div class="card"><div class="meta">RandoMaster — розыгрыши и трекинг для каналов MAX.<br>Все функции — в этом приложении; чат бота остаётся для уведомлений и постов.</div></div>';
-    app.querySelector('[data-a="go-track"]').onclick = renderTrackingCreate;
     app.querySelector('[data-a="go-help"]').onclick = function () { location.href = '/app/help.html'; };
+    app.querySelector('[data-a="go-support"]').onclick = function () {
+      var txt = 'Вопрос по RandoMaster';
+      try { api.shareContent && api.shareContent({ text: txt }); } catch (e) {}
+      try { if (api.openMaxLink) api.openMaxLink('https://max.ru/:share?text=' + encodeURIComponent(txt)); } catch (e) {}
+    };
   }
 
   // ---------- Создание трекинг-ссылки ----------
@@ -672,7 +708,7 @@
       t.classList.toggle('on', t.getAttribute('data-tab') === tab);
     });
     if (tab === 'gw') renderGiveaways();
-    else if (tab === 'an') renderChannels();
+    else if (tab === 'tr') renderTrackingTab();
     else if (tab === 'ch') renderChannelsTab();
     else renderMore();
   }
@@ -697,7 +733,7 @@
   }
   function refresh() {
     if (state.view === 'detail' && state.chID) renderChannel(state.chID, state.chTitle);
-    else if (state.tab === 'an') renderChannels();
+    else if (state.tab === 'tr') renderTrackingTab();
     else if (state.tab === 'ch') renderChannelsTab();
   }
 
