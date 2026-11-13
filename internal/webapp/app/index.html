@@ -541,7 +541,7 @@
   function renderLink(id) {
     state.view = 'detail';
     if (backBtn) backBtn.show();
-    app.innerHTML = header('Ссылка', '', true) + '<div id="body"><div class="skel"></div></div>';
+    app.innerHTML = header('Статистика ссылки', '', true) + '<div id="body"><div class="skel"></div></div>';
     if (backBtn) backBtn.onClick(function () { renderChannel(state.chID, state.chTitle); });
     document.getElementById('hb').onclick = function () { renderChannel(state.chID, state.chTitle); };
     GET('/app/api/analytics/link/' + id).then(function (d) {
