@@ -64,6 +64,12 @@ type Deps struct {
 	StartSupport     func(ctx context.Context, uid int64)
 	UploadMedia      func(ctx context.Context, data []byte, filename, kind string) (string, string, error)
 
+	// Визард «каналы → ссылки → пост»: черновик под розыгрыш, автогенерация
+	// уникальных ссылок под выбранные каналы, гидрация редактуры (handlers).
+	CreateDraftGiveaway func(ctx context.Context, uid int64) (int64, string, error)
+	TrackingForGiveaway func(ctx context.Context, uid, giveawayID int64, channelIDs []int64) ([]LinkForGiveawayOut, string, error)
+	GiveawayForEdit     func(ctx context.Context, uid, giveawayID int64) (GiveawayEditOut, string, error)
+
 	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
 	// (maxapi.IsSubscriber). Первичная проверка в момент клика по
 	// трекинг-ссылке: уже-участники фиксируются сразу (user_added для них не
@@ -171,6 +177,41 @@ type CreateGiveawayReq struct {
 	ResultsInPost  bool               `json:"results_in_post"`
 	ResultsText    string             `json:"results_text"`
 	SaveDraft      bool               `json:"save_draft"`
+	GiveawayID     int64              `json:"giveaway_id"` // >0 → редактура существующего черновика
+	Approval       bool               `json:"approval"`    // true → пост в чат на утверждение, без публикации
+}
+
+// LinkForGiveawayOut — трекинг-ссылка, сгенерированная под розыгрыш.
+type LinkForGiveawayOut struct {
+	LinkURL   string `json:"url"`
+	Name      string `json:"name"`
+	ChannelID int64  `json:"channel_id"`
+	LinkType  string `json:"link_type"`
+}
+
+// GiveawayEditOut — черновик для гидрации визарда при редактуре
+// (зеркалит handlers.GiveawayForEditFromApp; отдельный тип — webapp не
+// зависит от пакета handlers).
+type GiveawayEditOut struct {
+	GiveawayID    int64                  `json:"giveaway_id"`
+	Name          string                 `json:"name"`
+	PostText      string                 `json:"post_text"`
+	PostFormat    string                 `json:"post_format"`
+	MediaTokens   []store.MediaToken     `json:"media_tokens"`
+	ButtonText    string                 `json:"button_text"`
+	PubChannels   []int64                `json:"pub_channels"`
+	SubChannels   []int64                `json:"sub_channels"`
+	FinishMode    string                 `json:"finish_mode"`
+	FinishAt      string                 `json:"finish_at"`
+	FinishCount   int                    `json:"finish_count"`
+	PublishNow    bool                   `json:"publish_now"`
+	PublishAt     string                 `json:"publish_at"`
+	Winners       int                    `json:"winners"`
+	Captcha       bool                   `json:"captcha"`
+	Referral      bool                   `json:"referral"`
+	ResultsInPost bool                   `json:"results_in_post"`
+	WinnersMsg    string                 `json:"winners_message"`
+	Links         []LinkForGiveawayOut   `json:"links"`
 }
 
 // CreateTrackingReq — запрос трекинг-ссылки из миниаппа.
@@ -495,6 +536,90 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "giveaway_id": gid})
 	})
 
+	// Черновик под визард «каналы → ссылки → пост»: создаётся при завершении
+	// шага выбора каналов (ссылки привязываются к giveaway_id). Пустые брошенные
+	// черновики (без имени и текста) вычищаются, чтобы не копились.
+	mux.HandleFunc("/app/api/giveaways/draft", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if d.CreateDraftGiveaway == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		gid, vmsg, err := d.CreateDraftGiveaway(r.Context(), userID)
+		if err != nil {
+			log.Warn("app draft giveaway", "err", err, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "giveaway_id": gid})
+	})
+
+	// Уникальные ссылки под розыгрыш (идемпотентно): по вызову визарда после
+	// выбора каналов — ссылки сразу готовы к вшиванию в текст поста.
+	mux.HandleFunc("/app/api/tracking/for-giveaway", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			GiveawayID int64   `json:"giveaway_id"`
+			ChannelIDs []int64 `json:"channel_ids"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.GiveawayID <= 0 {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		if d.TrackingForGiveaway == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		links, vmsg, err := d.TrackingForGiveaway(r.Context(), userID, req.GiveawayID, req.ChannelIDs)
+		if err != nil {
+			log.Warn("app tracking for giveaway", "err", err, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "links": links})
+	})
+
+	// Черновик для редактуры: гидрация визарда (+ ссылки под розыгрыш).
+	mux.HandleFunc("/app/api/giveaways/edit/", func(w http.ResponseWriter, r *http.Request) {
+		gid, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/app/api/giveaways/edit/"), 10, 64)
+		if err != nil || gid <= 0 {
+			http.Error(w, `{"error":"bad id"}`, http.StatusBadRequest)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if d.GiveawayForEdit == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		out, vmsg, err := d.GiveawayForEdit(r.Context(), userID, gid)
+		if err != nil {
+			log.Warn("app giveaway edit", "err", err, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "giveaway": out})
+	})
+
 	// Создание трекинг-ссылки (ads unique/super, contest пачкой).
 	mux.HandleFunc("/app/api/tracking/create", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -704,6 +829,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			Ret14d  int     `json:"ret_14d"`
 			Ret30d  int     `json:"ret_30d"`
 			Conv    float64 `json:"conv"`
+			URL     string  `json:"url"` // диплинк (для «вшить ссылку» из визарда)
 		}
 		links := make([]linkOut, 0, len(stats))
 		for _, st := range stats {
@@ -720,6 +846,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 				Clicks: st.Clicks, Signups: st.Signups, StillIn: ret.StillIn,
 				Ret1d: ret.Retained1d, Ret3d: ret.Retained3d, Ret7d: ret.Retained7d,
 				Ret14d: ret.Retained14d, Ret30d: ret.Retained30d, Conv: conv,
+				URL: util.StartappLink(d.BotUsername, "u_"+st.Code),
 			})
 		}
 		dyn, _ := d.DB.ChannelDynamics(r.Context(), chID, 30)

@@ -25,6 +25,12 @@ const (
 	CBAnalytics        = "analytics"    // UTM-аналитика (главное меню)
 	CBAnalyticsTab     = "an_tab:"      // + channels|giveaways (вкладки аналитики)
 
+	// Утверждение поста розыгрыша из миниаппа: пост приходит админу в чат,
+	// «Да» — публикация/план, «Нет» — обратно в редактуру в приложении.
+	// Payload: gw_approve_yes:<giveaway_id> | gw_approve_no:<giveaway_id>
+	CBApproveGwYes = "gw_approve_yes:" // + giveaway_id
+	CBApproveGwNo  = "gw_approve_no:"  // + giveaway_id
+
 	// Фильтры "мои розыгрыши"
 	CBGiveawayFilter = "gw_filter:" // + status
 	CBGwList         = "gw_list"

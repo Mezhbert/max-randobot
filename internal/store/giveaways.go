@@ -174,11 +174,15 @@ func (s *Store) AbandonDraft(ctx context.Context, id int64) error {
 	return err
 }
 
-// DeleteEmptyDrafts удаляет черновики без названия (мусор от прерванных попыток
-// создания). Именованные черновики (сохранённые) не трогает.
+// DeleteEmptyDrafts удаляет ПУСТЫЕ черновики (мусор от прерванных попыток):
+// без названия И без текста поста. Брошенные с введённым постом/каналами —
+// не трогает (визард миниаппа создаёт draft до заполнения названия).
 func (s *Store) DeleteEmptyDrafts(ctx context.Context, ownerUserID int64) error {
-	_, err := s.pool.Exec(ctx,
-		`DELETE FROM giveaways WHERE owner_user_id=$1 AND status='draft' AND (name IS NULL OR name='')`, ownerUserID)
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM giveaways
+		WHERE owner_user_id=$1 AND status='draft'
+		  AND (name IS NULL OR name='') AND (post_text IS NULL OR post_text='')
+	`, ownerUserID)
 	return err
 }
 
