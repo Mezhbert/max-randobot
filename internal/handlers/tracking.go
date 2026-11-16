@@ -1127,6 +1127,46 @@ func (b *Bot) CreateTrackingForGiveaway(ctx context.Context, uid, giveawayID int
 	return links, "", nil
 }
 
+// RenameGiveawayFromApp — переименовать черновик (шаг «Название» визарда,
+// в т.ч. редактура старых «без названия»). Вместе с розыгрышем переименовываются
+// его ссылки: «Новое название | Канал» — чтобы старые «без названия» ушли.
+func (b *Bot) RenameGiveawayFromApp(ctx context.Context, uid, giveawayID int64, name string) (string, error) {
+	nm := strings.TrimSpace(name)
+	if nm == "" {
+		return "Введите название", nil
+	}
+	if len(nm) > 200 {
+		nm = nm[:200]
+	}
+	g, err := b.db.GetGiveaway(ctx, giveawayID, uid)
+	if err != nil || g.Status != store.StatusDraft {
+		return "Розыгрыш не найден или уже опубликован", nil
+	}
+	if g.Name != nm {
+		if err := b.db.UpdateGiveawayFieldAny(ctx, giveawayID, "name", nm); err != nil {
+			return "", err
+		}
+	}
+	// Ссылки розыгрыша: пересобрать имена «Название | Канал».
+	links, _ := b.db.ListUTMLinksByGiveaway(ctx, giveawayID)
+	for _, l := range links {
+		suffix := ""
+		if i := strings.LastIndex(l.Source, " | "); i > -1 {
+			suffix = l.Source[i+len(" | "):]
+		}
+		if ch, cerr := b.db.GetChannel(ctx, l.ChannelID, uid); cerr == nil && ch.Title != "" {
+			suffix = ch.Title // канонический суффикс — актуальное название канала
+		}
+		if suffix == "" {
+			continue
+		}
+		if nn := nm + " | " + suffix; nn != l.Source {
+			_ = b.db.UpdateUTMLinkSource(ctx, l.ID, nn)
+		}
+	}
+	return "", nil
+}
+
 // GiveawayLinkStatOut — ссылка скопа со статистикой (шаг «Ссылки» визарда,
 // карточка розыгрыша): клики/подписки по каждой, сумма считается клиентом.
 type GiveawayLinkStatOut struct {
