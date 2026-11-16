@@ -834,11 +834,17 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 	var err error
 	if in.GiveawayID > 0 {
 		// Редактура: только свой черновик (опубликованное менять нельзя).
-		gg, gerr := b.db.GetGiveaway(ctx, in.GiveawayID, uid)
-		if gerr != nil || gg.Status != store.StatusDraft {
-			return in.GiveawayID, "Розыгрыш не найден или уже опубликован", nil
+		// Черновик исчез (напр., удалён вручную) — прозрачно создаём новый,
+		// а не валимся ошибкой: пользователь просто повторно утвердит пост.
+		if gg, gerr := b.db.GetGiveaway(ctx, in.GiveawayID, uid); gerr == nil && gg.Status == store.StatusDraft {
+			g = gg
+		} else {
+			b.log.Warn("app create: draft gone, recreating", "id", in.GiveawayID, "user", uid)
+			g, err = b.db.CreateDraftGiveaway(ctx, uid, "")
+			if err != nil {
+				return 0, "", err
+			}
 		}
-		g = gg
 	} else {
 		g, err = b.db.CreateDraftGiveaway(ctx, uid, "")
 		if err != nil {

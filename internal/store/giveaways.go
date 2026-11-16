@@ -174,14 +174,16 @@ func (s *Store) AbandonDraft(ctx context.Context, id int64) error {
 	return err
 }
 
-// DeleteEmptyDrafts удаляет ПУСТЫЕ черновики (мусор от прерванных попыток):
-// без названия И без текста поста. Брошенные с введённым постом/каналами —
-// не трогает (визард миниаппа создаёт draft до заполнения названия).
+// DeleteEmptyDrafts удаляет ПУСТЫЕ БРОШЕННЫЕ черновики: без названия, без
+// текста и старше часа. Активный визард миниаппа (минуты между шагами) не
+// попадает — раньше GC мог удалить черновик ПОД визардом, и финальный create
+// падал «not found» (живой инцидент 16.11: err=not found на утверждении).
 func (s *Store) DeleteEmptyDrafts(ctx context.Context, ownerUserID int64) error {
 	_, err := s.pool.Exec(ctx, `
 		DELETE FROM giveaways
 		WHERE owner_user_id=$1 AND status='draft'
 		  AND (name IS NULL OR name='') AND (post_text IS NULL OR post_text='')
+		  AND created_at < now() - interval '1 hour'
 	`, ownerUserID)
 	return err
 }

@@ -150,3 +150,42 @@ func TestTrackingForGiveaway_Idempotent(t *testing.T) {
 }
 
 func int64String(v int64) string { return strconv.FormatInt(v, 10) }
+
+func TestAppGiveaway_DraftGoneFallback(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 7005
+	testutil.EnsureUser(t, s, uid, "gcvictim")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 9106, Title: "Ch", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	// Черновик «исчез» (удалён между шагами визарда) — create не должен падать
+	// «not found» (живой инцидент 16.11), а прозрачно создать новый.
+	gid, vmsg, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
+		GiveawayID: 999999, Name: "После GC", PostText: "Пост", ButtonText: "Участвовать",
+		PubChannels: []int64{ch.ID}, PublishNow: true,
+		FinishMode: "time", FinishAt: "01.01.2099 21:00", Winners: 1, Approval: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, vmsg)
+	assert.NotEqual(t, int64(999999), gid, "должен создаться НОВЫЙ черновик")
+	g, err := s.GetGiveawayAny(ctx, gid)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusDraft, g.Status)
+}
+
+func TestDeleteEmptyDrafts_KeepsFresh(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 7006
+	testutil.EnsureUser(t, s, uid, "gckeep")
+
+	fresh, err := s.CreateDraftGiveaway(ctx, uid, "")
+	require.NoError(t, err) // активный визард: пустой, но МОЛОДОЙ
+
+	require.NoError(t, s.DeleteEmptyDrafts(ctx, uid))
+	_, err = s.GetGiveawayAny(ctx, fresh.ID)
+	assert.NoError(t, err, "свежий пустой черновик (в визарде) GC не трогает")
+}
