@@ -94,6 +94,11 @@
   #tabbar .tab{flex:1;background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;padding:4px 0}
   #tabbar .tab .ico{font-size:20px;display:block;margin-bottom:2px}
   #tabbar .tab.on{color:var(--fg)}
+  /* Активный таб — подложка-пилюля (не только текст); смена таба — слайд */
+  #tabbar .tab{border-radius:12px;margin:0 2px;padding:6px 0;transition:background .18s,color .18s}
+  #tabbar .tab.on{background:var(--inv);color:var(--inv-fg)}
+  @keyframes slideR{from{transform:translateX(46px);opacity:.3}to{transform:translateX(0);opacity:1}}
+  @keyframes slideL{from{transform:translateX(-46px);opacity:.3}to{transform:translateX(0);opacity:1}}
 </style>
 </head>
 <body>
@@ -257,6 +262,33 @@
   }
   // SVG-конус (стандартная воронка фильтра).
   var FUNNEL = '<svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"/></svg>';
+  // Иконки темы: в тёмной показываем солнце (тап → светлая), и наоборот.
+  var SUN = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.4M12 19v2.4M2.6 12H5M19 12h2.4M5 5l1.7 1.7M17.3 17.3 19 19M19 5l-1.7 1.7M6.7 17.3 5 19"/></svg>';
+  var MOON = '<svg viewBox="0 0 24 24"><path d="M20.2 14.3A8.3 8.3 0 0 1 9.7 3.8a8.3 8.3 0 1 0 10.5 10.5z"/></svg>';
+  function themeBtn(id) {
+    var dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    return '<button class="iconbtn" id="' + id + '" title="Светлая/тёмная тема">' + (dark ? SUN : MOON) + '</button>';
+  }
+  function bindThemeBtn(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.onclick = function () {
+      applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+      // Тема применяется CSS-переменными мгновенно — меняем только иконку.
+      el.innerHTML = document.documentElement.getAttribute('data-theme') === 'light' ? MOON : SUN;
+    };
+  }
+  // Слайд при смене экрана: направление задаётся ДО render(), снимается после.
+  var slideDir = 0;
+  function tabOrder() { return role === 'participant' ? ['feed', 'mine', 'pinfo'] : ['gw', 'tr', 'ch', 'me']; }
+  function animateSlide() {
+    if (!slideDir) return;
+    var a = slideDir > 0 ? 'slideR' : 'slideL';
+    slideDir = 0;
+    app.style.animation = 'none';
+    void app.offsetWidth; // reflow: перезапуск анимации с нуля
+    app.style.animation = a + ' .22s ease';
+  }
   function filterBtn(id) { return '<button class="iconbtn" id="' + id + '">' + FUNNEL + '</button>'; }
   function ddClose(dd) { dd.innerHTML = ''; }
   function ddBind(dd) {
@@ -309,7 +341,12 @@
   function bindTabs() {
     tabbar.querySelectorAll('.tab').forEach(function (t) {
       t.onclick = function () {
-        state.tab = t.getAttribute('data-tab');
+        var nt = t.getAttribute('data-tab');
+        if (nt === state.tab) return;
+        // Слайд по порядку табов: к следующему — вправо, к предыдущему — влево.
+        var ord = tabOrder();
+        slideDir = ord.indexOf(nt) > ord.indexOf(state.tab) ? 1 : -1;
+        state.tab = nt;
         state.view = 'tab';
         render();
       };
@@ -334,9 +371,10 @@
     fab.onclick = function () { renderGwWizard(0); };
     var fn = { all:'Все', draft:'Черновики', scheduled:'Запланированные', active:'Идут', finished:'Завершённые' };
     app.innerHTML = roleswitch() +
-      '<header style="position:relative"><div><h1>Розыгрыши</h1></div>' + filterBtn('gw-filter') + '</header>' +
+      '<header style="position:relative"><div><h1>Розыгрыши</h1></div>' + themeBtn('th') + filterBtn('gw-filter') + '</header>' +
       '<div id="gw-dd"></div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
     bindRoleSwitch();
+    bindThemeBtn('th');
     document.getElementById('gw-filter').onclick = function (e) {
       e.stopPropagation();
       var dd = document.getElementById('gw-dd');
@@ -788,9 +826,10 @@
     fab.textContent = 'Создать трекинг-ссылку';
     fab.onclick = function () { renderTrWizard(0); };
     app.innerHTML = roleswitch() +
-      '<header style="position:relative"><div><h1>Трекинг</h1></div>' + filterBtn('tr-filter') + '</header>' +
+      '<header style="position:relative"><div><h1>Трекинг</h1></div>' + themeBtn('th') + filterBtn('tr-filter') + '</header>' +
       '<div id="tr-dd"></div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
     bindRoleSwitch();
+    bindThemeBtn('th');
     document.getElementById('tr-filter').onclick = function (e) {
       e.stopPropagation();
       var dd = document.getElementById('tr-dd');
@@ -1108,13 +1147,14 @@
     organizerTabs();
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
-    app.innerHTML = roleswitch() + header('Мои каналы') +
+    app.innerHTML = roleswitch() + '<header><div><h1>Мои каналы</h1></div>' + themeBtn('th') + '</header>' +
       '<div class="card"><label class="lbl" style="margin-top:0">Ссылка на канал (@username или https://max.ru/...)</label>' +
       '<input class="inp" id="ch-link" placeholder="@mychannel">' +
       '<button class="btn" id="ch-add">＋ Подключить канал</button><div class="msg" id="ch-msg"></div>' +
       '<div class="meta">Перед этим добавьте бота админом в канал (права «Читать все сообщения» и «Публиковать, редактировать и удалять сообщения»). Приватный канал — перешлите пост из канала боту в чат.</div></div>' +
       '<div id="list"><div class="skel"></div></div>';
     bindRoleSwitch();
+    bindThemeBtn('th');
     document.getElementById('ch-add').onclick = function () {
       var link = document.getElementById('ch-link').value.trim();
       if (!link) return showMsg('ch-msg', 'Введите ссылку', true);
@@ -1148,7 +1188,7 @@
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
     var theme = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️ Светлая' : '🌙 Тёмная';
-    app.innerHTML = roleswitch() + header('Инфо') +
+    app.innerHTML = roleswitch() + '<header><div><h1>Инфо</h1></div>' + themeBtn('th') + '</header>' +
       '<div class="card tap" data-a="theme"><div class="row"><div class="title">Тема оформления</div><span class="badge">' + theme + '</span></div>' +
       '<div class="meta">переключить чёрно-белую тему</div></div>' +
       '<div class="card tap" data-a="go-help"><div class="row"><div class="title">Справка</div><span>→</span></div>' +
@@ -1156,6 +1196,7 @@
       '<div class="card tap" data-a="go-support"><div class="row"><div class="title">Поддержка</div><span>→</span></div>' +
       '<div class="meta">написать разработчикам</div></div>';
     bindRoleSwitch();
+    bindThemeBtn('th');
     app.querySelector('[data-a="theme"]').onclick = function () {
       applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
       renderMore();
@@ -1191,6 +1232,7 @@
   function render() {
     if (role === 'participant') renderParticipant();
     else { organizerTabs(); renderOrganizer(); }
+    animateSlide();
   }
   tabbar.classList.remove('hidden');
   render();
