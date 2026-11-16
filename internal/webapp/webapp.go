@@ -60,7 +60,7 @@ type Deps struct {
 	// Создание из миниаппа (реализации в handlers).
 	CreateGiveaway   func(ctx context.Context, uid int64, in CreateGiveawayReq) (int64, string, error)
 	CreateTracking   func(ctx context.Context, uid int64, in CreateTrackingReq) ([]string, string, error)
-	AddChannel       func(ctx context.Context, uid int64, link string) (string, string, error)
+	AddChannel       func(ctx context.Context, uid int64, link string) (title, instruction, vmsg string, err error)
 	DeleteChannel    func(ctx context.Context, uid, channelID int64) (string, error)
 	StartSupport     func(ctx context.Context, uid int64)
 	UploadMedia      func(ctx context.Context, data []byte, filename, kind string) (string, string, error)
@@ -830,13 +830,16 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		title, vmsg, err := d.AddChannel(r.Context(), userID, req.Link)
+		title, instr, vmsg, err := d.AddChannel(r.Context(), userID, req.Link)
 		if err != nil {
 			log.Warn("app add channel", "err", err, "user", userID)
 			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
 			return
 		}
-		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "title": title})
+		// instruction — сценарий «добавьте бота админом, событие подключит
+		// канал само»: ok=true, ошибка пустая, интерфейс покажет подсказку.
+		writeJSON(w, map[string]any{"ok": vmsg == "" || instr != "", "error": vmsg,
+			"title": title, "instruction": instr})
 	})
 
 	// Удаление канала (без ссылок; со ссылками — отказ с числом).

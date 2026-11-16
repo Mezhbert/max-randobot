@@ -1114,11 +1114,13 @@ func (b *Bot) handleCalendar(ctx context.Context, uid int64, arg, cbID string) {
 // экране подключения (мануал §5.3): привязываем канал к организатору и
 // возвращаем к шагу мастера, откуда пришли.
 func (b *Bot) onBotAddedConnectChannel(ctx context.Context, uid, chatID int64) {
-	sess, err := b.db.GetSessionPayload(ctx, uid)
-	if err != nil || sess.State != store.SessionAddingChannel {
-		return
+	// Сессия нужна ТОЛЬКО для возврата к шагу мастера; канал подключаем
+	// всегда: бота могли сделать админом прямо из мини-аппа (там нет экрана
+	// ожидания — юзер вернётся во вкладку «Каналы» сам).
+	returnStep := ""
+	if sess, err := b.db.GetSessionPayload(ctx, uid); err == nil && sess.State == store.SessionAddingChannel {
+		returnStep, _ = sess.Payload["return_step"].(string)
 	}
-	returnStep, _ := sess.Payload["return_step"].(string)
 
 	info, isAdmin, err := b.api.CheckChannelAdmin(ctx, chatID)
 	if err != nil || !isAdmin {
@@ -1132,8 +1134,10 @@ func (b *Bot) onBotAddedConnectChannel(ctx context.Context, uid, chatID int64) {
 		b.log.Debug("bot_added connect: save", "err", err, "chat", chatID)
 	}
 	title := ifEmpty(info.Title, fmt.Sprintf("канал #%d", chatID))
-	_ = b.api.SendText(ctx, uid, "✅ Канал «"+title+"» подключён!")
-	_ = b.db.ClearSession(ctx, uid)
+	_ = b.api.SendText(ctx, uid, "✅ Канал «"+title+"» подключён! Он появился в приложении («Мои каналы»).")
+	if returnStep != "" {
+		_ = b.db.ClearSession(ctx, uid)
+	}
 
 	// Возврат к шагу мастера (если подключали из него; из «Мои каналы» —
 	// return_step пуст → список каналов).

@@ -1634,7 +1634,7 @@
     fab.classList.add('hidden');
     app.innerHTML = roleswitch() + '<header><div><h1>Мои каналы</h1></div>' + themeBtn('th') + '</header>' +
       '<div class="card"><label class="lbl" style="margin-top:0">Ссылка на канал (@username или https://max.ru/...)</label>' +
-      '<input class="inp" id="ch-link" placeholder="@mychannel">' +
+      '<input class="inp" id="ch-link" placeholder="@mychannel, ссылка или числовой ID">' +
       '<button class="btn" id="ch-add">＋ Подключить канал</button><div class="msg" id="ch-msg"></div>' +
       '<div class="meta">Перед этим добавьте бота админом в канал (права «Читать все сообщения» и «Публиковать, редактировать и удалять сообщения»). Приватный канал — перешлите пост из канала боту в чат.</div></div>' +
       '<div id="list"><div class="skel"></div></div>';
@@ -1645,6 +1645,16 @@
       if (!link) return showMsg('ch-msg', 'Введите ссылку', true);
       showMsg('ch-msg', '⏳ Проверяю…');
       POST('/app/api/channels/add', { link: link }).then(function (d) {
+        if (d.ok && d.instruction) {
+          // Подключение через событие: бота делают админом — канал появится сам.
+          var m = document.getElementById('ch-msg');
+          m.textContent = d.instruction;
+          m.className = 'msg ok';
+          m.style.whiteSpace = 'pre-line';
+          document.getElementById('ch-link').value = '';
+          loadList();
+          return;
+        }
         if (d.ok) { showMsg('ch-msg', '✅ Канал «' + esc(d.title) + '» подключён'); document.getElementById('ch-link').value = ''; loadList(); }
         else showMsg('ch-msg', '⚠️ ' + (d.error || 'ошибка'), true);
       });
