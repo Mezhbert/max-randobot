@@ -67,8 +67,9 @@ type Deps struct {
 	// Визард «каналы → ссылки → пост»: черновик под розыгрыш, автогенерация
 	// уникальных ссылок под выбранные каналы, гидрация редактуры (handlers).
 	CreateDraftGiveaway func(ctx context.Context, uid int64) (int64, string, error)
-	TrackingForGiveaway func(ctx context.Context, uid, giveawayID int64, channelIDs []int64) ([]LinkForGiveawayOut, string, error)
+	TrackingForGiveaway func(ctx context.Context, uid, giveawayID int64, channelIDs []int64, draftName string) ([]LinkForGiveawayOut, string, error)
 	GiveawayForEdit     func(ctx context.Context, uid, giveawayID int64) (GiveawayEditOut, string, error)
+	GiveawayLinks       func(ctx context.Context, uid, giveawayID int64) ([]LinkForGiveawayOut, string, error)
 
 	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
 	// (maxapi.IsSubscriber). Первичная проверка в момент клика по
@@ -165,6 +166,7 @@ type CreateGiveawayReq struct {
 	ButtonText     string             `json:"button_text"`
 	PubChannels    []int64            `json:"pub_channels"`
 	SubChannels    []int64            `json:"sub_channels"`
+	SubChannelsSet bool               `json:"sub_channels_set"` // true → подписки ровно как выбраны (даже пусто)
 	PublishNow     bool               `json:"publish_now"`
 	PublishAt      string             `json:"publish_at"`
 	FinishMode     string             `json:"finish_mode"`
@@ -181,12 +183,14 @@ type CreateGiveawayReq struct {
 	Approval       bool               `json:"approval"`    // true → пост в чат на утверждение, без публикации
 }
 
-// LinkForGiveawayOut — трекинг-ссылка, сгенерированная под розыгрыш.
+// LinkForGiveawayOut — трекинг-ссылка скопа розыгрыша (со статистикой).
 type LinkForGiveawayOut struct {
 	LinkURL   string `json:"url"`
 	Name      string `json:"name"`
 	ChannelID int64  `json:"channel_id"`
 	LinkType  string `json:"link_type"`
+	Clicks    int64  `json:"clicks"`
+	Signups   int64  `json:"signups"`
 }
 
 // GiveawayEditOut — черновик для гидрации визарда при редактуре
@@ -223,6 +227,7 @@ type CreateTrackingReq struct {
 	Cost       float64  `json:"cost"`
 	LinkType   string   `json:"link_type"`
 	PostRef    string   `json:"post_ref"`
+	GiveawayID int64    `json:"giveaway_id"` // >0 → привязать к розыгрышу (скоп)
 }
 
 // ParticipateResult — ответ API участия (зеркалит handlers.ParticipateResult;
@@ -577,6 +582,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		var req struct {
 			GiveawayID int64   `json:"giveaway_id"`
 			ChannelIDs []int64 `json:"channel_ids"`
+			Name       string  `json:"name"` // название розыгрыша из визарда (шаг 1)
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.GiveawayID <= 0 {
 			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
@@ -586,13 +592,44 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		links, vmsg, err := d.TrackingForGiveaway(r.Context(), userID, req.GiveawayID, req.ChannelIDs)
+		links, vmsg, err := d.TrackingForGiveaway(r.Context(), userID, req.GiveawayID, req.ChannelIDs, req.Name)
 		if err != nil {
 			log.Warn("app tracking for giveaway", "err", err, "user", userID)
 			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
 			return
 		}
 		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "links": links})
+	})
+
+	// Скоп ссылок розыгрыша (авто + привязанные вручную) со статистикой.
+	mux.HandleFunc("/app/api/analytics/giveaway-links/", func(w http.ResponseWriter, r *http.Request) {
+		gid, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/app/api/analytics/giveaway-links/"), 10, 64)
+		if err != nil || gid <= 0 {
+			http.Error(w, `{"error":"bad id"}`, http.StatusBadRequest)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if d.GiveawayLinks == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		links, vmsg, err := d.GiveawayLinks(r.Context(), userID, gid)
+		if err != nil {
+			log.Warn("app giveaway links", "err", err, "id", gid, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		var clicks, signups int64
+		for _, l := range links {
+			clicks += l.Clicks
+			signups += l.Signups
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "links": links,
+			"totals": map[string]int64{"links": int64(len(links)), "clicks": clicks, "signups": signups}})
 	})
 
 	// Черновик для редактуры: гидрация визарда (+ ссылки под розыгрыш).
