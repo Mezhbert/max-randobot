@@ -125,21 +125,22 @@ func TestTrackingForGiveaway_Idempotent(t *testing.T) {
 
 	g, err := s.CreateDraftGiveaway(ctx, uid, "")
 	require.NoError(t, err)
-	s.UpdateGiveawayFieldAny(ctx, g.ID, "name", "Конкурс Новый год")
-
-	links, vmsg, err := b.CreateTrackingForGiveaway(ctx, uid, g.ID, []int64{ch1.ID, ch2.ID})
+	// Имя приходит из визарда (шаг 1) — до генерации (фикс «без названия»).
+	links, vmsg, err := b.CreateTrackingForGiveaway(ctx, uid, g.ID, []int64{ch1.ID, ch2.ID}, "Конкурс Новый год")
 	require.NoError(t, err)
 	assert.Empty(t, vmsg)
-	require.Len(t, links, 2, "по ссылке на каждый канал")
+	require.Len(t, links, 2, "скоп = по ссылке на каждый канал")
 	for _, l := range links {
 		assert.Contains(t, l.LinkURL, "?startapp=u_")
 		assert.Equal(t, "unique", l.LinkType)
+		assert.Contains(t, l.Name, "Конкурс Новый год", "имя содержит название розыгрыша")
 	}
+	assert.Contains(t, links[0].Name, " | ", "паттерн имени: розыгрыш | канал")
 
-	// Повторный вызов (перезашли в визард) — дублей нет.
-	links2, _, err := b.CreateTrackingForGiveaway(ctx, uid, g.ID, []int64{ch1.ID, ch2.ID})
+	// Повторная генерация — дублей нет, скоп возвращается полностью.
+	links2, _, err := b.CreateTrackingForGiveaway(ctx, uid, g.ID, []int64{ch1.ID, ch2.ID}, "")
 	require.NoError(t, err)
-	assert.Empty(t, links2, "существующие ссылки не пересоздаются")
+	assert.Len(t, links2, 2, "скоп без дублей")
 
 	all, err := s.ListUTMLinksByGiveaway(ctx, g.ID)
 	require.NoError(t, err)
@@ -147,6 +148,59 @@ func TestTrackingForGiveaway_Idempotent(t *testing.T) {
 	for _, l := range all {
 		assert.Equal(t, g.ID, l.GiveawayID, "ссылки привязаны к розыгрышу")
 	}
+
+	// Ручная ссылка из Трекинга привязывается к скопу розыгрыша.
+	_, _, err = b.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{
+		Mode: "ads", ChannelID: ch1.ID, Name: "Ручная супер", LinkType: "super",
+		PostRef: "https://max.ru/x/1", GiveawayID: g.ID,
+	})
+	require.NoError(t, err)
+	scope, _, err := b.GiveawayLinksForApp(ctx, uid, g.ID)
+	require.NoError(t, err)
+	assert.Len(t, scope, 3, "ручная ссылка входит в скоп")
+	found := false
+	for _, l := range scope {
+		if l.Name == "Ручная супер" {
+			found = true
+		}
+	}
+	assert.True(t, found, "ручная ссылка видна в скопе розыгрыша")
+}
+
+func TestAppGiveaway_SubChannelsSet(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 7007
+	testutil.EnsureUser(t, s, uid, "subs")
+	ch1, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 9107, Title: "A", IsBotAdmin: true})
+	require.NoError(t, err)
+	ch2, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 9108, Title: "B", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	// Явный ВЫБОР: подписка только на ch2 (ch1 публикуется, но подписка не нужна).
+	gid, _, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
+		Name: "Подписки вручную", PostText: "Пост", ButtonText: "Участвовать",
+		PubChannels: []int64{ch1.ID, ch2.ID}, SubChannels: []int64{ch2.ID},
+		SubChannelsSet: true, PublishNow: true,
+		FinishMode: "time", FinishAt: "01.01.2099 21:00", Winners: 1, Approval: true,
+	})
+	require.NoError(t, err)
+	g, err := s.GetGiveawayAny(ctx, gid)
+	require.NoError(t, err)
+	require.Len(t, g.SubscribeChannelIDs, 1)
+	assert.Equal(t, ch2.ID, g.SubscribeChannelIDs[0], "подписки ровно как выбрал юзер")
+
+	// НЕ выбирал (дефолт) — подписки = публикации.
+	gid2, _, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
+		Name: "Дефолт подписок", PostText: "Пост", ButtonText: "Участвовать",
+		PubChannels: []int64{ch1.ID, ch2.ID},
+		PublishNow: true, FinishMode: "time", FinishAt: "01.01.2099 21:00", Winners: 1, Approval: true,
+	})
+	require.NoError(t, err)
+	g2, err := s.GetGiveawayAny(ctx, gid2)
+	require.NoError(t, err)
+	assert.Len(t, g2.SubscribeChannelIDs, 2, "без явного выбора подписки = публикации")
 }
 
 func int64String(v int64) string { return strconv.FormatInt(v, 10) }
