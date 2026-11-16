@@ -447,15 +447,14 @@ func (b *Bot) sendWelcome(ctx context.Context, userID int64) {
 		"— Проверка подписок и защита от ботов (капча)\n" +
 		"— Честный выбор победителей и уведомления\n" +
 		"— Трекинг-ссылки: клики, подписки, отписки, цена подписчика\n\n" +
-		"Все функции доступны в удобном интерфейсе Mini App.\n\n" +
-		"💡 Чтобы ускорить создание розыгрыша или трекинга — заранее добавьте свои каналы во вкладке «📻 Каналы».\n\n" +
-		"Нажмите кнопку ниже, чтобы открыть приложение и управлять розыгрышами."
+		"💡 Чтобы ускорить создание розыгрыша или трекинга — заранее добавьте свои каналы во вкладке «📻 Каналы» приложения.\n\n" +
+		"Выберите, как работать:"
 	kb := model.NewKeyboard()
 	if b.botUsername != "" {
-		kb.AddRow().AddLink("📱 Открыть приложение", util.StartappLink(b.botUsername, "analytics"))
-	} else {
-		kb.AddRow().AddCallBack("🆘 Поддержка", util.CBSupport)
+		kb.AddRow().AddLink("📱 Приложение для организаторов", util.StartappLink(b.botUsername, "analytics"))
+		kb.AddRow().AddLink("🎟 Приложение для участников", util.StartappLink(b.botUsername, "participant"))
 	}
+	kb.AddRow().AddCallBack("☰ Меню (кнопки)", util.CBOldMenu)
 	if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
 		kb.AddRow().AddCallBack("📝 Продолжить черновик", util.CBGwList)
 	}

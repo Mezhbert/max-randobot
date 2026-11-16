@@ -6,87 +6,154 @@
 <title>RandoMaster</title>
 <script src="https://st.max.ru/js/max-web-app.js"></script>
 <style>
-  :root{--bg:#0e1117;--card:#171c28;--card2:#1f2637;--accent:#7c5cff;--accent2:#5cffb3;--err:#ff6b7a;--warn:#ffc85a;--text:#e8ecf5;--muted:#8b93a7;--line:#2a3550}
+  /* ЧБ-палитра: чистая градация серого + две темы (тёмная по умолчанию). */
+  :root{
+    --bg:#0d0d0d; --card:#171717; --card2:#222; --fg:#f2f2f2; --muted:#999;
+    --line:#333; --inv:#fff; --inv-fg:#111; --ok:#fff;
+  }
+  [data-theme="light"]{
+    --bg:#f5f5f5; --card:#fff; --card2:#eee; --fg:#111; --muted:#777;
+    --line:#ddd; --inv:#111; --inv-fg:#fff; --ok:#111;
+  }
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:-apple-system,'Segoe UI',Roboto,sans-serif}
-  body{background:var(--bg);color:var(--text);min-height:100vh;padding:12px 12px 84px}
+  body{background:var(--bg);color:var(--fg);min-height:100vh;padding:10px 12px 96px;transition:background .2s,color .2s}
   .hidden{display:none !important}
-  header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
   header>div{flex:1}
-  header .back{width:38px;height:38px;border-radius:12px;background:var(--card);border:none;color:var(--text);font-size:19px;flex:none}
-  header h1{font-size:19px;font-weight:800}
+  header .back{width:38px;height:38px;border-radius:11px;background:var(--card);border:1px solid var(--line);color:var(--fg);font-size:19px;flex:none}
+  header h1{font-size:19px;font-weight:800;letter-spacing:.2px}
   header .sub{font-size:12px;color:var(--muted)}
-  .card{background:var(--card);border-radius:16px;padding:14px;margin-bottom:10px;border:1px solid transparent}
-  .card.tap{cursor:pointer}.card.tap:active{background:var(--card2)}
+  /* Верхний свитч участникам|организаторам */
+  .roleswitch{display:flex;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px;margin-bottom:12px}
+  .roleswitch button{flex:1;background:none;border:none;color:var(--muted);font-size:13px;font-weight:700;padding:9px 0;border-radius:9px;cursor:pointer}
+  .roleswitch button.on{background:var(--inv);color:var(--inv-fg)}
+  /* Прогресс-бар: кирпичики ▰▱ */
+  .progress{display:flex;gap:4px;margin:2px 0 14px}
+  .progress span{flex:1;height:8px;border-radius:3px;background:var(--line)}
+  .progress span.f{background:var(--fg)}
+  .steptitle{font-size:13px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:14px;margin-bottom:10px}
+  .card.tap{cursor:pointer}
+  .card.tap:active{background:var(--card2)}
   .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
   .title{font-size:15px;font-weight:700}
   .meta{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.45}
-  .badge{font-size:10px;padding:3px 9px;border-radius:99px;background:rgba(124,92,255,.16);color:var(--accent);flex:none}
-  .badge.pub{background:rgba(92,255,179,.12);color:var(--accent2)}
-  .badge.contest{background:rgba(255,200,90,.15);color:var(--warn)}
-  .badge.err{background:rgba(255,107,122,.14);color:var(--err)}
+  .badge{font-size:10px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);flex:none}
+  .badge.inv{background:var(--inv);color:var(--inv-fg);border-color:var(--inv)}
   .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
   .stats.c5{grid-template-columns:repeat(5,1fr)}
-  .stat{background:rgba(255,255,255,.04);border-radius:12px;padding:9px 4px;text-align:center}
+  .stat{background:var(--card2);border-radius:11px;padding:9px 4px;text-align:center}
   .stat .num{font-size:16px;font-weight:800}
   .stat .lbl{font-size:9.5px;color:var(--muted);margin-top:2px}
   .toolbar{display:flex;gap:7px;margin-bottom:10px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
   .toolbar::-webkit-scrollbar{display:none}
   .chip{flex:none;padding:7px 13px;border-radius:99px;background:var(--card);color:var(--muted);font-size:13px;border:1px solid var(--line);cursor:pointer}
-  .chip.on{background:rgba(124,92,255,.18);color:var(--accent);border-color:rgba(124,92,255,.45)}
-  #f-pub .chip,#f-sub .chip,#t-ch .chip,#t-chs .chip{margin-top:6px}
-  .btn{display:block;width:100%;padding:14px;border-radius:14px;background:var(--accent);color:#fff;border:none;font-size:15px;font-weight:700;cursor:pointer;margin-top:10px}
-  .btn.sec{background:var(--card2);color:var(--text);border:1px solid var(--line)}
-  .btn.sm{width:auto;display:inline-block;padding:9px 16px;font-size:13px;border-radius:11px}
-  .inp,textarea{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:12px;color:var(--text);padding:12px;font-size:15px;outline:none;margin-top:6px}
-  textarea{min-height:96px;resize:vertical}
-  .inp:focus,textarea:focus{border-color:var(--accent)}
-  label.lbl{display:block;font-size:12px;color:var(--muted);margin-top:14px;margin-bottom:2px;font-weight:600}
+  .chip.on{background:var(--inv);color:var(--inv-fg);border-color:var(--inv)}
+  .pick .chip{margin-top:6px}
+  /* Кнопки */
+  .btn{display:block;width:100%;padding:14px;border-radius:13px;background:var(--inv);color:var(--inv-fg);border:none;font-size:15px;font-weight:800;cursor:pointer;margin-top:10px}
+  .btn.sec{background:var(--card);color:var(--fg);border:1px solid var(--line)}
+  .btn.sm{width:auto;display:inline-block;padding:9px 16px;font-size:13px;border-radius:10px}
+  .btnrow{display:flex;gap:8px;margin-top:10px}
+  .btnrow .btn{margin-top:0;flex:1}
+  .createbar{position:fixed;left:12px;right:12px;bottom:92px;padding:13px;border-radius:13px;background:var(--inv);color:var(--inv-fg);border:none;font-size:15px;font-weight:800;cursor:pointer;z-index:49;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  .inp,textarea,select{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:11px;color:var(--fg);padding:12px;font-size:15px;outline:none;margin-top:6px}
+  textarea{min-height:90px;resize:vertical}
+  .inp:focus,textarea:focus{border-color:var(--fg)}
+  label.lbl{display:block;font-size:12px;color:var(--muted);margin-top:13px;margin-bottom:2px;font-weight:700}
   .seg{display:flex;gap:7px;margin-top:6px;flex-wrap:wrap}
   .seg .chip{flex:1;text-align:center;min-width:70px}
   .msg{text-align:center;font-size:13px;margin-top:10px;min-height:18px}
-  .msg.ok{color:var(--accent2)}.msg.err{color:var(--err)}
-  .bars{display:flex;align-items:flex-end;gap:2px;height:104px;margin-top:10px}
+  .msg.ok{color:var(--fg);font-weight:600}.msg.err{color:#c66}
+  /* Панель форматирования (ж/к/ссылка) */
+  .fmtbar{display:flex;gap:6px;margin-top:6px}
+  .fmtbar button{width:38px;height:36px;border-radius:9px;background:var(--card2);border:1px solid var(--line);color:var(--fg);font-size:14px;cursor:pointer;font-weight:800}
+  .bars{display:flex;align-items:flex-end;gap:2px;height:100px;margin-top:10px}
   .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:1px;min-width:4px}
-  .bar .j{background:var(--accent);border-radius:2px 2px 0 0}
-  .bar .u{background:var(--err);border-radius:0 0 2px 2px;opacity:.75}
+  .bar .j{background:var(--fg);border-radius:2px 2px 0 0}
+  .bar .u{background:#888;border-radius:0 0 2px 2px;opacity:.6}
   .xaxis{display:flex;gap:2px;margin-top:4px}
   .xaxis span{flex:1;text-align:center;font-size:8px;color:var(--muted);overflow:hidden;min-width:4px}
-  .skel{height:70px;border-radius:14px;background:linear-gradient(90deg,var(--card) 25%,var(--card2) 50%,var(--card) 75%);background-size:200% 100%;animation:sk 1.2s infinite;margin-bottom:10px}
-  @keyframes sk{to{background-position:-200% 0}}
+  .skel{height:70px;border-radius:14px;background:var(--card);margin-bottom:10px;animation:sk 1.2s infinite}
+  @keyframes sk{50%{opacity:.55}}
   .empty{text-align:center;color:var(--muted);padding:36px 10px;font-size:14px;line-height:1.5}
-  .sect{font-size:12px;font-weight:700;margin:16px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  .user{display:flex;justify-content:space-between;padding:9px 10px;background:rgba(255,255,255,.03);border-radius:10px;margin-bottom:6px;font-size:13px}
-  .user .st{font-size:11px;color:var(--muted)}.user .st.in{color:var(--accent2)}.user .st.out{color:var(--err)}
+  .sect{font-size:12px;font-weight:800;margin:16px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .user{display:flex;justify-content:space-between;padding:9px 10px;background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:6px;font-size:13px}
+  .user .st{font-size:11px;color:var(--muted)}
   .linkline{font-size:11px;color:var(--muted);word-break:break-all;margin-top:4px}
   .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-  .thumb{position:relative;width:64px;height:64px;border-radius:10px;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:24px}
-  .thumb .x{position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;background:var(--err);color:#fff;border:none;font-size:12px}
-  #tabbar{position:fixed;left:0;right:0;bottom:0;background:rgba(14,17,23,.96);border-top:1px solid var(--line);display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:50}
-  #tabbar .tab{flex:1;background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;padding:4px 0}
-  #tabbar .tab .ico{font-size:21px;display:block;margin-bottom:2px}
-  #tabbar .tab.on{color:var(--accent)}
-  .fab{position:fixed;right:16px;bottom:120px;padding:12px 18px;border-radius:16px;background:var(--accent);color:#fff;border:none;font-size:19px;font-weight:800;line-height:1.15;text-align:center;box-shadow:0 6px 22px rgba(124,92,255,.5);z-index:49;cursor:pointer;white-space:pre}
-  .iconbtn{width:34px;height:34px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--muted);font-size:15px;cursor:pointer;flex:none;display:flex;align-items:center;justify-content:center}
-  .dropdown{position:absolute;right:12px;top:56px;background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:6px;min-width:210px;z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.4)}
-  .dropdown .ditem{padding:10px 12px;border-radius:10px;font-size:14px;cursor:pointer;color:var(--text)}
-  .dropdown .ditem:active,.dropdown .ditem.on{background:rgba(124,92,255,.18);color:var(--accent)}
+  .thumb{position:relative;width:64px;height:64px;border-radius:10px;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:24px}
+  .thumb .x{position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;background:#c66;color:#fff;border:none;font-size:12px}
+  .dropdown{position:absolute;right:12px;top:56px;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:6px;min-width:210px;z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  .dropdown .ditem{padding:10px 12px;border-radius:9px;font-size:14px;cursor:pointer}
+  .dropdown .ditem.on{background:var(--inv);color:var(--inv-fg)}
   .dropdown .dsep{font-size:10px;color:var(--muted);padding:6px 12px 2px;text-transform:uppercase;letter-spacing:.4px}
-  header{position:relative}
+  .iconbtn{width:34px;height:34px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--muted);cursor:pointer;flex:none;display:flex;align-items:center;justify-content:center;padding:0}
+  .iconbtn svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8}
+  #tabbar{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:50}
+  #tabbar .tab{flex:1;background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;padding:4px 0}
+  #tabbar .tab .ico{font-size:20px;display:block;margin-bottom:2px}
+  #tabbar .tab.on{color:var(--fg)}
 </style>
 </head>
 <body>
-  <div id="app"><div class="skel"></div><div class="skel"></div><div class="skel" style="height:110px"></div></div>
-  <button class="fab hidden" id="fab">＋</button>
-  <nav id="tabbar" class="hidden">
-    <button class="tab on" data-tab="gw"><span class="ico">🎲</span>Розыгрыши</button>
-    <button class="tab" data-tab="tr"><span class="ico">🔗</span>Трекинг</button>
-    <button class="tab" data-tab="ch"><span class="ico">📻</span>Каналы</button>
-    <button class="tab" data-tab="me"><span class="ico">⚙️</span>Инфо</button>
-  </nav>
+  <div id="app"><div class="skel"></div><div class="skel"></div></div>
+  <button class="createbar hidden" id="fab"></button>
+  <nav id="tabbar" class="hidden"></nav>
+
 <script>
-// RandoMaster mini-app hub: всё управление — тут.
-// Табы: Розыгрыши (список+создание) | Аналитика (каналы→ссылки→детали) |
-// Каналы (список+добавление) | Ещё (трекинг/справка).
+// Клиентский роутер start_param (дублирует серверный — надёжнее в мобильном
+// клиенте): участиe/итоги/трекинг-клик/роль участника.
+(function () {
+  var api = window.WebApp || {};
+  try { api.ready && api.ready(); } catch (e) {}
+  var sp = '';
+  try { sp = (api.initDataUnsafe && api.initDataUnsafe.start_param) || ''; } catch (e) {}
+  if (!sp) {
+    try { sp = new URLSearchParams(location.search).get('startapp') ||
+               new URLSearchParams(location.search).get('start_param') || ''; } catch (e) {}
+  }
+  if (!sp) return;
+  if (sp === 'participant') {
+    // Кнопка «Приложение для участников» — открываем секцию участников.
+    try { localStorage.setItem('rm_role', 'participant'); } catch (e) {}
+    return;
+  }
+  if (sp.indexOf('analytics') === 0) {
+    // Кнопка «Приложение для организаторов» — секция организаторов.
+    try { localStorage.setItem('rm_role', 'organizer'); } catch (e) {}
+    return;
+  }
+  if (sp.indexOf('part_') === 0 || sp.indexOf('g_') === 0) {
+    location.replace('/app/participate.html?start_param=' + encodeURIComponent(sp) +
+      '&init_data=' + encodeURIComponent(api.initData || '')); return;
+  }
+  if (sp.indexOf('results_') === 0 || sp.indexOf('r_') === 0) {
+    location.replace('/app/results.html?start_param=' + encodeURIComponent(sp)); return;
+  }
+  if (sp.indexOf('u_') === 0) {
+    document.body.innerHTML = '<div style="display:flex;min-height:100vh;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:#0d0d0d;color:#f2f2f2;font-family:-apple-system,sans-serif"><div style="width:44px;height:44px;border-radius:50%;border:3px solid #333;border-top-color:#f2f2f2;animation:r .8s linear infinite"></div><div id="t1" style="font-size:16px;font-weight:600">Открываю канал…</div><a id="go" style="display:none;padding:10px 22px;border-radius:12px;background:#f2f2f2;color:#111;text-decoration:none;font-size:14px;font-weight:600">Перейти сейчас</a></div><style>@keyframes r{to{transform:rotate(360deg)}}</style>';
+    var code = sp.slice(2);
+    fetch('/app/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ init_data: (window.WebApp && window.WebApp.initData) || '', code: code })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      var dest = d && d.redirect;
+      if (dest && dest.indexOf('http') === 0) {
+        location.replace(dest);
+        setTimeout(function () {
+          var g = document.getElementById('go'); if (g) { g.href = dest; g.style.display = 'inline-block'; }
+        }, 1200);
+      } else {
+        var t = document.getElementById('t1'); if (t) t.textContent = 'Канал недоступен';
+      }
+    }).catch(function () {
+      var t = document.getElementById('t1'); if (t) t.textContent = 'Ошибка соединения';
+    });
+    throw new Error('track-redirect');
+  }
+})();
+</script>
+<script>
 (function () {
   var api = window.WebApp || {};
   try { api.ready && api.ready(); } catch (e) {}
@@ -96,22 +163,44 @@
   var app = document.getElementById('app');
   var tabbar = document.getElementById('tabbar');
   var fab = document.getElementById('fab');
+
+  // ------- Тема: ЧБ dark/light, сохранение -------
+  var THEME_KEY = 'rm_theme';
+  function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  }
+  try { applyTheme(localStorage.getItem(THEME_KEY) || 'dark'); } catch (e) { applyTheme('dark'); }
+
+  // ------- Роль: organizer | participant -------
+  var ROLE_KEY = 'rm_role';
+  var role = 'organizer';
+  try { role = localStorage.getItem(ROLE_KEY) || 'organizer'; } catch (e) {}
+  function setRole(r) {
+    role = r;
+    try { localStorage.setItem(ROLE_KEY, r); } catch (e) {}
+    render();
+  }
+
   var state = { tab: 'gw', sort: 'date', filter: 'all', dynDays: 14,
                 gwSort: 'date', gwFilter: 'all',
                 chID: null, chTitle: '', view: 'tab' };
 
-  // ---------- Черновики форм (localStorage): выйти и вернуться на то же место ----------
-  var DRAFT_GW_KEY = 'rm_gw_draft_v1';
-  var DRAFT_TR_KEY = 'rm_tr_draft_v1';
-  function saveDraft(key, obj) {
-    try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {}
+  // Единый регистратор BackButton (onClick добавляет, не заменяет!)
+  var curBack = null;
+  function onBack(fn) {
+    if (!backBtn) return;
+    if (curBack) { try { backBtn.offClick(curBack); } catch (e) {} }
+    curBack = fn;
+    try { backBtn.onClick(fn); } catch (e) {}
   }
-  function loadDraft(key) {
-    try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
-  }
-  function clearDraft(key) {
-    try { localStorage.removeItem(key); } catch (e) {}
-  }
+
+  // ------- Черновики форм -------
+  var DRAFT_GW_KEY = 'rm_gw_draft_v2';
+  var DRAFT_TR_KEY = 'rm_tr_draft_v2';
+  function saveDraft(key, obj) { try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {} }
+  function loadDraft(key) { try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  function clearDraft(key) { try { localStorage.removeItem(key); } catch (e) {} }
   function autosaveDraft(key, fieldIds) {
     fieldIds.forEach(function (id) {
       var el = document.getElementById(id);
@@ -138,17 +227,6 @@
     return any;
   }
 
-
-  // ЕДИНАЯ регистрация BackButton: Bridge добавляет onClick-обработчики,
-  // не заменяя — рендеры накапливали их, и «назад» уводил на главную.
-  var curBack = null;
-  function onBack(fn) {
-    if (!backBtn) return;
-    if (curBack) { try { backBtn.offClick(curBack); } catch (e) {} }
-    curBack = fn;
-    try { backBtn.onClick(fn); } catch (e) {}
-  }
-
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; }); }
   function GET(path) {
@@ -167,60 +245,118 @@
     return '<header>' + (canBack ? '<button class="back" id="hb">←</button>' : '') +
       '<div><h1>' + esc(title) + '</h1>' + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div></header>';
   }
+  // Прогресс-бар кирпичиками: filled из total.
+  function progress(filled, total) {
+    var h = '<div class="progress">';
+    for (var i = 0; i < total; i++) h += '<span class="' + (i < filled ? 'f' : '') + '"></span>';
+    return h + '</div>';
+  }
+  // SVG-конус (стандартная воронка фильтра).
+  var FUNNEL = '<svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"/></svg>';
+  function filterBtn(id) { return '<button class="iconbtn" id="' + id + '">' + FUNNEL + '</button>'; }
+  function ddClose(dd) { dd.innerHTML = ''; }
+  function ddBind(dd) {
+    setTimeout(function () {
+      document.addEventListener('click', function close() { ddClose(dd); document.removeEventListener('click', close); });
+    }, 10);
+  }
 
-  // ============ Таб 1: РОЗЫГРЫШИ ============
+  // ================================================================
+  //  РОЛЬ: УЧАСТНИК (dummy)
+  // ================================================================
+  function renderParticipant() {
+    fab.classList.add('hidden');
+    tabbar.innerHTML =
+      '<button class="tab ' + (state.tab === 'feed' ? 'on' : '') + '" data-tab="feed"><span class="ico">📻</span>Лента розыгрышей</button>' +
+      '<button class="tab ' + (state.tab === 'mine' ? 'on' : '') + '" data-tab="mine"><span class="ico">🎟</span>Мои участия</button>' +
+      '<button class="tab ' + (state.tab === 'pinfo' ? 'on' : '') + '" data-tab="pinfo"><span class="ico">ℹ️</span>Инфо</button>';
+    bindTabs();
+    var body;
+    if (state.tab === 'feed') body = '<div class="empty">Здесь будет лента розыгрышей</div>';
+    else if (state.tab === 'mine') body = '<div class="empty">Здесь будет список конкурсов, в которых вы участвуете</div>';
+    else body = '<div class="card"><div class="title">RandoMaster</div><div class="meta">Тут будет какая-то инфо.</div></div>';
+    app.innerHTML = roleswitch() + body;
+  }
+
+  function roleswitch() {
+    return '<div class="roleswitch">' +
+      '<button class="' + (role === 'participant' ? 'on' : '') + '" data-role="participant">Участникам</button>' +
+      '<button class="' + (role === 'organizer' ? 'on' : '') + '" data-role="organizer">Организаторам</button></div>';
+  }
+  function bindRoleSwitch() {
+    app.querySelectorAll('[data-role]').forEach(function (b) {
+      b.onclick = function () { setRole(b.getAttribute('data-role')); };
+    });
+  }
+
+  // ================================================================
+  //  РОЛЬ: ОРГАНИЗАТОР — вкладки
+  // ================================================================
+  function renderOrganizer() {
+    if (state.tab === 'me') renderMore();
+    else if (state.tab === 'tr') renderTrackingTab();
+    else if (state.tab === 'ch') renderChannelsTab();
+    else renderGiveaways();
+  }
+
+  function bindTabs() {
+    tabbar.querySelectorAll('.tab').forEach(function (t) {
+      t.onclick = function () {
+        state.tab = t.getAttribute('data-tab');
+        state.view = 'tab';
+        render();
+      };
+    });
+  }
+  function organizerTabs() {
+    tabbar.innerHTML =
+      '<button class="tab ' + (state.tab === 'gw' ? 'on' : '') + '" data-tab="gw"><span class="ico">🎲</span>Розыгрыши</button>' +
+      '<button class="tab ' + (state.tab === 'tr' ? 'on' : '') + '" data-tab="tr"><span class="ico">🔗</span>Трекинг</button>' +
+      '<button class="tab ' + (state.tab === 'ch' ? 'on' : '') + '" data-tab="ch"><span class="ico">📻</span>Каналы</button>' +
+      '<button class="tab ' + (state.tab === 'me' ? 'on' : '') + '" data-tab="me"><span class="ico">⚙</span>Инфо</button>';
+    bindTabs();
+  }
+
+  // ---------- Список розыгрышей ----------
   function renderGiveaways() {
     state.tab = 'gw'; state.view = 'tab';
+    organizerTabs();
     if (backBtn) backBtn.hide();
     fab.classList.remove('hidden');
-    fab.textContent = 'создать\nрозыгрыш';
-    fab.onclick = function () { renderCreateGiveaway(); };
-    var filterNames = { all:'Все розыгрыши', draft:'Черновики', scheduled:'Запланированные', active:'Идут сейчас', finished:'Завершённые' };
-    app.innerHTML = '<header style="position:relative"><div><h1>Розыгрыши</h1></div>' +
-      '<button class="iconbtn" id="gw-filter">⚙</button></header>' +
-      '<div id="gw-dd"></div>' +
-      '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
+    fab.textContent = 'Создать розыгрыш';
+    fab.onclick = function () { renderGwWizard(0); };
+    var fn = { all:'Все', draft:'Черновики', scheduled:'Запланированные', active:'Идут', finished:'Завершённые' };
+    app.innerHTML = roleswitch() +
+      '<header style="position:relative"><div><h1>Розыгрыши</h1></div>' + filterBtn('gw-filter') + '</header>' +
+      '<div id="gw-dd"></div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
+    bindRoleSwitch();
     document.getElementById('gw-filter').onclick = function (e) {
       e.stopPropagation();
-      renderGwDropdown(filterNames);
-    };
-    function renderGwDropdown(names) {
       var dd = document.getElementById('gw-dd');
-      if (dd.innerHTML) { dd.innerHTML = ''; return; }
-      var items = '';
-      items += '<div class="dsep">Показать</div>';
+      if (dd.innerHTML) { ddClose(dd); return; }
+      var items = '<div class="dsep">Показать</div>';
       ['all','draft','scheduled','active','finished'].forEach(function (f) {
-        items += '<div class="ditem ' + (state.gwFilter === f ? 'on' : '') + '" data-f="' + f + '">' + names[f] + '</div>';
+        items += '<div class="ditem ' + (state.gwFilter === f ? 'on' : '') + '" data-f="' + f + '">' + fn[f] + '</div>';
       });
       items += '<div class="dsep">Сортировка</div>';
       items += '<div class="ditem ' + (state.gwSort === 'date' ? 'on' : '') + '" data-s="date">Сначала новые</div>';
       items += '<div class="ditem ' + (state.gwSort === 'name' ? 'on' : '') + '" data-s="name">По имени (А→Я)</div>';
       dd.innerHTML = '<div class="dropdown">' + items + '</div>';
-      dd.querySelectorAll('[data-f]').forEach(function (el) {
-        el.onclick = function () { state.gwFilter = el.getAttribute('data-f'); renderGiveaways(); };
-      });
-      dd.querySelectorAll('[data-s]').forEach(function (el) {
-        el.onclick = function () { state.gwSort = el.getAttribute('data-s'); renderGiveaways(); };
-      });
-      setTimeout(function () {
-        document.addEventListener('click', function close() { dd.innerHTML = ''; document.removeEventListener('click', close); });
-      }, 10);
-    }
-    bind();
+      dd.querySelectorAll('[data-f]').forEach(function (el) { el.onclick = function () { state.gwFilter = el.getAttribute('data-f'); renderGiveaways(); }; });
+      dd.querySelectorAll('[data-s]').forEach(function (el) { el.onclick = function () { state.gwSort = el.getAttribute('data-s'); renderGiveaways(); }; });
+      ddBind(dd);
+    };
     GET('/app/api/analytics/giveaways').then(function (d) {
       var gws = d.giveaways || [];
       if (state.gwSort === 'name') gws.sort(function (a, b) { return a.name.localeCompare(b.name, 'ru'); });
       if (state.gwFilter !== 'all') gws = gws.filter(function (g) { return g.status === state.gwFilter; });
-      var m = { draft:['Черновик',''], scheduled:['Запланирован','📅'], active:['Идёт','🟢'], finished:['Завершён','🏁'], cancelled:['Отменён','✖'] };
+      var m = { draft:'Черновик', scheduled:'Запланирован', active:'Идёт', finished:'Завершён', cancelled:'Отменён' };
       document.getElementById('list').innerHTML = gws.map(function (g) {
-        var s = m[g.status] || [g.status, ''];
-        var when = g.status === 'draft' ? 'изменён ' + esc(g.when) :
-                   g.status === 'scheduled' ? 'старт ' + esc(g.when) :
-                   g.status === 'active' ? 'итоги ' + esc(g.when) : 'итоги ' + esc(g.when);
+        var when = g.status === 'draft' ? 'изменён ' + esc(g.when) : 'итоги ' + esc(g.when);
         return '<div class="card tap" data-a="gw" data-id="' + g.id + '">' +
-          '<div class="row"><div class="title">' + esc(g.name) + '</div><span class="badge ' + (g.status === 'active' ? 'pub' : g.status === 'draft' ? '' : '') + '">' + s[1] + ' ' + s[0] + '</span></div>' +
+          '<div class="row"><div class="title">' + esc(g.name) + '</div><span class="badge ' + (g.status === 'active' ? 'inv' : '') + '">' + (m[g.status] || g.status) + '</span></div>' +
           '<div class="meta">' + when + ' · участников: ' + g.parts + ' · победителей: ' + g.winners + '</div></div>';
-      }).join('') || '<div class="empty">Пока пусто.<br>Нажмите «＋» — создайте первый розыгрыш.</div>';
+      }).join('') || '<div class="empty">Пока пусто.<br>Нажмите «Создать розыгрыш».</div>';
       app.querySelectorAll('.card[data-a="gw"]').forEach(function (c) {
         c.onclick = function () {
           var g = gws.filter(function (x) { return String(x.id) === c.getAttribute('data-id'); })[0];
@@ -234,145 +370,212 @@
     state.view = 'detail';
     fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    app.innerHTML = header(g.name, 'розыгрыш', true) +
+    app.innerHTML = roleswitch() + header(g.name, 'розыгрыш', true) +
       '<div class="card"><div class="stats">' +
       '<div class="stat"><div class="num">' + g.parts + '</div><div class="lbl">участников</div></div>' +
       '<div class="stat"><div class="num">' + g.winners + '</div><div class="lbl">победителей</div></div>' +
       '<div class="stat"><div class="num" style="font-size:11px;padding-top:8px">' + esc(g.when) + '</div><div class="lbl">' + esc(g.status) + '</div></div>' +
       '</div></div>' +
-      '<div class="card tap" data-a="sendpost"><div class="row"><div class="title">📤 Отправить пост мне в чат</div><span>→</span></div>' +
+      '<div class="card tap" data-a="sendpost"><div class="row"><div class="title">Отправить пост мне в чат</div><span>→</span></div>' +
       '<div class="meta">готовый пост точным видом (текст, медиа, кнопка)</div></div>' +
-      '<div id="sendmsg" class="msg"></div>';
-    if (backBtn) onBack(function () { renderGiveaways(); });
+      '<div class="msg" id="sendmsg"></div>';
+    bindRoleSwitch();
+    onBack(renderGiveaways);
     document.getElementById('hb').onclick = renderGiveaways;
-    var sp = app.querySelector('[data-a="sendpost"]');
-    sp.onclick = function () {
-      sp.querySelector('.title').textContent = '⏳ Отправляю…';
+    app.querySelector('[data-a="sendpost"]').onclick = function () {
       POST('/app/api/analytics/send-post', { giveaway_id: parseInt(g.id, 10) }).then(function (d) {
         var el = document.getElementById('sendmsg');
         el.textContent = d.ok ? '✅ Пост отправлен — проверьте чат с ботом' : '⚠️ ' + (d.error || 'ошибка');
         el.className = 'msg ' + (d.ok ? 'ok' : 'err');
-        sp.querySelector('.title').textContent = '📤 Отправить пост мне в чат';
       });
     };
   }
 
-  // ---------- Создание розыгрыша ----------
-  function renderCreateGiveaway() {
+  // ================================================================
+  //  ПОШАГОВЫЙ ВИЗАРД РОЗЫГРЫША (6 шагов, ▰▰▱▱ + Назад/Далее)
+  // ================================================================
+  var GW_STEPS = ['Пост', 'Каналы', 'Основное', 'Итоги', 'Старт', 'Дополнительно'];
+
+  function renderGwWizard(step) {
     state.view = 'create';
     fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    if (backBtn) onBack(function () { renderGiveaways(); });
-    app.innerHTML = header('🎁 Новый розыгрыш', 'заполните и опубликуйте', true) +
-      '<label class="lbl">Текст поста *</label>' +
-      '<textarea id="f-post" placeholder="🎁 РОЗЫГРЫШ!&#10;&#10;Условия простые: подпишись на каналы и нажми «Участвовать»…"></textarea>' +
+    onBack(function () { step > 0 ? renderGwWizard(step - 1) : renderGiveaways(); });
+
+    var GW_FIELDS = ['f-post','f-name','f-btn','f-winners','f-finat','f-fincnt','f-pubat','f-winmsg'];
+    var html = roleswitch() + header('Создание розыгрыша', 'шаг ' + (step + 1) + ' из 6', true) +
+      progress(step, 6) + '<div class="steptitle">' + GW_STEPS[step] + '</div><div id="wz">';
+
+    if (step === 0) html +=
+      '<label class="lbl" style="margin-top:0">Текст поста *</label>' +
+      '<textarea id="f-post" placeholder="🎁 РОЗЫГРЫШ!&#10;&#10;Условия простые: подпишись и нажми «Участвовать»…"></textarea>' +
+      '<div class="fmtbar">' +
+        '<button data-fmt="b" title="Жирный"><b>Ж</b></button>' +
+        '<button data-fmt="i" title="Курсив"><i>К</i></button>' +
+        '<button data-fmt="s" title="Зачёркнутый"><s>З</s></button>' +
+        '<button data-fmt="a" title="Ссылка">🔗</button>' +
+      '</div>' +
+      '<div class="fmtbar hidden" id="f-linkbar" style="margin-top:6px">' +
+        '<input class="inp" id="f-linkurl" placeholder="https://…" style="margin-top:0;flex:1">' +
+        '<button class="btn sm" id="f-linkok" style="margin-top:0">Вставить</button>' +
+      '</div>' +
+      '<div class="meta">Ж — *жирный*, К — _курсив_, З — ~зачёркнутый~, 🔗 — [текст](ссылка). Ссылки в тексте кликабельны в канале.</div>' +
       '<label class="lbl">Фото / видео (до 50 МБ)</label>' +
       '<div class="thumbs" id="f-media"></div>' +
       '<button class="btn sec sm" id="f-addmedia" style="margin-top:8px">＋ Добавить медиа</button>' +
-      '<input type="file" id="f-file" accept="image/*,video/*" class="hidden">' +
-      '<label class="lbl">Каналы публикации *</label><div id="f-pub"></div>' +
-      '<label class="lbl">Название (для списка)</label>' +
+      '<input type="file" id="f-file" accept="image/*,video/*" class="hidden">';
+    else if (step === 1) html +=
+      '<label class="lbl" style="margin-top:0">Каналы публикации *</label><div id="f-pub"></div>' +
+      '<label class="lbl">Каналы обязательной подписки</label><div id="f-sub"></div>';
+    else if (step === 2) html +=
+      '<label class="lbl" style="margin-top:0">Название (для списка)</label>' +
       '<input class="inp" id="f-name" placeholder="Например: iPhone в декабре">' +
-      '<label class="lbl">Каналы обязательной подписки</label><div id="f-sub"></div>' +
       '<label class="lbl">Текст кнопки участия</label>' +
       '<input class="inp" id="f-btn" placeholder="Участвовать" value="Участвовать">' +
-      '<label class="lbl">Победителей (1–100)</label><input class="inp" id="f-winners" type="number" value="1" min="1" max="100">' +
-      '<label class="lbl">Итоги подвести</label>' +
+      '<label class="lbl">Победителей (1–100)</label>' +
+      '<input class="inp" id="f-winners" type="number" value="1" min="1" max="100">';
+    else if (step === 3) html +=
+      '<label class="lbl" style="margin-top:0">Итоги подвести</label>' +
       '<div class="seg" id="f-finmode"><div class="chip on" data-v="time">⏰ По времени</div><div class="chip" data-v="count">👥 По числу</div></div>' +
-      '<div id="f-fintime"><label class="lbl">Дата итогов (МСК), ДД.ММ.ГГГГ ЧЧ:ММ</label>' +
+      '<div id="f-fintime"><label class="lbl">Дата итогов (МСК) — ДД.ММ.ГГГГ ЧЧ:ММ</label>' +
       '<input class="inp" id="f-finat" placeholder="' + defaultFinish() + '"></div>' +
       '<div id="f-fincount" class="hidden"><label class="lbl">Целевое число участников (от 10)</label>' +
-      '<input class="inp" id="f-fincnt" type="number" placeholder="100" min="10"></div>' +
-      '<label class="lbl">Старт публикации</label>' +
+      '<input class="inp" id="f-fincnt" type="number" placeholder="100" min="10"></div>';
+    else if (step === 4) html +=
+      '<label class="lbl" style="margin-top:0">Старт публикации</label>' +
       '<div class="seg" id="f-pubmode"><div class="chip on" data-v="now">🚀 Сразу</div><div class="chip" data-v="at">🕐 По времени</div></div>' +
       '<div id="f-pubat-w" class="hidden"><label class="lbl">Дата публикации (МСК)</label>' +
-      '<input class="inp" id="f-pubat" placeholder="ДД.ММ.ГГГГ ЧЧ:ММ"></div>' +
-      '<label class="lbl">Дополнительно</label>' +
-      '<div class="seg"><div class="chip on" id="f-captcha">🛡 Капча</div>' +
-      '<div class="chip" id="f-referral">👥 Друзья</div>' +
-      '<div class="chip on" id="f-resinpost">📍 Итоги в посте</div></div>' +
+      '<input class="inp" id="f-pubat" placeholder="ДД.ММ.ГГГГ ЧЧ:ММ"></div>';
+    else html +=
+      '<label class="lbl" style="margin-top:0">Дополнительно</label>' +
+      '<div class="seg"><div class="chip on" id="f-captcha">🛡 Капча</div><div class="chip" id="f-referral">👥 Друзья</div><div class="chip on" id="f-resinpost">📍 Итоги в посте</div></div>' +
       '<label class="lbl">Сообщение победителям (необязательно)</label>' +
-      '<textarea id="f-winmsg" style="min-height:64px" placeholder="Поздравляем! Напишите @manager в течение 48 часов…"></textarea>' +
-      '<button class="btn" id="f-go">🚀 Создать и опубликовать</button>' +
-      '<button class="btn sec" id="f-draft">💾 Сохранить черновик</button>' +
-      '<div class="msg" id="f-msg"></div>';
-    document.getElementById('hb').onclick = renderGiveaways;
+      '<textarea id="f-winmsg" style="min-height:60px" placeholder="Поздравляем! Напишите @manager…"></textarea>';
 
-    // Черновик формы: восстановить значения после прошлого визита.
-    var GW_FIELDS = ['f-post','f-name','f-btn','f-winners','f-finat','f-fincnt','f-pubat','f-winmsg'];
-    var media = (loadDraft(DRAFT_GW_KEY) || {}).media_tokens || [];
-    if (restoreDraft(DRAFT_GW_KEY, GW_FIELDS) || media.length) {
-      showMsg('f-msg', '📝 Восстановлен несохранённый черновик — поля заполнены', false);
+    html += '</div><div class="btnrow">' +
+      (step > 0 ? '<button class="btn sec" id="wz-prev">← Назад</button>' : '') +
+      (step < 5 ? '<button class="btn" id="wz-next">Далее →</button>' : '') +
+      '</div>' +
+      (step === 5 ? '<button class="btn" id="wz-go">🚀 Создать и опубликовать</button><button class="btn sec" id="wz-draft">💾 Сохранить черновик</button>' : '') +
+      '<div class="msg" id="f-msg"></div>';
+    app.innerHTML = html;
+    bindRoleSwitch();
+
+    // Навигация: gotoStep сохраняет ЦЕЛЕВОЙ шаг до рендера — возврат «Назад»
+    // на шаг 0 не затягивает обратно на сохранённый шаг черновика.
+    function gotoStep(n) {
+      persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: n });
+      renderGwWizard(n);
     }
-    autosaveDraft(DRAFT_GW_KEY, GW_FIELDS);
-    if (media.length) { setTimeout(function () { if (document.getElementById('f-media')) renderMedia(); }, 50); }
-    var fileInput = document.getElementById('f-file');
-    document.getElementById('f-addmedia').onclick = function () { fileInput.click(); };
-    fileInput.onchange = function () {
-      var f = fileInput.files[0];
-      if (!f) return;
-      var kind = f.type.indexOf('video') === 0 ? 'video' : 'image';
-      var fd = new FormData();
-      fd.append('file', f); fd.append('kind', kind);
-      document.getElementById('f-addmedia').textContent = '⏳ Загрузка…';
-      fetch('/app/api/upload?init_data=' + encodeURIComponent(initData), { method: 'POST', body: fd })
-        .then(function (r) { return r.json(); }).then(function (d) {
-          document.getElementById('f-addmedia').textContent = '＋ Добавить медиа';
-          if (d.ok) { media.push({ token: d.token, type: d.type }); renderMedia(); }
-          else showMsg('f-msg', d.error || 'Ошибка загрузки', true);
-          fileInput.value = '';
-        }).catch(function () {
-          document.getElementById('f-addmedia').textContent = '＋ Добавить медиа';
-          showMsg('f-msg', 'Ошибка сети при загрузке', true);
-        });
+    document.getElementById('hb').onclick = function () { step > 0 ? gotoStep(step - 1) : renderGiveaways(); };
+    if (step > 0) document.getElementById('wz-prev').onclick = function () { gotoStep(step - 1); };
+    if (step < 5) document.getElementById('wz-next').onclick = function () {
+      if (step === 0 && !val('f-post') && !media.length) return showMsg('f-msg', 'Добавьте текст поста или медиа', true);
+      if (step === 1) {
+        var d1 = loadDraft(DRAFT_GW_KEY) || {};
+        var pubs = pubSel.length ? pubSel : (d1.pub_channels || []);
+        if (!pubs.length) return showMsg('f-msg', 'Выберите хотя бы один канал публикации', true);
+      }
+      gotoStep(step + 1);
     };
-    function renderMedia() {
-      persistDraft(DRAFT_GW_KEY, GW_FIELDS, { media_tokens: media });
-      var el = document.getElementById('f-media');
+
+    // Черновик: первый вход — вернуться на сохранённый шаг; поля — из черновика.
+    var dd = loadDraft(DRAFT_GW_KEY) || {};
+    if (step === 0 && dd.step > 0) {
+      gotoStep(dd.step); return;
+    }
+    restoreDraft(DRAFT_GW_KEY, GW_FIELDS);
+    autosaveDraft(DRAFT_GW_KEY, GW_FIELDS);
+    persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: step });
+
+    // Форматирование (шаг 0)
+    app.querySelectorAll('[data-fmt]').forEach(function (b) {
+      b.onclick = function () { wrapSel('f-post', b.getAttribute('data-fmt')); };
+    });
+    var lok = document.getElementById('f-linkok');
+    if (lok) lok.onclick = function () {
+      var el = document.getElementById('f-post');
+      var url = (document.getElementById('f-linkurl').value || '').trim();
+      if (!url) return;
+      var s = el.selectionStart, e = el.selectionEnd, v = el.value, sel = v.slice(s, e) || 'ссылка';
+      el.value = v.slice(0, s) + '[' + sel + '](' + url + ')' + v.slice(e);
+      document.getElementById('f-linkbar').classList.add('hidden');
+      el.dispatchEvent(new Event('input'));
+    };
+
+    // Медиа (шаг 0)
+    var media = dd.media_tokens || [];
+    var fileInput = document.getElementById('f-file');
+    if (fileInput) {
+      if (media.length) renderMediaNow();
+      document.getElementById('f-addmedia').onclick = function () { fileInput.click(); };
+      fileInput.onchange = function () {
+        var f = fileInput.files[0]; if (!f) return;
+        var kind = f.type.indexOf('video') === 0 ? 'video' : 'image';
+        var fd = new FormData(); fd.append('file', f); fd.append('kind', kind);
+        document.getElementById('f-addmedia').textContent = '⏳ Загрузка…';
+        fetch('/app/api/upload?init_data=' + encodeURIComponent(initData), { method: 'POST', body: fd })
+          .then(function (r) { return r.json(); }).then(function (d) {
+            document.getElementById('f-addmedia').textContent = '＋ Добавить медиа';
+            if (d.ok) { media.push({ token: d.token, type: d.type }); renderMediaNow(); }
+            else showMsg('f-msg', d.error || 'Ошибка загрузки', true);
+            fileInput.value = '';
+          });
+      };
+    }
+    function renderMediaNow() {
+      persistDraft(DRAFT_GW_KEY, GW_FIELDS, { media_tokens: media, step: step });
+      var el = document.getElementById('f-media'); if (!el) return;
       el.innerHTML = media.map(function (m, i) {
-        return '<div class="thumb">' + (m.type === 'video' ? '🎬' : '🖼') +
-          '<button class="x" data-i="' + i + '">✕</button></div>';
+        return '<div class="thumb">' + (m.type === 'video' ? '🎬' : '🖼') + '<button class="x" data-i="' + i + '">✕</button></div>';
       }).join('');
       el.querySelectorAll('.x').forEach(function (b) {
-        b.onclick = function () { media.splice(parseInt(b.getAttribute('data-i'), 10), 1); renderMedia(); };
+        b.onclick = function () { media.splice(parseInt(b.getAttribute('data-i'), 10), 1); renderMediaNow(); };
       });
     }
 
-    var pubSel = [], subSel = [];
-    GET('/app/api/analytics/channels').then(function (d) {
-      var chs = (d.channels || []).filter(function (c) { return c.admin; });
-      function renderPickers() {
-        document.getElementById('f-pub').innerHTML = chs.map(function (c) {
-          return '<div class="chip ' + (pubSel.indexOf(c.id) > -1 ? 'on' : '') + '" data-pid="' + c.id + '">' +
-            (pubSel.indexOf(c.id) > -1 ? '✅ ' : '') + esc(c.title) + '</div>';
-        }).join('') || '<div class="meta">Нет каналов — добавьте во вкладке «📢 Каналы»</div>';
-        document.getElementById('f-sub').innerHTML = chs.map(function (c) {
-          var locked = pubSel.indexOf(c.id) > -1;
-          return '<div class="chip ' + (locked || subSel.indexOf(c.id) > -1 ? 'on' : '') + '" data-sid="' + c.id + '">' +
-            (locked ? '🔒 ' : (subSel.indexOf(c.id) > -1 ? '✅ ' : '')) + esc(c.title) + '</div>';
-        }).join('') || '<div class="meta">—</div>';
-        document.querySelectorAll('[data-pid]').forEach(function (el) {
-          el.onclick = function () {
-            var id = parseInt(el.getAttribute('data-pid'), 10);
-            var i = pubSel.indexOf(id);
-            if (i > -1) { pubSel.splice(i, 1); subSel = subSel.filter(function (s) { return s !== id; }); }
-            else pubSel.push(id);
-            renderPickers();
-          };
-        });
-        document.querySelectorAll('[data-sid]').forEach(function (el) {
-          el.onclick = function () {
-            var id = parseInt(el.getAttribute('data-sid'), 10);
-            if (pubSel.indexOf(id) > -1) return;
-            var i = subSel.indexOf(id);
-            if (i > -1) subSel.splice(i, 1); else subSel.push(id);
-            renderPickers();
-          };
-        });
-      }
-      renderPickers();
-    });
+    // Каналы (шаг 1)
+    var pubSel = dd.pub_channels || [], subSel = dd.sub_channels || [];
+    var pubEl = document.getElementById('f-pub');
+    if (pubEl) {
+      GET('/app/api/analytics/channels').then(function (d) {
+        var chs = (d.channels || []).filter(function (c) { return c.admin; });
+        function renderPickers() {
+          document.getElementById('f-pub').innerHTML = chs.map(function (c) {
+            return '<div class="chip ' + (pubSel.indexOf(c.id) > -1 ? 'on' : '') + '" data-pid="' + c.id + '">' +
+              (pubSel.indexOf(c.id) > -1 ? '✅ ' : '') + esc(c.title) + '</div>';
+          }).join('') || '<div class="meta">Нет каналов — добавьте во вкладке «📻 Каналы»</div>';
+          document.getElementById('f-sub').innerHTML = chs.map(function (c) {
+            var locked = pubSel.indexOf(c.id) > -1;
+            return '<div class="chip ' + (locked || subSel.indexOf(c.id) > -1 ? 'on' : '') + '" data-sid="' + c.id + '">' +
+              (locked ? '🔒 ' : (subSel.indexOf(c.id) > -1 ? '✅ ' : '')) + esc(c.title) + '</div>';
+          }).join('') || '<div class="meta">—</div>';
+          app.querySelectorAll('[data-pid]').forEach(function (el) {
+            el.onclick = function () {
+              var id = parseInt(el.getAttribute('data-pid'), 10);
+              var i = pubSel.indexOf(id);
+              if (i > -1) { pubSel.splice(i, 1); subSel = subSel.filter(function (s) { return s !== id; }); }
+              else pubSel.push(id);
+              persistDraft(DRAFT_GW_KEY, GW_FIELDS, { pub_channels: pubSel, sub_channels: subSel, step: step });
+              renderPickers();
+            };
+          });
+          app.querySelectorAll('[data-sid]').forEach(function (el) {
+            el.onclick = function () {
+              var id = parseInt(el.getAttribute('data-sid'), 10);
+              if (pubSel.indexOf(id) > -1) return;
+              var i = subSel.indexOf(id);
+              if (i > -1) subSel.splice(i, 1); else subSel.push(id);
+              persistDraft(DRAFT_GW_KEY, GW_FIELDS, { pub_channels: pubSel, sub_channels: subSel, step: step });
+              renderPickers();
+            };
+          });
+        }
+        renderPickers();
+      });
+    }
 
+    // Сегменты (шаги 3-5)
     segBind('f-finmode', function (v) {
       document.getElementById('f-fintime').classList.toggle('hidden', v !== 'time');
       document.getElementById('f-fincount').classList.toggle('hidden', v !== 'count');
@@ -381,50 +584,100 @@
       document.getElementById('f-pubat-w').classList.toggle('hidden', v !== 'at');
     });
     toggleBind('f-captcha'); toggleBind('f-referral'); toggleBind('f-resinpost');
+    // Восстановить тогглы
+    if (dd.captcha === false) chipOff('f-captcha');
+    if (dd.referral) chipOn2('f-referral');
+    if (dd.results_in_post === false) chipOff('f-resinpost');
+    if (dd.finish_mode === 'count') segSet('f-finmode', 'count');
+    if (dd.publish_mode === 'at') segSet('f-pubmode', 'at');
+    // Сохранять тогглы/сегменты при кликах
+    ['f-captcha','f-referral','f-resinpost'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('click', function () {
+        setTimeout(function () {
+          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: step,
+            captcha: chipOnEl('f-captcha'), referral: chipOnEl('f-referral'), results_in_post: chipOnEl('f-resinpost') });
+        }, 10);
+      });
+    });
+    if (document.getElementById('f-finmode')) document.getElementById('f-finmode').addEventListener('click', function () {
+      setTimeout(function () { persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: step, finish_mode: segVal('f-finmode') }); }, 10);
+    });
+    if (document.getElementById('f-pubmode')) document.getElementById('f-pubmode').addEventListener('click', function () {
+      setTimeout(function () { persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: step, publish_mode: segVal('f-pubmode') }); }, 10);
+    });
 
-    function collect(saveDraft) {
-      var finMode = segVal('f-finmode'), pubMode = segVal('f-pubmode');
+    // Финал
+    var go = document.getElementById('wz-go'), dr = document.getElementById('wz-draft');
+    function collect(saveDraftFlag) {
+      var fin = segVal('f-finmode') || dd.finish_mode || 'time';
+      var pub = segVal('f-pubmode') || dd.publish_mode || 'now';
       return {
-        post_text: document.getElementById('f-post').value.trim(),
+        post_text: val('f-post') || dd['f-post'] || '',
         media_tokens: media,
-        pub_channels: pubSel,
-        sub_channels: subSel.concat(pubSel.filter(function (id) { return subSel.indexOf(id) === -1; })),
-        name: document.getElementById('f-name').value.trim() || firstLine(document.getElementById('f-post').value),
-        button_text: document.getElementById('f-btn').value.trim() || 'Участвовать',
-        winners: parseInt(document.getElementById('f-winners').value || '1', 10) || 1,
-        finish_mode: finMode,
-        finish_at: finMode === 'time' ? document.getElementById('f-finat').value.trim() : '',
-        finish_count: finMode === 'count' ? parseInt(document.getElementById('f-fincnt').value || '0', 10) : 0,
-        publish_now: pubMode === 'now',
-        publish_at: pubMode === 'at' ? document.getElementById('f-pubat').value.trim() : '',
-        captcha: chipOn('f-captcha'), referral: chipOn('f-referral'),
-        results_in_post: chipOn('f-resinpost'),
-        winners_message: document.getElementById('f-winmsg').value.trim(),
-        save_draft: !!saveDraft
+        pub_channels: pubSel.length ? pubSel : (dd.pub_channels || []),
+        sub_channels: subSel.length ? subSel : (dd.sub_channels || []),
+        name: val('f-name') || dd['f-name'] || '',
+        button_text: val('f-btn') || 'Участвовать',
+        winners: parseInt(val('f-winners') || dd['f-winners'] || '1', 10) || 1,
+        finish_mode: fin,
+        finish_at: val('f-finat') || dd['f-finat'] || '',
+        finish_count: parseInt(val('f-fincnt') || '0', 10) || 0,
+        publish_now: pub === 'now',
+        publish_at: pub === 'at' ? (val('f-pubat') || dd['f-pubat'] || '') : '',
+        captcha: chipOnEl('f-captcha') !== null ? chipOnEl('f-captcha') : (dd.captcha !== false),
+        referral: chipOnEl('f-referral') !== null ? chipOnEl('f-referral') : !!dd.referral,
+        results_in_post: chipOnEl('f-resinpost') !== null ? chipOnEl('f-resinpost') : (dd.results_in_post !== false),
+        winners_message: val('f-winmsg') || '',
+        save_draft: !!saveDraftFlag
       };
     }
-    function submit(saveDraft) {
-      var body = collect(saveDraft);
-      if (!body.post_text) return showMsg('f-msg', 'Напишите текст поста', true);
-      if (!body.pub_channels.length) return showMsg('f-msg', 'Выберите хотя бы один канал публикации', true);
+    function val(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+    function submit(saveDraftFlag) {
+      var body = collect(saveDraftFlag);
+      if (!body.post_text && !body.media_tokens.length) return showMsg('f-msg', 'Заполните шаг 1: текст поста или медиа', true);
+      if (!body.pub_channels.length) return showMsg('f-msg', 'Заполните шаг 2: выберите каналы публикации', true);
       showMsg('f-msg', '⏳ Сохраняю…');
       POST('/app/api/giveaways/create', body).then(function (d) {
-        if (d.ok) {
-          clearDraft(DRAFT_GW_KEY);
-          showMsg('f-msg', saveDraft ? '✅ Черновик сохранён' : '✅ Розыгрыш создан! Пост уже в каналах.');
-          setTimeout(renderGiveaways, 1200);
-        } else showMsg('f-msg', '⚠️ ' + (d.error || 'Ошибка'), true);
-      }).catch(function () { showMsg('f-msg', 'Ошибка сети', true); });
+        if (d.ok) { clearDraft(DRAFT_GW_KEY); showMsg('f-msg', saveDraftFlag ? '✅ Черновик сохранён' : '✅ Розыгрыш создан! Пост уже в каналах.'); setTimeout(renderGiveaways, 1200); }
+        else showMsg('f-msg', '⚠️ ' + (d.error || 'Ошибка'), true);
+      });
     }
-    document.getElementById('f-go').onclick = function () { submit(false); };
-    document.getElementById('f-draft').onclick = function () { submit(true); };
+    if (go) go.onclick = function () { submit(false); };
+    if (dr) dr.onclick = function () { submit(true); };
   }
-  function defaultFinish() {
-    var d = new Date(); d.setDate(d.getDate() + 1);
-    var p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() + ' 21:00';
+
+  // Форматирование выделения в textarea (Markdown MAX: *b*, _i_, ~s~, [t](url)).
+  function wrapSel(areaId, kind) {
+    var el = document.getElementById(areaId); if (!el) return;
+    var s = el.selectionStart, e = el.selectionEnd, v = el.value, sel = v.slice(s, e);
+    var out;
+    if (kind === 'a') {
+      // Ссылка — строкой ввода под панелью (prompt() в вебвью MAX недоступен).
+      var bar = document.getElementById('f-linkbar');
+      if (bar) {
+        bar.classList.remove('hidden');
+        var inp = document.getElementById('f-linkurl');
+        inp.value = '';
+        inp.placeholder = sel ? 'https://… — на «' + sel.slice(0, 24) + '»' : 'https://…';
+        try { inp.focus(); } catch (e0) {}
+      }
+      return;
+    } else {
+      var m = { b: '*', i: '_', s: '~' }[kind];
+      // Тоггл: если уже обёрнуто — снять.
+      if (v.slice(s - m.length, s) === m && v.slice(e, e + m.length) === m) {
+        el.value = v.slice(0, s - m.length) + sel + v.slice(e + m.length);
+        el.selectionStart = s - m.length; el.selectionEnd = e - m.length; el.focus(); el.dispatchEvent(new Event('input')); return;
+      }
+      if (sel.slice(0, m.length) === m && sel.slice(-m.length) === m) sel = sel.slice(m.length, -m.length);
+      out = m + sel + m;
+    }
+    el.value = v.slice(0, s) + out + v.slice(e);
+    el.selectionStart = s; el.selectionEnd = s + out.length; el.focus();
+    el.dispatchEvent(new Event('input'));
   }
-  function firstLine(t) { var l = t.split('\n')[0].replace(/[*#>_]+/g, '').trim(); return l.slice(0, 30); }
+
   function segBind(id, cb) {
     document.querySelectorAll('#' + id + ' .chip').forEach(function (c) {
       c.onclick = function () {
@@ -434,115 +687,262 @@
       };
     });
   }
-  function segVal(id) {
-    var on = document.querySelector('#' + id + ' .chip.on');
-    return on ? on.getAttribute('data-v') : '';
+  function segVal(id) { var on = document.querySelector('#' + id + ' .chip.on'); return on ? on.getAttribute('data-v') : ''; }
+  function segSet(id, v) {
+    document.querySelectorAll('#' + id + ' .chip').forEach(function (c) { c.classList.toggle('on', c.getAttribute('data-v') === v); });
+    if (v === 'count' && document.getElementById('f-fintime')) { document.getElementById('f-fintime').classList.add('hidden'); document.getElementById('f-fincount').classList.remove('hidden'); }
+    if (v === 'at' && document.getElementById('f-pubat-w')) document.getElementById('f-pubat-w').classList.remove('hidden');
   }
-  function toggleBind(id) {
-    var el = document.getElementById(id);
-    if (el) el.onclick = function () { el.classList.toggle('on'); };
-  }
-  function chipOn(id) { var el = document.getElementById(id); return el ? el.classList.contains('on') : false; }
+  function toggleBind(id) { var el = document.getElementById(id); if (el) el.onclick = function () { el.classList.toggle('on'); }; }
+  function chipOnEl(id) { var el = document.getElementById(id); return el ? el.classList.contains('on') : null; }
+  function chipOff(id) { var el = document.getElementById(id); if (el) el.classList.remove('on'); }
+  function chipOn2(id) { var el = document.getElementById(id); if (el) el.classList.add('on'); }
   function showMsg(id, text, isErr) {
     var el = document.getElementById(id);
     if (el) { el.textContent = text; el.className = 'msg ' + (isErr ? 'err' : 'ok'); }
   }
+  function defaultFinish() {
+    var d = new Date(); d.setDate(d.getDate() + 1);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() + ' 21:00';
+  }
 
-  // ============ Таб 2: АНАЛИТИКА ============
-  function renderChannels() {
-    state.tab = 'an'; state.view = 'tab';
+  // ---------- Трекинг ----------
+  function renderTrackingTab() {
+    state.tab = 'tr'; state.view = 'tab';
+    organizerTabs();
     if (backBtn) backBtn.hide();
-    fab.classList.add('hidden');
-    app.innerHTML = header('📊 Аналитика', 'каналы и трекинг-ссылки') +
-      '<div class="toolbar">' +
-      '<div class="chip ' + (state.sort === 'date' ? 'on' : '') + '" data-a="sort-date">Новые сверху</div>' +
-      '<div class="chip ' + (state.sort === 'name' ? 'on' : '') + '" data-a="sort-name">По имени</div></div>' +
-      '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
-    bind();
+    fab.classList.remove('hidden');
+    fab.textContent = 'Создать трекинг-ссылку';
+    fab.onclick = function () { renderTrWizard(0); };
+    app.innerHTML = roleswitch() +
+      '<header style="position:relative"><div><h1>Трекинг</h1></div>' + filterBtn('tr-filter') + '</header>' +
+      '<div id="tr-dd"></div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
+    bindRoleSwitch();
+    document.getElementById('tr-filter').onclick = function (e) {
+      e.stopPropagation();
+      var dd = document.getElementById('tr-dd');
+      if (dd.innerHTML) { ddClose(dd); return; }
+      dd.innerHTML = '<div class="dropdown">' +
+        '<div class="dsep">Сортировка</div>' +
+        '<div class="ditem ' + (state.sort === 'date' ? 'on' : '') + '" data-s="date">Сначала новые</div>' +
+        '<div class="ditem ' + (state.sort === 'name' ? 'on' : '') + '" data-s="name">По имени (А→Я)</div></div>';
+      dd.querySelectorAll('[data-s]').forEach(function (el) { el.onclick = function () { state.sort = el.getAttribute('data-s'); renderTrackingTab(); }; });
+      ddBind(dd);
+    };
     GET('/app/api/analytics/channels').then(function (d) {
       var chs = d.channels || [];
       if (state.sort === 'name') chs.sort(function (a, b) { return a.title.localeCompare(b.title, 'ru'); });
       document.getElementById('list').innerHTML = chs.map(function (c) {
         return '<div class="card tap" data-a="ch" data-id="' + c.id + '" data-t="' + esc(c.title) + '">' +
-          '<div class="row"><div class="title">' + esc(c.title) + '</div>' +
-          '<span class="badge ' + (c.is_public ? 'pub' : '') + '">' + (c.is_public ? 'публичный' : 'приватный') + '</span></div>' +
-          '<div class="meta">ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</div>' +
+          '<div class="row"><div class="title">' + esc(c.title) + '</div><span class="badge">' + (c.is_public ? 'публичный' : 'приватный') + '</span></div>' +
+          '<div class="meta">ссылок: ' + c.links + '</div>' +
           '<div class="stats">' +
           '<div class="stat"><div class="num">' + fmt(c.clicks) + '</div><div class="lbl">клики</div></div>' +
           '<div class="stat"><div class="num">' + fmt(c.signups) + '</div><div class="lbl">подписки</div></div>' +
-          '<div class="stat"><div class="num">' + pct(c.signups, c.clicks) + '</div><div class="lbl">конверсия</div></div>' +
-          '</div></div>';
-      }).join('') || '<div class="empty">Каналов нет — добавьте во вкладке «📢 Каналы»</div>';
+          '<div class="stat"><div class="num">' + pct(c.signups, c.clicks) + '</div><div class="lbl">конверсия</div></div></div></div>';
+      }).join('') || '<div class="empty">Пока пусто.<br>Нажмите «Создать трекинг-ссылку».</div>';
       app.querySelectorAll('.card[data-a="ch"]').forEach(function (c) {
         c.onclick = function () { renderChannel(parseInt(c.getAttribute('data-id'), 10), c.getAttribute('data-t')); };
       });
     }).catch(function () { document.getElementById('list').innerHTML = '<div class="empty">Не удалось загрузить.</div>'; });
   }
 
-  function renderChannel(id, title) {
-    state.view = 'detail'; state.chID = id;
-    fab.classList.add('hidden'); state.chTitle = title;
+  // Пошаговый визард ссылки: 1 канал → 2 механика+название+стоимость+тип → 3 пост (если супер)
+  function renderTrWizard(step, forceAdsWithChannel) {
+    state.view = 'create';
+    fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    var filterNames = { all:'Все ссылки', unique:'Уникальные', super:'Суперссылки', contest:'Конкурсные' };
-    app.innerHTML = '<header style="position:relative"><button class="back" id="hb">←</button>' +
-      '<div><h1>' + esc(title) + '</h1></div>' +
-      '<button class="iconbtn" id="ch-filter">⚙</button></header>' +
+    onBack(function () { step > 0 ? renderTrWizard(step - 1) : renderTrackingTab(); });
+    var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
+
+    var html = roleswitch() + header('Создание ссылки', 'шаг ' + (step + 1) + ' из 3', true) + progress(step, 3) + '<div id="wz">';
+    if (step === 0) html += '<label class="lbl" style="margin-top:0">Канал, на который будет вести ссылка *</label><div id="t-chs" class="pick"></div>';
+    else if (step === 1) html +=
+      '<label class="lbl" style="margin-top:0">Механика</label>' +
+      '<div class="seg" id="t-mode"><div class="chip on" data-v="ads">📣 Реклама</div><div class="chip" data-v="contest">🏁 Конкурс</div></div>' +
+      '<div id="t-ads">' +
+      '<label class="lbl">Название ссылки *</label>' +
+      '<input class="inp" id="t-name" placeholder="Например: Реклама у Иванова">' +
+      '<label class="lbl">Стоимость размещения, ₽ (посчитаем цену за подписчика)</label>' +
+      '<input class="inp" id="t-cost" type="number" placeholder="1500">' +
+      '<div id="t-type-w"><label class="lbl">Тип ссылки</label>' +
+      '<div class="seg" id="t-type"><div class="chip on" data-v="unique">Уникальная (на канал)</div><div class="chip" data-v="super">Супер (на конкретный пост)</div></div></div>' +
+      '</div>' +
+      '<div id="t-contest" class="hidden">' +
+      '<label class="lbl">Название (для всей группы ссылок) *</label>' +
+      '<input class="inp" id="t-name2" placeholder="Например: Новый год">' +
+      '<div class="meta">Конкурс — люди подписываются на ваши каналы, вы выбираете победителя. Ссылки ведут на последний пост канала; под каждый канал — своя.</div></div>';
+    else html +=
+      '<label class="lbl" style="margin-top:0">Ссылка на пост *</label>' +
+      '<input class="inp" id="t-post" placeholder="https://max.ru/mychannel/42">' +
+      '<div class="meta">Скопируйте адрес поста из канала — ссылка будет вести именно на него.</div>';
+    html += '</div><div class="btnrow">' +
+      (step > 0 ? '<button class="btn sec" id="wz-prev">← Назад</button>' : '') +
+      (step < 2 ? '<button class="btn" id="wz-next">Далее →</button>' : '') +
+      '</div>' +
+      (step === 2 ? '<button class="btn" id="t-go">✅ Создать ссылку</button>' : '') +
+      '<div class="msg" id="t-msg"></div><div id="t-result"></div>';
+    app.innerHTML = html;
+    bindRoleSwitch();
+    // gotoStep сохраняет целевой шаг до рендера (см. визард розыгрыша).
+    function gotoStep(n) {
+      persistDraft(DRAFT_TR_KEY, TR_FIELDS, { step: n });
+      renderTrWizard(n);
+    }
+    document.getElementById('hb').onclick = function () { step > 0 ? gotoStep(step - 1) : renderTrackingTab(); };
+    if (step > 0) document.getElementById('wz-prev').onclick = function () { gotoStep(step - 1); };
+    if (step < 2) document.getElementById('wz-next').onclick = function () { nextStep(); };
+
+    var dd = loadDraft(DRAFT_TR_KEY) || {};
+    restoreDraft(DRAFT_TR_KEY, TR_FIELDS);
+    autosaveDraft(DRAFT_TR_KEY, TR_FIELDS);
+
+    var adsCh = dd.adsCh || 0;
+    GET('/app/api/analytics/channels').then(function (d) {
+      var chs = (d.channels || []).filter(function (c) { return c.admin; });
+
+      if (step === 0) {
+        // Первый вход с предвыбором канала (кнопка на экране канала).
+        if (forceAdsWithChannel && !adsCh) { adsCh = forceAdsWithChannel; }
+        if (dd.step > 0 && dd.adsCh) { renderTrWizard(dd.step); return; }
+        function renderPick() {
+          document.getElementById('t-chs').innerHTML = chs.map(function (c) {
+            return '<div class="chip ' + (adsCh === c.id ? 'on' : '') + '" data-cid="' + c.id + '" data-pub="' + (c.is_public ? 1 : 0) + '">' +
+              (adsCh === c.id ? '✓ ' : '') + esc(c.title) + '</div>';
+          }).join('') || '<div class="meta">Нет каналов — добавьте во вкладке «📻 Каналы»</div>';
+          app.querySelectorAll('[data-cid]').forEach(function (el) {
+            el.onclick = function () {
+              adsCh = parseInt(el.getAttribute('data-cid'), 10);
+              persistDraft(DRAFT_TR_KEY, TR_FIELDS, { adsCh: adsCh, step: 1, isPub: el.getAttribute('data-pub') === '1' });
+              renderTrWizard(1);
+            };
+          });
+        }
+        renderPick();
+      } else {
+        segBind('t-mode', function (v) {
+          document.getElementById('t-ads').classList.toggle('hidden', v !== 'ads');
+          document.getElementById('t-contest').classList.toggle('hidden', v !== 'contest');
+          persistDraft(DRAFT_TR_KEY, TR_FIELDS, { step: step, mode: v });
+        });
+        segBind('t-type', function (v) {
+          persistDraft(DRAFT_TR_KEY, TR_FIELDS, { step: step, link_type: v });
+          maybeGoPost();
+        });
+        if (dd.mode) segSet('t-mode', dd.mode);
+        if (dd.link_type) segSet('t-type', dd.link_type);
+        // Приватный канал: без супер-типа.
+        var isPub = dd.isPub !== false;
+        if (document.getElementById('t-type-w')) document.getElementById('t-type-w').classList.toggle('hidden', !isPub);
+        if (!isPub) segSet('t-type', 'unique');
+      }
+    });
+
+    function nextStep() {
+      if (step === 0) {
+        if (!adsCh) return showMsg('t-msg', 'Выберите канал', true);
+        gotoStep(1); return;
+      }
+      if (step === 1) {
+        var isSuper = (segVal('t-type') || dd.link_type || 'unique') === 'super' && dd.isPub !== false;
+        if (isSuper) { gotoStep(2); return; }
+        tryFinish(); return;
+      }
+      tryFinish();
+    }
+    function maybeGoPost() {
+      if (step === 1 && segVal('t-type') === 'super') { setTimeout(function () { gotoStep(2); }, 150); }
+    }
+    var goBtn = document.getElementById('t-go');
+    if (goBtn) goBtn.onclick = function () { tryFinish(); };
+    function tryFinish() {
+      var mode = segVal('t-mode') || dd.mode || 'ads';
+      var body;
+      if (mode === 'contest') {
+        body = { mode: 'contest', channel_ids: [adsCh], name: (val('t-name2') || dd['t-name2'] || '') };
+        if (!body.name) return showMsg('t-msg', 'Введите название', true);
+      } else {
+        var lt = segVal('t-type') || dd.link_type || 'unique';
+        var pr = val('t-post') || dd['t-post'] || '';
+        if (lt === 'super' && !pr) return showMsg('t-msg', 'Вставьте ссылку на пост (шаг 3)', true);
+        body = { mode: 'ads', channel_id: adsCh, name: (val('t-name') || dd['t-name'] || ''),
+                 cost: parseFloat(val('t-cost') || dd['t-cost'] || '0') || 0, link_type: lt, post_ref: pr };
+        if (!body.name) return showMsg('t-msg', 'Введите название', true);
+      }
+      showMsg('t-msg', '⏳ Создаю…');
+      POST('/app/api/tracking/create', body).then(function (d) {
+        if (!d.ok) return showMsg('t-msg', '⚠️ ' + (d.error || 'ошибка'), true);
+        clearDraft(DRAFT_TR_KEY);
+        var links = (d.codes || []).map(function (c) { return 'https://max.ru/' + (d.bot || '') + '?startapp=u_' + c; });
+        showMsg('t-msg', '✅ Готово!');
+        document.getElementById('t-result').innerHTML =
+          '<div class="card">' + links.map(function (l) {
+            return '<div class="linkline" style="font-size:13px;color:var(--fg)">' + esc(l) + '</div>';
+          }).join('') + '<button class="btn sec sm" id="t-copy" style="margin-top:10px">📋 Скопировать</button></div>';
+        document.getElementById('t-copy').onclick = function () {
+          if (navigator.clipboard) navigator.clipboard.writeText(links.join('\n'));
+          this.textContent = '✅ Скопировано';
+        };
+      });
+    }
+    function val(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+  }
+
+  // ---------- Канал: ссылки + динамика + создать для этого канала ----------
+  function renderChannel(id, title) {
+    state.view = 'detail'; state.chID = id; state.chTitle = title;
+    fab.classList.add('hidden');
+    if (backBtn) backBtn.show();
+    onBack(renderTrackingTab);
+    var fn = { all:'Все ссылки', unique:'Уникальные', super:'Суперссылки', contest:'Конкурсные' };
+    app.innerHTML = roleswitch() +
+      '<header style="position:relative"><button class="back" id="hb">←</button><div><h1>' + esc(title) + '</h1></div>' + filterBtn('ch-filter') + '</header>' +
       '<div id="ch-dd"></div>' +
       '<button class="btn" id="ch-newlink" style="margin-bottom:12px">＋ Создать ссылку для этого канала</button>' +
-      '<div id="dyn"></div>' +
-      '<div class="sect">Ссылки</div><div id="list"><div class="skel"></div></div>';
+      '<div id="dyn"></div><div class="sect">Ссылки</div><div id="list"><div class="skel"></div></div>';
+    bindRoleSwitch();
+    document.getElementById('hb').onclick = renderTrackingTab;
     document.getElementById('ch-newlink').onclick = function () {
-      // Предвыбрать этот канал в форме создания (черновик adsCh).
-      persistDraft(DRAFT_TR_KEY, ['t-name','t-cost','t-post','t-name2'], { adsCh: id });
-      renderTrackingCreate();
+      persistDraft(DRAFT_TR_KEY, ['t-name','t-cost','t-post','t-name2'], { adsCh: id, step: 0 });
+      renderTrWizard(1);
     };
     document.getElementById('ch-filter').onclick = function (e) {
       e.stopPropagation();
       var dd = document.getElementById('ch-dd');
-      if (dd.innerHTML) { dd.innerHTML = ''; return; }
+      if (dd.innerHTML) { ddClose(dd); return; }
       var items = '<div class="dsep">Тип ссылок</div>';
       ['all','unique','super','contest'].forEach(function (f) {
-        items += '<div class="ditem ' + (state.filter === f ? 'on' : '') + '" data-f="' + f + '">' + filterNames[f] + '</div>';
+        items += '<div class="ditem ' + (state.filter === f ? 'on' : '') + '" data-f="' + f + '">' + fn[f] + '</div>';
       });
       items += '<div class="dsep">Сортировка</div>';
       items += '<div class="ditem ' + (state.sort === 'date' ? 'on' : '') + '" data-s="date">Сначала новые</div>';
       items += '<div class="ditem ' + (state.sort === 'name' ? 'on' : '') + '" data-s="name">По имени (А→Я)</div>';
       dd.innerHTML = '<div class="dropdown">' + items + '</div>';
-      dd.querySelectorAll('[data-f]').forEach(function (el) {
-        el.onclick = function () { state.filter = el.getAttribute('data-f'); renderChannel(state.chID, state.chTitle); };
-      });
-      dd.querySelectorAll('[data-s]').forEach(function (el) {
-        el.onclick = function () { state.sort = el.getAttribute('data-s'); renderChannel(state.chID, state.chTitle); };
-      });
-      setTimeout(function () {
-        document.addEventListener('click', function close() { dd.innerHTML = ''; document.removeEventListener('click', close); });
-      }, 10);
+      dd.querySelectorAll('[data-f]').forEach(function (el) { el.onclick = function () { state.filter = el.getAttribute('data-f'); renderChannel(state.chID, state.chTitle); }; });
+      dd.querySelectorAll('[data-s]').forEach(function (el) { el.onclick = function () { state.sort = el.getAttribute('data-s'); renderChannel(state.chID, state.chTitle); }; });
+      ddBind(dd);
     };
-    if (backBtn) onBack(function () { renderTrackingTab(); });
-    document.getElementById('hb').onclick = renderTrackingTab;
     GET('/app/api/analytics/channel/' + id + '?sort=' + (state.sort === 'name' ? 'name' : 'date'))
       .then(function (d) {
         var dyn = (d.dynamics || []).slice(-state.dynDays);
         renderDynamics(dyn, state.dynDays);
         var links = d.links || [];
         if (state.filter !== 'all') links = links.filter(function (l) { return l.type === state.filter; });
-        var tm = { unique:['Уникальная',''], super:['Супер',''], contest:['Конкурсная',''] };
+        var tm = { unique:'Уникальная', super:'Супер', contest:'Конкурсная' };
         document.getElementById('list').innerHTML = links.map(function (l) {
-          var m = tm[l.type] || [l.type, ''];
           return '<div class="card tap" data-a="link" data-id="' + l.id + '">' +
-            '<div class="row"><div class="title">' + esc(l.name) + '</div>' +
-            '<span class="badge ' + (l.type === 'contest' ? 'contest' : l.type === 'super' ? 'pub' : '') + '">' + m[0] + '</span></div>' +
+            '<div class="row"><div class="title">' + esc(l.name) + '</div><span class="badge ' + (l.type === 'contest' ? 'inv' : '') + '">' + (tm[l.type] || l.type) + '</span></div>' +
             (l.post_ref ? '<div class="linkline">⚡ ' + esc(l.post_ref) + '</div>' : '') +
             '<div class="stats">' +
             '<div class="stat"><div class="num">' + fmt(l.clicks) + '</div><div class="lbl">клики</div></div>' +
             '<div class="stat"><div class="num">' + fmt(l.signups) + '</div><div class="lbl">подписки</div></div>' +
-            '<div class="stat"><div class="num">' + fmt(l.still_in) + '</div><div class="lbl">остались</div></div>' +
-            '</div></div>';
-        }).join('') || '<div class="empty">Ссылок этого типа нет — создайте в «Ещё → Трекинг-ссылки»</div>';
+            '<div class="stat"><div class="num">' + fmt(l.still_in) + '</div><div class="lbl">остались</div></div></div></div>';
+        }).join('') || '<div class="empty">Ссылок этого типа нет</div>';
         app.querySelectorAll('.card[data-a="link"]').forEach(function (c) {
           c.onclick = function () { renderLink(parseInt(c.getAttribute('data-id'), 10)); };
         });
-      }).catch(function () { document.getElementById('list').innerHTML = '<div class="empty">Ошибка загрузки.</div>'; });
+      });
   }
 
   function renderDynamics(dyn, days) {
@@ -551,46 +951,44 @@
     var maxJ = 1, totJ = 0, totU = 0;
     dyn.forEach(function (d) { totJ += d.Joins; totU += d.Unsubs; if (d.Joins > maxJ) maxJ = d.Joins; if (d.Unsubs > maxJ) maxJ = d.Unsubs; });
     var bars = dyn.map(function (d) {
-      var hJ = Math.round(d.Joins / maxJ * 84), hU = Math.round(d.Unsubs / maxJ * 84);
+      var hJ = Math.round(d.Joins / maxJ * 80), hU = Math.round(d.Unsubs / maxJ * 80);
       return '<div class="bar"><div class="j" style="height:' + Math.max(hJ, d.Joins > 0 ? 3 : 0) + 'px"></div>' +
         '<div class="u" style="height:' + Math.max(hU, d.Unsubs > 0 ? 3 : 0) + 'px"></div></div>';
     }).join('');
     var labels = dyn.map(function (d, i) { return '<span>' + (i % (dyn.length > 14 ? 5 : 2) === 0 ? d.Day.slice(0, 5) : '') + '</span>'; }).join('');
     el.innerHTML = '<div class="card"><div class="row"><div class="title tap" id="dyn-title" style="cursor:pointer">Динамика · ' + days + ' дней ▾</div>' +
       '<div class="meta" style="margin:0">＋' + totJ + ' <span style="opacity:.55">|</span> −' + totU + '</div></div>' +
-      '<div class="bars">' + bars + '</div><div class="xaxis">' + labels + '</div>' +
-      '<div class="meta" style="margin-top:6px">🟪 подписки · 🟥 отписки (МСК)</div></div>';
+      '<div class="bars">' + bars + '</div><div class="xaxis">' + labels + '</div></div>';
     var t = document.getElementById('dyn-title');
     if (t) t.onclick = function () { state.dynDays = state.dynDays === 14 ? 30 : 14; renderChannel(state.chID, state.chTitle); };
   }
 
   function renderLink(id) {
     state.view = 'detail';
-    fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    app.innerHTML = header('Статистика ссылки', '', true) + '<div id="body"><div class="skel"></div></div>';
-    if (backBtn) onBack(function () { renderChannel(state.chID, state.chTitle); });
+    onBack(function () { renderChannel(state.chID, state.chTitle); });
+    app.innerHTML = roleswitch() + header('Статистика ссылки', '', true) + '<div id="body"><div class="skel"></div></div>';
+    bindRoleSwitch();
     document.getElementById('hb').onclick = function () { renderChannel(state.chID, state.chTitle); };
     GET('/app/api/analytics/link/' + id).then(function (d) {
       var l = d.link || {}, r = d.retention || {};
-      var sub = document.querySelector('header .sub');
-      if (sub) sub.textContent = l.Source || '';
+      var subEl = document.querySelector('header .sub');
+      if (subEl) subEl.textContent = l.Source || '';
       var cpaD = '—', cpaC = '—';
       if (l.Cost > 0 && r.Subscribed > 0) cpaD = (l.Cost / r.Subscribed).toFixed(1) + ' ₽';
       if (l.Cost > 0 && r.StillIn > 0) cpaC = (l.Cost / r.StillIn).toFixed(1) + ' ₽';
       var users = (d.subscribers || []).map(function (u) {
-        var st = u.UnsubscribedAt ? '<span class="st out">отписался ' + esc(u.UnsubscribedAt) + '</span>' : '<span class="st in">подписан</span>';
+        var st = u.UnsubscribedAt ? '<span class="st" style="color:#c66">отписался ' + esc(u.UnsubscribedAt) + '</span>' : '<span class="st">подписан</span>';
         return '<div class="user"><div>' + esc(u.FirstName || ('#' + u.UserID)) + (u.Username ? ' @' + esc(u.Username) : '') +
           '<div class="st">' + esc(u.SubscribedAt) + (u.WasMember ? ' · был участником' : '') + '</div></div>' + st + '</div>';
       }).join('');
       var clickers = (d.clickers || []).filter(function (c) {
         return !(d.subscribers || []).some(function (s) { return s.UserID === c.UserID; });
       }).map(function (c) {
-        return '<div class="user"><div>' + esc(c.FirstName || ('#' + c.UserID)) + (c.Username ? ' @' + esc(c.Username) : '') +
-          '</div><span class="st">клик ' + esc(c.ClickedAt) + '</span></div>';
+        return '<div class="user"><div>' + esc(c.FirstName || ('#' + c.UserID)) + '</div><span class="st">клик ' + esc(c.ClickedAt) + '</span></div>';
       }).join('');
       document.getElementById('body').innerHTML =
-        '<div class="card"><div class="stats">' +
+        '<div class="card"><div class="title" style="margin-bottom:2px;word-break:break-word">' + esc(l.Source || 'Ссылка') + '</div><div class="stats">' +
         '<div class="stat"><div class="num">' + fmt(l.Clicks) + '</div><div class="lbl">клики</div></div>' +
         '<div class="stat"><div class="num">' + fmt(l.Signups) + '</div><div class="lbl">подписки</div></div>' +
         '<div class="stat"><div class="num">' + fmt(r.StillIn) + '</div><div class="lbl">остались</div></div></div>' +
@@ -599,9 +997,8 @@
         '<div class="stat"><div class="num">' + cpaD + '</div><div class="lbl">CPA грязный</div></div>' +
         '<div class="stat"><div class="num">' + cpaC + '</div><div class="lbl">CPA чистый</div></div></div>' +
         (l.PostRef ? '<div class="linkline">⚡ ' + esc(l.PostRef) + '</div>' : '') + '</div>' +
-        '<div class="card tap" data-a="dellink"><div class="row"><div class="title" style="color:var(--err)">🗑 Удалить ссылку</div><span>→</span></div>' +
-        '<div class="meta">ссылка исчезнет вместе со всей её статистикой (клики, подписки, отписки)</div></div>' +
-        '<div class="msg" id="del-msg"></div>' +
+        '<div class="card tap" data-a="dellink"><div class="row"><div class="title" style="color:#c66">🗑 Удалить ссылку</div><span>→</span></div>' +
+        '<div class="meta">ссылка исчезнет вместе со всей её статистикой</div></div><div class="msg" id="del-msg"></div>' +
         '<div class="card"><div class="title" style="margin-bottom:8px">Удержание</div>' +
         '<div class="stats c5">' +
         ['1д','3д','7д','14д','30д'].map(function (k, i) {
@@ -615,73 +1012,34 @@
         (clickers ? '<div class="sect">Кликнули без подписки</div><div>' + clickers + '</div>' : '');
       var del = app.querySelector('[data-a="dellink"]');
       if (del) del.onclick = function () {
-        if (!confirm('Удалить ссылку «' + (l.Source || '') + '» со всей статистикой?')) return;
+        // confirm() в вебвью MAX недоступен — двухтаповое подтверждение.
+        if (!del.classList.contains('armed')) {
+          del.classList.add('armed');
+          var tt = del.querySelector('.title');
+          if (tt) tt.textContent = '🗑 Удалить окончательно?';
+          return;
+        }
         POST('/app/api/analytics/link/delete', { link_id: id }).then(function (d) {
-          if (d.ok) { renderChannel(state.chID, state.chTitle); }
+          if (d.ok) renderChannel(state.chID, state.chTitle);
           else { var m = document.getElementById('del-msg'); if (m) { m.textContent = '⚠️ ' + (d.error || 'ошибка'); m.className = 'msg err'; } }
         });
       };
-    }).catch(function () { document.getElementById('body').innerHTML = '<div class="empty">Ошибка загрузки.</div>'; });
+    });
   }
 
-  // ============ Таб 2: ТРЕКИНГ (топ-таб, вторая по важности функция) ============
-  function renderTrackingTab() {
-    state.tab = 'tr'; state.view = 'tab';
-    if (backBtn) backBtn.hide();
-    fab.classList.remove('hidden');
-    fab.textContent = 'создать\nтрекинг-ссылку';
-    fab.onclick = function () { renderTrackingCreate(); };
-    app.innerHTML = '<header style="position:relative"><div><h1>Трекинг</h1></div>' +
-      '<button class="iconbtn" id="tr-filter">⚙</button></header>' +
-      '<div id="tr-dd"></div>' +
-      '<div id="list"><div class="skel"></div><div class="skel"></div></div>';
-    document.getElementById('tr-filter').onclick = function (e) {
-      e.stopPropagation();
-      var dd = document.getElementById('tr-dd');
-      if (dd.innerHTML) { dd.innerHTML = ''; return; }
-      dd.innerHTML = '<div class="dropdown">' +
-        '<div class="dsep">Сортировка</div>' +
-        '<div class="ditem ' + (state.sort === 'date' ? 'on' : '') + '" data-s="date">Сначала новые</div>' +
-        '<div class="ditem ' + (state.sort === 'name' ? 'on' : '') + '" data-s="name">По имени (А→Я)</div></div>';
-      dd.querySelectorAll('[data-s]').forEach(function (el) {
-        el.onclick = function () { state.sort = el.getAttribute('data-s'); renderTrackingTab(); };
-      });
-      setTimeout(function () {
-        document.addEventListener('click', function close() { dd.innerHTML = ''; document.removeEventListener('click', close); });
-      }, 10);
-    };
-    GET('/app/api/analytics/channels').then(function (d) {
-      var chs = d.channels || [];
-      if (state.sort === 'name') chs.sort(function (a, b) { return a.title.localeCompare(b.title, 'ru'); });
-      document.getElementById('list').innerHTML = chs.map(function (c) {
-        return '<div class="card tap" data-a="ch" data-id="' + c.id + '" data-t="' + esc(c.title) + '">' +
-          '<div class="row"><div class="title">' + esc(c.title) + '</div>' +
-          '<span class="badge ' + (c.is_public ? 'pub' : '') + '">' + (c.is_public ? 'публичный' : 'приватный') + '</span></div>' +
-          '<div class="meta">ссылок: ' + c.links + '</div>' +
-          '<div class="stats">' +
-          '<div class="stat"><div class="num">' + fmt(c.clicks) + '</div><div class="lbl">клики</div></div>' +
-          '<div class="stat"><div class="num">' + fmt(c.signups) + '</div><div class="lbl">подписки</div></div>' +
-          '<div class="stat"><div class="num">' + pct(c.signups, c.clicks) + '</div><div class="lbl">конверсия</div></div>' +
-          '</div></div>';
-      }).join('') || '<div class="empty">Ссылок пока нет.<br>Нажмите «＋» — создайте первую ссылку.</div>';
-      app.querySelectorAll('.card[data-a="ch"]').forEach(function (c) {
-        c.onclick = function () { renderChannel(parseInt(c.getAttribute('data-id'), 10), c.getAttribute('data-t')); };
-      });
-    }).catch(function () { document.getElementById('list').innerHTML = '<div class="empty">Не удалось загрузить.</div>'; });
-  }
-
-  // ============ Таб 3: КАНАЛЫ ============
+  // ---------- Каналы ----------
   function renderChannelsTab() {
     state.tab = 'ch'; state.view = 'tab';
+    organizerTabs();
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
-    app.innerHTML = header('Мои каналы') +
+    app.innerHTML = roleswitch() + header('Мои каналы') +
       '<div class="card"><label class="lbl" style="margin-top:0">Ссылка на канал (@username или https://max.ru/...)</label>' +
       '<input class="inp" id="ch-link" placeholder="@mychannel">' +
-      '<button class="btn" id="ch-add">➕ Подключить канал</button>' +
-      '<div class="msg" id="ch-msg"></div>' +
-      '<div class="meta">Перед этим добавьте бота админом в канал (права «Читать все сообщения» и «Публиковать, редактировать и удалять сообщения»). Приватный канал — перешлите пост из него боту в чат.</div></div>' +
+      '<button class="btn" id="ch-add">＋ Подключить канал</button><div class="msg" id="ch-msg"></div>' +
+      '<div class="meta">Перед этим добавьте бота админом в канал (права «Читать все сообщения» и «Публиковать, редактировать и удалять сообщения»). Приватный канал — перешлите пост из канала боту в чат.</div></div>' +
       '<div id="list"><div class="skel"></div></div>';
+    bindRoleSwitch();
     document.getElementById('ch-add').onclick = function () {
       var link = document.getElementById('ch-link').value.trim();
       if (!link) return showMsg('ch-msg', 'Введите ссылку', true);
@@ -697,35 +1055,42 @@
         if (state.sort === 'name') chs.sort(function (a, b) { return a.title.localeCompare(b.title, 'ru'); });
         document.getElementById('list').innerHTML = chs.map(function (c) {
           return '<div class="card tap" data-a="ch" data-id="' + c.id + '" data-t="' + esc(c.title) + '">' +
-            '<div class="row"><div class="title">' + esc(c.title) + '</div>' +
-            '<span class="badge ' + (c.admin ? 'pub' : 'err') + '">' + (c.admin ? 'бот админ' : 'нет прав') + '</span></div>' +
+            '<div class="row"><div class="title">' + esc(c.title) + '</div><span class="badge ' + (c.admin ? 'inv' : '') + '">' + (c.admin ? 'бот админ' : 'нет прав') + '</span></div>' +
             '<div class="meta">ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</div></div>';
         }).join('') || '<div class="empty">Каналов пока нет</div>';
         app.querySelectorAll('.card[data-a="ch"]').forEach(function (el) {
-          el.onclick = function () { switchTab('tr'); renderChannel(parseInt(el.getAttribute('data-id'), 10), el.getAttribute('data-t')); };
+          el.onclick = function () { state.tab = 'tr'; renderChannel(parseInt(el.getAttribute('data-id'), 10), el.getAttribute('data-t')); };
         });
       });
     }
     loadList();
   }
 
-  // ============ Таб 4: ЕЩЁ ============
+  // ---------- Инфо ----------
   function renderMore() {
     state.tab = 'me'; state.view = 'tab';
+    organizerTabs();
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
-    app.innerHTML = header('Инфо') +
-      '<div class="card tap" data-a="go-help"><div class="row"><div class="title">📚 Справка</div><span>→</span></div>' +
+    var theme = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️ Светлая' : '🌙 Тёмная';
+    app.innerHTML = roleswitch() + header('Инфо') +
+      '<div class="card tap" data-a="theme"><div class="row"><div class="title">Тема оформления</div><span class="badge">' + theme + '</span></div>' +
+      '<div class="meta">переключить чёрно-белую тему</div></div>' +
+      '<div class="card tap" data-a="go-help"><div class="row"><div class="title">Справка</div><span>→</span></div>' +
       '<div class="meta">как всё работает</div></div>' +
-      '<div class="card tap" data-a="go-support"><div class="row"><div class="title">🆘 Поддержка</div><span>→</span></div>' +
+      '<div class="card tap" data-a="go-support"><div class="row"><div class="title">Поддержка</div><span>→</span></div>' +
       '<div class="meta">написать разработчикам</div></div>';
+    bindRoleSwitch();
+    app.querySelector('[data-a="theme"]').onclick = function () {
+      applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+      renderMore();
+    };
     app.querySelector('[data-a="go-help"]').onclick = renderHelp;
     app.querySelector('[data-a="go-support"]').onclick = function () {
       fetch('/app/api/support/start?init_data=' + encodeURIComponent(initData), { method: 'POST' })
         .then(function (r) { return r.json(); }).then(function (d) {
           if (d.ok) {
-            // Бот уже написал «напишите ваше сообщение» — ведём юзера в чат.
-            try { if (api.openMaxLink) api.openMaxLink('https://max.ru/' + (window.BOT_NAME || '')); } catch (e) {}
+            try { if (api.openMaxLink) api.openMaxLink('https://max.ru/'); } catch (e) {}
             var card = app.querySelector('[data-a="go-support"] .meta');
             if (card) card.textContent = '✅ Бот написал вам в чат — продолжите там';
           }
@@ -733,179 +1098,29 @@
     };
   }
 
-  // ---------- Справка (внутренний экран: аппаратный «назад» не закрывает апп) ----------
   function renderHelp() {
     state.view = 'detail';
     fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    app.innerHTML = header('📚 Справка', 'как всё работает', true) +
-      '<div class="card"><div class="title">🎁 Розыгрыши</div>' +
-      '<div class="meta">Создайте розыгрыш (кнопка «＋»): текст поста, фото/видео, каналы публикации и подписки, победители, время итогов. Пост выходит в каналы с кнопкой участия; бот проверяет подписки, показывает капчу, честно выбирает победителей и уведомляет их. Готовый пост можно отправить себе в чат из карточки розыгрыша.</div></div>' +
-      '<div class="card"><div class="title">🔗 Трекинг</div>' +
-      '<div class="meta">Ссылка на каждую закупку: кто кликнул, кто подписался, кто отписался и когда. Уникальная — ведёт на последний пост канала; Супер — на конкретный пост (только публичный канал); Конкурсная — пачкой по одному на каждый выбранный канал. Стоимость размещения считает цену подписчика (грязную и чистую).</div></div>' +
-      '<div class="card"><div class="title">📢 Каналы</div>' +
-      '<div class="meta">Добавляйте каналы, где бот админ (права «Читать все сообщения» и «Публиковать»). Публичные — по @username или ссылке; приватные — перешлите пост из канала боту в чат.</div></div>' +
-      '<div class="card"><div class="title">📊 Показатели</div>' +
-      '<div class="meta">Клики — переходы по ссылке. Подписки — вступившие в канал. Удержание — сколько подписчиков осталось через 1/3/7/14/30 дней. CPA грязный — стоимость/все подписавшиеся; чистый — стоимость/оставшиеся. Конверсия — подписки/клики.</div></div>' +
-      '<div class="card"><div class="title">🆘 Поддержка</div>' +
-      '<div class="meta">Вопросы и пожелания — напишите боту в чат, мы отвечаем.</div></div>';
-    if (backBtn) onBack(renderMore);
+    onBack(renderMore);
+    app.innerHTML = roleswitch() + header('Справка', 'как всё работает', true) +
+      '<div class="card"><div class="title">Розыгрыши</div><div class="meta">Создайте розыгрыш: текст поста, фото/видео, каналы, победители, время итогов. Пост выходит в каналы с кнопкой участия; бот проверяет подписки, показывает капчу, выбирает победителей.</div></div>' +
+      '<div class="card"><div class="title">Трекинг</div><div class="meta">Ссылка на каждую закупку: кто кликнул, кто подписался, кто отписался. Уникальная — на последний пост канала; Супер — на конкретный пост; Конкурсная — пачкой по каналам.</div></div>' +
+      '<div class="card"><div class="title">Каналы</div><div class="meta">Добавляйте каналы, где бот админ. Публичные — по @username или ссылке; приватные — перешлите пост из канала боту в чат.</div></div>' +
+      '<div class="card"><div class="title">Показатели</div><div class="meta">Клики — переходы. Подписки — вступившие. Удержание — осталось через 1/3/7/14/30 дней. CPA грязный — стоимость/все, чистый — стоимость/оставшиеся. Конверсия — подписки/клики.</div></div>';
+    bindRoleSwitch();
     document.getElementById('hb').onclick = renderMore;
   }
 
-  // ---------- Создание трекинг-ссылки ----------
-  function renderTrackingCreate() {
-    state.view = 'create';
-    if (backBtn) backBtn.show();
-    app.innerHTML = header('Трекинг-ссылка', '', true) +
-      '<label class="lbl" style="margin-top:0">Шаг 1 · Канал, на который будет вести ссылка *</label><div id="t-chs"></div>' +
-      '<div id="t-rest" class="hidden">' +
-      '<label class="lbl">Шаг 2 · Механика</label>' +
-      '<div class="seg" id="t-mode"><div class="chip on" data-v="ads">📣 Реклама</div><div class="chip" data-v="contest">🏁 Конкурс</div></div>' +
-      '<div id="t-ads">' +
-      '<label class="lbl">Название ссылки *</label>' +
-      '<input class="inp" id="t-name" placeholder="Например: Реклама у Иванова">' +
-      '<label class="lbl">Стоимость размещения, ₽ — посчитаем цену за подписчика (необязательно)</label>' +
-      '<input class="inp" id="t-cost" type="number" placeholder="1500">' +
-      '<div id="t-type-w"><label class="lbl">Тип ссылки</label>' +
-      '<div class="seg" id="t-type"><div class="chip on" data-v="unique">Уникальная (на канал)</div><div class="chip" data-v="super">Супер (на конкретный пост)</div></div>' +
-      '<div id="t-post-w" class="hidden"><label class="lbl">Ссылка на пост (https://max.ru/channel/post)</label>' +
-      '<input class="inp" id="t-post" placeholder="https://max.ru/mychannel/42"></div></div>' +
-      '</div>' +
-      '<div id="t-contest" class="hidden">' +
-      '<label class="lbl">Название (для всей группы ссылок) *</label>' +
-      '<input class="inp" id="t-name2" placeholder="Например: Новый год">' +
-      '<div class="meta">Конкурс — это когда люди выполняют условия розыгрыша (подписка на ваши каналы), а вы среди них выбираете победителя. Ссылки этого типа ведут на последний пост канала — туда, где вы опубликуете условия. Под каждый выбранный канал создаётся своя ссылка.</div>' +
-      '</div>' +
-      '<button class="btn" id="t-go">✅ Создать ссылку</button>' +
-      '<div class="msg" id="t-msg"></div><div id="t-result"></div></div>';
-    if (backBtn) onBack(renderTrackingTab);
-    document.getElementById('hb').onclick = renderTrackingTab;
-
-    // Черновик трекинг-формы.
-    var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
-    if (restoreDraft(DRAFT_TR_KEY, TR_FIELDS)) {
-      showMsg('t-msg', '📝 Восстановлен несохранённый черновик', false);
-    }
-    autosaveDraft(DRAFT_TR_KEY, TR_FIELDS);
-
-    var adsCh = 0, contestSel = [];
-    GET('/app/api/analytics/channels').then(function (d) {
-      var chs = (d.channels || []).filter(function (c) { return c.admin; });
-
-      // Шаг 1: выбор канала (клик по нему открывает остальную форму).
-      function renderChPick() {
-        document.getElementById('t-chs').innerHTML = chs.map(function (c) {
-          return '<div class="chip ' + (adsCh === c.id ? 'on' : '') + '" data-pid="' + c.id + '" data-pub="' + (c.is_public ? 1 : 0) + '">' +
-            (adsCh === c.id ? '✓ ' : '') + esc(c.title) + '</div>';
-        }).join('') || '<div class="meta">Нет каналов — добавьте во вкладке «📻 Каналы»</div>';
-        document.querySelectorAll('[data-pid]').forEach(function (el) {
-          el.onclick = function () {
-            adsCh = parseInt(el.getAttribute('data-pid'), 10);
-            document.getElementById('t-rest').classList.remove('hidden');
-            // Приватный канал: супер-ссылка невозможна — прячем выбор типа.
-            var isPub = el.getAttribute('data-pub') === '1';
-            document.getElementById('t-type-w').classList.toggle('hidden', !isPub);
-            if (!isPub) segSet('t-type', 'unique');
-            typeChanged();
-            persistDraft(DRAFT_TR_KEY, TR_FIELDS, { adsCh: adsCh });
-            document.getElementById('t-chs').scrollIntoView({ behavior: 'smooth', block: 'start' });
-          };
-        });
-        // Восстановить выбранный канал из черновика.
-        var d0 = loadDraft(DRAFT_TR_KEY) || {};
-        if (!adsCh && d0.adsCh && chs.some(function (c) { return c.id === d0.adsCh; })) {
-          adsCh = d0.adsCh;
-          var el = document.querySelector('[data-pid="' + adsCh + '"]');
-          if (el) {
-            document.getElementById('t-rest').classList.remove('hidden');
-            var isPub = el.getAttribute('data-pub') === '1';
-            document.getElementById('t-type-w').classList.toggle('hidden', !isPub);
-            if (!isPub) segSet('t-type', 'unique');
-            typeChanged();
-          }
-        }
-      }
-      renderChPick();
-
-      function segSet(id, v) {
-        document.querySelectorAll('#' + id + ' .chip').forEach(function (c) {
-          c.classList.toggle('on', c.getAttribute('data-v') === v);
-        });
-      }
-      segBind('t-mode', function (v) {
-        document.getElementById('t-ads').classList.toggle('hidden', v !== 'ads');
-        document.getElementById('t-contest').classList.toggle('hidden', v !== 'contest');
-      });
-      segBind('t-type', function () { typeChanged(); });
-      function typeChanged() {
-        document.getElementById('t-post-w').classList.toggle('hidden', segVal('t-type') !== 'super');
-      }
-      typeChanged();
-
-      document.getElementById('t-go').onclick = function () {
-        var mode = segVal('t-mode');
-        var body;
-        if (mode === 'contest') {
-          body = { mode: 'contest', channel_ids: [adsCh].concat(contestSel), name: document.getElementById('t-name2').value.trim() };
-          if (!body.name) return showMsg('t-msg', 'Введите название', true);
-        } else {
-          body = { mode: 'ads', channel_id: adsCh, name: document.getElementById('t-name').value.trim(),
-                   cost: parseFloat(document.getElementById('t-cost').value || '0') || 0,
-                   link_type: segVal('t-type'), post_ref: document.getElementById('t-post').value.trim() };
-          if (!body.name) return showMsg('t-msg', 'Введите название', true);
-          if (body.link_type === 'super' && !body.post_ref) return showMsg('t-msg', 'Вставьте ссылку на пост', true);
-        }
-        showMsg('t-msg', '⏳ Создаю…');
-        POST('/app/api/tracking/create', body).then(function (d) {
-          if (!d.ok) return showMsg('t-msg', '⚠️ ' + (d.error || 'ошибка'), true);
-          clearDraft(DRAFT_TR_KEY);
-          var bot = d.bot || '';
-          var links = (d.codes || []).map(function (c) { return 'https://max.ru/' + bot + '?startapp=u_' + c; });
-          showMsg('t-msg', '✅ Готово!');
-          document.getElementById('t-result').innerHTML =
-            '<div class="card">' + links.map(function (l) {
-              return '<div class="linkline" style="font-size:13px;color:var(--text)">' + esc(l) + '</div>';
-            }).join('') +
-            '<button class="btn sec sm" id="t-copy" style="margin-top:10px">📋 Скопировать</button></div>';
-          document.getElementById('t-copy').onclick = function () {
-            if (navigator.clipboard) navigator.clipboard.writeText(links.join('\n'));
-            this.textContent = '✅ Скопировано';
-          };
-        });
-      };
-    });
+  // ---------- Роутер ----------
+  function render() {
+    if (role === 'participant') renderParticipant();
+    else { organizerTabs(); renderOrganizer(); }
   }
-
-  // ============ таб-бар ============
-  function switchTab(tab) {
-    state.tab = tab;
-
-    tabbar.querySelectorAll('.tab').forEach(function (t) {
-      t.classList.toggle('on', t.getAttribute('data-tab') === tab);
-    });
-    if (tab === 'gw') renderGiveaways();
-    else if (tab === 'tr') renderTrackingTab();
-    else if (tab === 'ch') renderChannelsTab();
-    else renderMore();
-  }
-  tabbar.querySelectorAll('.tab').forEach(function (t) {
-    t.onclick = function () { switchTab(t.getAttribute('data-tab')); };
-  });
-
-  function bind() {
-    // Фильтры/сортировки переехали в дропдауны иконок ⚙; чипы-тулбары больше
-    // не рендерятся в основных списках.
-  }
-  function refresh() {
-    if (state.view === 'detail' && state.chID) renderChannel(state.chID, state.chTitle);
-    else if (state.tab === 'tr') renderTrackingTab();
-    else if (state.tab === 'ch') renderChannelsTab();
-  }
-
   tabbar.classList.remove('hidden');
-  switchTab('gw');
+  render();
 })();
+
 </script>
 </body>
 </html>
