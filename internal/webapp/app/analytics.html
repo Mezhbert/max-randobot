@@ -678,7 +678,14 @@
         var nm0 = val('f-name') || (loadDraft(DRAFT_GW_KEY) || {})['f-name'] || '';
         if (!nm0) return showMsg('f-msg', 'Введите название — по нему найдёте черновик', true);
         var dcur0 = loadDraft(DRAFT_GW_KEY) || {};
-        if (dcur0.giveaway_id) { gotoStep(1); return; }
+        if (dcur0.giveaway_id) {
+          // Существующий черновик: обновляем имя сразу (вместе со ссылками —
+          // лечит старые «без названия» одним прохождением шага).
+          POST('/app/api/giveaways/rename', { giveaway_id: dcur0.giveaway_id, name: nm0 })
+            .then(function () { gotoStep(1); })
+            .catch(function () { gotoStep(1); });
+          return;
+        }
         // Черновик создаётся сразу С названием — узнаваем в «Мои розыгрыши»,
         // ссылки генерируются уже с именем.
         showMsg('f-msg', '⏳ Сохраняю…');
@@ -1021,7 +1028,8 @@
   function hydrateWizardFromServer(g) {
     if (!g) return;
     var d = loadDraft(DRAFT_GW_KEY) || {};
-    d.step = 3;
+    // Без названия — начинаем с «Название» (сразу введёт, ссылки переименуются).
+    d.step = (g.name || '') ? 3 : 0;
     d.giveaway_id = g.giveaway_id;
     d['f-post'] = g.post_text || '';
     d['f-name'] = g.name || '';

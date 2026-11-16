@@ -49,6 +49,15 @@ func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64,
 	return id, err
 }
 
+// UpdateUTMLinkSource — переименовать ссылку (source + campaign) — вызывается
+// при переименовании розыгрыша, чтобы имена ссылок остались консистентными.
+func (s *Store) UpdateUTMLinkSource(ctx context.Context, id int64, source string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE utm_links SET source=$2, campaign=$2 WHERE id=$1
+	`, id, source)
+	return err
+}
+
 // HasGiveawayChannelLink — есть ли уже ссылка, привязанная к розыгрышу,
 // для этого канала (дедуп автогенерации: повторный заход в визард не плодит копии).
 func (s *Store) HasGiveawayChannelLink(ctx context.Context, giveawayID, channelID int64) (bool, error) {
