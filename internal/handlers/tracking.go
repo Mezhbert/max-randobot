@@ -839,6 +839,12 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 		set("name", in.Name)
 	}
 	if in.PostText != "" {
+		// Markdown-посты (миниапп): голые URL оборачиваются в [url](url) —
+		// чистый URL в markdown-посте может не стать кликабельным. Чат-мастер
+		// шлёт формат '' (plain) — там текст не трогаем, обёртка была бы видна.
+		if in.PostFormat == "markdown" {
+			in.PostText = util.AutoLinkMarkdown(in.PostText)
+		}
 		set("post_text", in.PostText)
 	}
 	if in.PostFormat != "" {
