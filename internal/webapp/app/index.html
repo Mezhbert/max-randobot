@@ -445,14 +445,23 @@
       '<label class="lbl" style="margin-top:0">Итоги подвести</label>' +
       '<div class="seg" id="f-finmode"><div class="chip on" data-v="time">⏰ По времени</div><div class="chip" data-v="count">👥 По числу</div></div>' +
       '<div id="f-fintime"><label class="lbl">Дата итогов (МСК) — ДД.ММ.ГГГГ ЧЧ:ММ</label>' +
-      '<input class="inp" id="f-finat" placeholder="' + defaultFinish() + '"></div>' +
+      '<input class="inp" id="f-finat" inputmode="numeric" placeholder="' + defaultFinish() + '">' +
+      '<div class="seg" style="margin-top:6px">' +
+        '<div class="chip" data-dd="1" data-h="21">Завтра 21:00</div>' +
+        '<div class="chip" data-dd="3" data-h="21">+3 дня</div>' +
+        '<div class="chip" data-dd="7" data-h="21">+7 дней</div></div>' +
+      '<div class="meta" id="f-finval" style="margin-top:4px"></div></div>' +
       '<div id="f-fincount" class="hidden"><label class="lbl">Целевое число участников (от 10)</label>' +
       '<input class="inp" id="f-fincnt" type="number" placeholder="100" min="10"></div>';
     else if (step === 4) html +=
       '<label class="lbl" style="margin-top:0">Старт публикации</label>' +
       '<div class="seg" id="f-pubmode"><div class="chip on" data-v="now">🚀 Сразу</div><div class="chip" data-v="at">🕐 По времени</div></div>' +
-      '<div id="f-pubat-w" class="hidden"><label class="lbl">Дата публикации (МСК)</label>' +
-      '<input class="inp" id="f-pubat" placeholder="ДД.ММ.ГГГГ ЧЧ:ММ"></div>';
+      '<div id="f-pubat-w" class="hidden"><label class="lbl">Дата публикации (МСК) — ДД.ММ.ГГГГ ЧЧ:ММ</label>' +
+      '<input class="inp" id="f-pubat" inputmode="numeric" placeholder="ДД.ММ.ГГГГ ЧЧ:ММ">' +
+      '<div class="seg" style="margin-top:6px">' +
+        '<div class="chip" data-dd="0" data-h="now">Через час</div>' +
+        '<div class="chip" data-dd="1" data-h="12">Завтра 12:00</div></div>' +
+      '<div class="meta" id="f-pubval" style="margin-top:4px"></div></div>';
     else html +=
       '<label class="lbl" style="margin-top:0">Дополнительно</label>' +
       '<div class="seg"><div class="chip on" id="f-captcha">🛡 Капча</div><div class="chip" id="f-referral">👥 Друзья</div><div class="chip on" id="f-resinpost">📍 Итоги в посте</div></div>' +
@@ -590,6 +599,8 @@
     segBind('f-pubmode', function (v) {
       document.getElementById('f-pubat-w').classList.toggle('hidden', v !== 'at');
     });
+    if (document.getElementById('f-finat')) bindDateField('f-finat', 'f-finval');
+    if (document.getElementById('f-pubat')) bindDateField('f-pubat', 'f-pubval');
     toggleBind('f-captcha'); toggleBind('f-referral'); toggleBind('f-resinpost');
     // Восстановить тогглы
     if (dd.captcha === false) chipOff('f-captcha');
@@ -645,6 +656,17 @@
       var body = collect(saveDraftFlag);
       if (!body.post_text && !body.media_tokens.length) return showMsg('f-msg', 'Заполните шаг 1: текст поста или медиа', true);
       if (!body.pub_channels.length) return showMsg('f-msg', 'Заполните шаг 2: выберите каналы публикации', true);
+      if (!saveDraftFlag) {
+        // Даты: клиентская проверка формата до запроса (сервер валидирует так же).
+        if (body.finish_mode === 'time' && body.finish_at && !dateOK(body.finish_at))
+          return showMsg('f-msg', 'Дата итогов: формат ДД.ММ.ГГГГ ЧЧ:ММ', true);
+        if (body.finish_mode === 'count' && body.finish_count < 10)
+          return showMsg('f-msg', 'Целевое число участников — от 10', true);
+        if (!body.publish_now && !body.publish_at)
+          return showMsg('f-msg', 'Укажите дату публикации или выберите «🚀 Сразу»', true);
+        if (!body.publish_now && body.publish_at && !dateOK(body.publish_at))
+          return showMsg('f-msg', 'Дата публикации: формат ДД.ММ.ГГГГ ЧЧ:ММ', true);
+      }
       showMsg('f-msg', '⏳ Сохраняю…');
       POST('/app/api/giveaways/create', body).then(function (d) {
         if (d.ok) { clearDraft(DRAFT_GW_KEY); showMsg('f-msg', saveDraftFlag ? '✅ Черновик сохранён' : '✅ Розыгрыш создан! Пост уже в каналах.'); setTimeout(renderGiveaways, 1200); }
@@ -708,6 +730,46 @@
   function showMsg(id, text, isErr) {
     var el = document.getElementById(id);
     if (el) { el.textContent = text; el.className = 'msg ' + (isErr ? 'err' : 'ok'); }
+  }
+  // Дата-хелперы: форматирование, проверка ДД.ММ.ГГГГ ЧЧ:ММ и живое поле
+  // (текстовый ввод без системного пикера — в вебвью MAX его скролл
+  // ненадёжен; быстрые чипы закрывают типовые случаи одним тапом).
+  function fmtDT(d) {
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function dateOK(v) {
+    var m = /^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})$/.exec(v || '');
+    if (!m) return false;
+    var d = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]);
+    return d.getDate() === +m[1] && d.getMonth() === +m[2] - 1 &&
+           d.getHours() === +m[4] && d.getMinutes() === +m[5];
+  }
+  function bindDateField(inpId, hintId) {
+    var inp = document.getElementById(inpId), hint = document.getElementById(hintId);
+    if (!inp) return;
+    function show() {
+      if (!hint) return;
+      if (!inp.value) { hint.textContent = ''; return; }
+      var ok = dateOK(inp.value);
+      hint.textContent = ok ? '✓ дата распознана' : '✗ формат ДД.ММ.ГГГГ ЧЧ:ММ';
+      hint.style.color = ok ? 'var(--muted)' : '#c66';
+    }
+    inp.addEventListener('input', show);
+    show();
+    inp.parentElement.querySelectorAll('[data-dd]').forEach(function (c) {
+      c.onclick = function () {
+        var d;
+        if (c.getAttribute('data-h') === 'now') d = new Date(Date.now() + 3600000);
+        else {
+          d = new Date();
+          d.setDate(d.getDate() + parseInt(c.getAttribute('data-dd'), 10));
+          d.setHours(parseInt(c.getAttribute('data-h'), 10), 0, 0, 0);
+        }
+        inp.value = fmtDT(d);
+        inp.dispatchEvent(new Event('input'));
+      };
+    });
   }
   function defaultFinish() {
     var d = new Date(); d.setDate(d.getDate() + 1);
