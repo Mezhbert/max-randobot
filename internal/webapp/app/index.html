@@ -426,7 +426,7 @@
         '<input class="inp" id="f-linkurl" placeholder="https://…" style="margin-top:0;flex:1">' +
         '<button class="btn sm" id="f-linkok" style="margin-top:0">Вставить</button>' +
       '</div>' +
-      '<div class="meta">Ж — *жирный*, К — _курсив_, З — ~зачёркнутый~, 🔗 — [текст](ссылка). Ссылки в тексте кликабельны в канале.</div>' +
+      '<div class="meta">Ж — **жирный**, К — _курсив_, З — ~~зачёркнутый~~, 🔗 — [текст](ссылка). Выделения и ссылки работают в посте канала.</div>' +
       '<label class="lbl">Фото / видео (до 50 МБ)</label>' +
       '<div class="thumbs" id="f-media"></div>' +
       '<button class="btn sec sm" id="f-addmedia" style="margin-top:8px">＋ Добавить медиа</button>' +
@@ -621,6 +621,7 @@
       var pub = segVal('f-pubmode') || dd.publish_mode || 'now';
       return {
         post_text: val('f-post') || dd['f-post'] || '',
+        post_format: 'markdown',
         media_tokens: media,
         pub_channels: pubSel.length ? pubSel : (dd.pub_channels || []),
         sub_channels: subSel.length ? subSel : (dd.sub_channels || []),
@@ -671,7 +672,7 @@
       }
       return;
     } else {
-      var m = { b: '*', i: '_', s: '~' }[kind];
+      var m = { b: '**', i: '_', s: '~~' }[kind];
       // Тоггл: если уже обёрнуто — снять.
       if (v.slice(s - m.length, s) === m && v.slice(e, e + m.length) === m) {
         el.value = v.slice(0, s - m.length) + sel + v.slice(e + m.length);
