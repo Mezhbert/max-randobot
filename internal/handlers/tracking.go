@@ -1088,9 +1088,11 @@ func (b *Bot) CreateTrackingForGiveaway(ctx context.Context, uid, giveawayID int
 	if err != nil || g.Status != store.StatusDraft {
 		return nil, "Розыгрыш не найден или уже опубликован", nil
 	}
-	if g.Name == "" && strings.TrimSpace(draftName) != "" {
-		if uerr := b.db.UpdateGiveawayFieldAny(ctx, giveawayID, "name", strings.TrimSpace(draftName)); uerr == nil {
-			g.Name = strings.TrimSpace(draftName)
+	if nm := strings.TrimSpace(draftName); nm != "" && nm != g.Name {
+		// Имя из визарда пишем сразу (не только когда пусто): черновик в списке
+		// узнаваем с первого шага, ссылки именуются актуальным названием.
+		if uerr := b.db.UpdateGiveawayFieldAny(ctx, giveawayID, "name", nm); uerr == nil {
+			g.Name = nm
 		}
 	}
 	base := ifEmpty(g.Name, "Розыгрыш #"+strconv.FormatInt(giveawayID, 10))

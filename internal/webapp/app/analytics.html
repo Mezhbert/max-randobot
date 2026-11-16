@@ -606,7 +606,7 @@
       '<div class="meta">Подписка нужна не на все каналы публикации — уберите лишние в выборе. Пусто = без проверки подписки.</div>' +
       '<div class="meta" id="f-linksinfo"></div>';
     else if (step === 2) html +=
-      '<div class="meta" style="margin-top:0">Ссылки считают переходы с каждого канала, где выйдет пост. Отметьте каналы и сгенерируйте скоп — он привяжется к розыгрышу.</div>' +
+      '<div class="meta" style="margin-top:0">Ссылки считают переходы с каждого канала, где выйдет пост. Отметьте каналы и сгенерируйте ссылки — они привяжутся к розыгрышу.</div>' +
       '<div id="f-chsel" class="pick"></div>' +
       '<button class="btn" id="f-genlinks">🔗 Сгенерировать ссылки для отмеченных</button>' +
       '<div id="f-scope"></div>' +
@@ -675,13 +675,31 @@
     if (step > 0) document.getElementById('wz-prev').onclick = function () { gotoStep(step - 1); };
     if (step < 6) document.getElementById('wz-next').onclick = function () {
       if (step === 0) {
-        if (!val('f-name') && !(loadDraft(DRAFT_GW_KEY) || {})['f-name']) return showMsg('f-msg', 'Введите название — по нему найдёте черновик', true);
-        gotoStep(1); return;
+        var nm0 = val('f-name') || (loadDraft(DRAFT_GW_KEY) || {})['f-name'] || '';
+        if (!nm0) return showMsg('f-msg', 'Введите название — по нему найдёте черновик', true);
+        var dcur0 = loadDraft(DRAFT_GW_KEY) || {};
+        if (dcur0.giveaway_id) { gotoStep(1); return; }
+        // Черновик создаётся сразу С названием — узнаваем в «Мои розыгрыши»,
+        // ссылки генерируются уже с именем.
+        showMsg('f-msg', '⏳ Сохраняю…');
+        POST('/app/api/giveaways/draft', { name: nm0 }).then(function (d) {
+          if (!d.ok) throw 0;
+          var dd2 = loadDraft(DRAFT_GW_KEY) || {};
+          dd2.giveaway_id = d.giveaway_id;
+          saveDraft(DRAFT_GW_KEY, dd2);
+          showMsg('f-msg', '');
+          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { giveaway_id: d.giveaway_id, step: 1 });
+          renderGwWizard(1);
+        }).catch(function () {
+          showMsg('f-msg', '⚠️ Не удалось сохранить черновик — проверьте соединение', true);
+        });
+        return;
       }
       if (step === 1) {
         var d0 = loadDraft(DRAFT_GW_KEY) || {};
         if (!(pubSel.length ? pubSel : (d0.pub_channels || [])).length) return showMsg('f-msg', 'Выберите хотя бы один канал публикации', true);
-        ensureDraftAndLinks(); return; // переход после генерации ссылок
+        persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: 2 });
+        renderGwWizard(2); return;
       }
       if (step === 3 && !val('f-post') && !media.length) return showMsg('f-msg', 'Добавьте текст поста или медиа', true);
       gotoStep(step + 1);
@@ -798,7 +816,7 @@
       if (!scope) return;
       var totC = 0, totS = 0;
       links.forEach(function (l) { totC += l.clicks || 0; totS += l.signups || 0; });
-      scope.innerHTML = '<div class="sect">Скоп ссылок розыгрыша · ' + links.length + '</div>' +
+      scope.innerHTML = '<div class="sect">Ссылки розыгрыша · ' + links.length + '</div>' +
         (links.length ? '<div class="card"><div class="stats">' +
           '<div class="stat"><div class="num">' + totC + '</div><div class="lbl">клики (сумма)</div></div>' +
           '<div class="stat"><div class="num">' + totS + '</div><div class="lbl">подписки (сумма)</div></div>' +
@@ -836,25 +854,6 @@
       // Черновик сохранён — из Трекинга вернётесь через «Создать розыгрыш».
       state.tab = 'tr'; state.view = 'tab'; render();
     };
-
-    function ensureDraftAndLinks() {
-      showMsg('f-msg', '⏳ Готовлю ссылки под каналы…');
-      var needDraft = !dd.giveaway_id;
-      var p = needDraft
-        ? POST('/app/api/giveaways/draft', {}).then(function (d) {
-            if (!d.ok) throw 0;
-            dd.giveaway_id = d.giveaway_id;
-            persistDraft(DRAFT_GW_KEY, GW_FIELDS, { giveaway_id: d.giveaway_id, step: 1 });
-            return d.giveaway_id;
-          })
-        : Promise.resolve(dd.giveaway_id);
-      p.then(function (gid) {
-        persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: 2 });
-        renderGwWizard(2);
-      }).catch(function () {
-        showMsg('f-msg', '⚠️ Не удалось подготовить черновик — проверьте соединение', true);
-      });
-    }
 
     // ---------- Шаг «Пост»: форматирование + вшивание ссылок + медиа ----------
     app.querySelectorAll('[data-fmt]').forEach(function (b) {
@@ -1209,9 +1208,9 @@
       '<div id="t-type-w"><label class="lbl">Тип ссылки</label>' +
       '<div class="seg" id="t-type"><div class="chip on" data-v="unique">Уникальная (на канал)</div><div class="chip" data-v="super">Супер (на конкретный пост)</div></div></div>' +
       '</div>' +
-      '<label class="lbl">Привязать к розыгрышу (скоп статистики)</label>' +
+      '<label class="lbl">Привязать к розыгрышу (общая статистика)</label>' +
       '<div class="card tap" data-a="t-gwpick" style="margin-top:4px"><div class="row"><div class="title" id="t-gwsum">Без привязки</div><span>→</span></div></div>' +
-      '<div class="meta">Привязанная ссылка встанет в скоп розыгрыша — общая статистика в карточке розыгрыша и на шаге «Ссылки».</div>' +
+      '<div class="meta">Привязанная ссылка попадёт в общую статистику розыгрыша (карточка розыгрыша и шаг «Ссылки»).</div>' +
       '<div id="t-contest" class="hidden">' +
       '<label class="lbl">Название (для всей группы ссылок) *</label>' +
       '<input class="inp" id="t-name2" placeholder="Например: Новый год">' +
@@ -1429,17 +1428,46 @@
         var links = d.links || [];
         if (state.filter !== 'all') links = links.filter(function (l) { return l.type === state.filter; });
         var tm = { unique:'Уникальная', super:'Супер', contest:'Конкурсная' };
-        document.getElementById('list').innerHTML = links.map(function (l) {
-          return '<div class="card tap" data-a="link" data-id="' + l.id + '">' +
-            '<div class="row"><div class="title">' + esc(l.name) + '</div><span class="badge ' + (l.type === 'contest' ? 'inv' : '') + '">' + (tm[l.type] || l.type) + '</span></div>' +
-            (l.post_ref ? '<div class="linkline">⚡ ' + esc(l.post_ref) + '</div>' : '') +
+        // Группировка по розыгрышам: карточка розыгрыша (общая стата по его
+        // ссылкам в ЭТОМ канале), внутри — ссылки с разбивкой по источникам.
+        var groups = {}, order = [];
+        links.forEach(function (l) {
+          var k = l.giveaway_id || 0;
+          if (!groups[k]) { groups[k] = { name: l.giveaway_name || '', links: [], clicks: 0, signups: 0 }; order.push(k); }
+          groups[k].links.push(l);
+          groups[k].clicks += l.clicks || 0;
+          groups[k].signups += l.signups || 0;
+        });
+        document.getElementById('list').innerHTML = order.map(function (k) {
+          var gr = groups[k];
+          if (k === 0) {
+            // Без розыгрыша — как раньше, плоско.
+            return gr.links.map(function (l) {
+              return '<div class="card tap" data-a="link" data-id="' + l.id + '">' +
+                '<div class="row"><div class="title">' + esc(l.name) + '</div><span class="badge ' + (l.type === 'contest' ? 'inv' : '') + '">' + (tm[l.type] || l.type) + '</span></div>' +
+                (l.post_ref ? '<div class="linkline">⚡ ' + esc(l.post_ref) + '</div>' : '') +
+                '<div class="stats">' +
+                '<div class="stat"><div class="num">' + fmt(l.clicks) + '</div><div class="lbl">клики</div></div>' +
+                '<div class="stat"><div class="num">' + fmt(l.signups) + '</div><div class="lbl">подписки</div></div>' +
+                '<div class="stat"><div class="num">' + fmt(l.still_in) + '</div><div class="lbl">остались</div></div></div></div>';
+            }).join('');
+          }
+          return '<div class="card" style="background:var(--card2)">' +
+            '<div class="row"><div class="title">🎁 ' + esc(gr.name || ('Розыгрыш #' + k)) + '</div>' +
+            '<span class="badge inv">' + gr.links.length + ' ссыл.</span></div>' +
             '<div class="stats">' +
-            '<div class="stat"><div class="num">' + fmt(l.clicks) + '</div><div class="lbl">клики</div></div>' +
-            '<div class="stat"><div class="num">' + fmt(l.signups) + '</div><div class="lbl">подписки</div></div>' +
-            '<div class="stat"><div class="num">' + fmt(l.still_in) + '</div><div class="lbl">остались</div></div></div></div>';
+            '<div class="stat"><div class="num">' + fmt(gr.clicks) + '</div><div class="lbl">клики (всего)</div></div>' +
+            '<div class="stat"><div class="num">' + fmt(gr.signups) + '</div><div class="lbl">подписки (всего)</div></div>' +
+            '<div class="stat"><div class="num">' + Math.round(gr.signups / (gr.clicks || 1) * 100) + '%</div><div class="lbl">конверсия</div></div></div>' +
+            gr.links.map(function (l) {
+              return '<div class="card tap" data-a="link" data-id="' + l.id + '" style="margin-top:8px">' +
+                '<div class="row"><div class="title" style="font-size:13.5px">' + esc(l.name) + '</div>' +
+                '<span class="badge">' + (tm[l.type] || l.type) + '</span></div>' +
+                '<div class="meta">' + fmt(l.clicks) + ' кликов · ' + fmt(l.signups) + ' подписок · ' + fmt(l.still_in) + ' остались</div></div>';
+            }).join('') + '</div>';
         }).join('') || '<div class="empty">Ссылок этого типа нет</div>';
         app.querySelectorAll('.card[data-a="link"]').forEach(function (c) {
-          c.onclick = function () { renderLink(parseInt(c.getAttribute('data-id'), 10)); };
+          c.onclick = function (e) { renderLink(parseInt(c.getAttribute('data-id'), 10)); };
         });
       });
   }

@@ -66,7 +66,7 @@ type Deps struct {
 
 	// Визард «каналы → ссылки → пост»: черновик под розыгрыш, автогенерация
 	// уникальных ссылок под выбранные каналы, гидрация редактуры (handlers).
-	CreateDraftGiveaway func(ctx context.Context, uid int64) (int64, string, error)
+	CreateDraftGiveaway func(ctx context.Context, uid int64, name string) (int64, string, error)
 	TrackingForGiveaway func(ctx context.Context, uid, giveawayID int64, channelIDs []int64, draftName string) ([]LinkForGiveawayOut, string, error)
 	GiveawayForEdit     func(ctx context.Context, uid, giveawayID int64) (GiveawayEditOut, string, error)
 	GiveawayLinks       func(ctx context.Context, uid, giveawayID int64) ([]LinkForGiveawayOut, string, error)
@@ -558,7 +558,9 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		gid, vmsg, err := d.CreateDraftGiveaway(r.Context(), userID)
+		var req struct{ Name string `json:"name"` }
+		_ = json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req)
+		gid, vmsg, err := d.CreateDraftGiveaway(r.Context(), userID, req.Name)
 		if err != nil {
 			log.Warn("app draft giveaway", "err", err, "user", userID)
 			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
@@ -858,6 +860,15 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			writeJSON(w, map[string]any{"error": "db"})
 			return
 		}
+		// Названия розыгрышей для группировки ссылок в экране канала.
+		gwNames := map[int64]string{}
+		for _, st := range stats {
+			if st.GiveawayID > 0 && gwNames[st.GiveawayID] == "" {
+				if gg, gerr := d.DB.GetGiveawayAny(r.Context(), st.GiveawayID); gerr == nil && gg.OwnerUserID == userID {
+					gwNames[st.GiveawayID] = gg.Name
+				}
+			}
+		}
 		// Сортировка: date DESC (SQL) — по умолчанию; name — по алфавиту.
 		if r.URL.Query().Get("sort") == "name" {
 			sort.Slice(stats, func(i, j int) bool { return stats[i].Source < stats[j].Source })
@@ -878,6 +889,8 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			Ret30d  int     `json:"ret_30d"`
 			Conv    float64 `json:"conv"`
 			URL     string  `json:"url"` // диплинк (для «вшить ссылку» из визарда)
+			GwID    int64   `json:"giveaway_id"`
+			GwName  string  `json:"giveaway_name"` // группировка «канал → розыгрыш → ссылки»
 		}
 		links := make([]linkOut, 0, len(stats))
 		for _, st := range stats {
@@ -895,6 +908,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 				Ret1d: ret.Retained1d, Ret3d: ret.Retained3d, Ret7d: ret.Retained7d,
 				Ret14d: ret.Retained14d, Ret30d: ret.Retained30d, Conv: conv,
 				URL: util.StartappLink(d.BotUsername, "u_"+st.Code),
+				GwID: st.GiveawayID, GwName: gwNames[st.GiveawayID],
 			})
 		}
 		dyn, _ := d.DB.ChannelDynamics(r.Context(), chID, 30)
