@@ -269,6 +269,8 @@
   //  РОЛЬ: УЧАСТНИК (dummy)
   // ================================================================
   function renderParticipant() {
+    // Вход по startapp=participant: роль из localStorage, вкладка ещё организаторская.
+    if (['feed', 'mine', 'pinfo'].indexOf(state.tab) === -1) state.tab = 'feed';
     fab.classList.add('hidden');
     tabbar.innerHTML =
       '<button class="tab ' + (state.tab === 'feed' ? 'on' : '') + '" data-tab="feed"><span class="ico">📻</span>Лента розыгрышей</button>' +
