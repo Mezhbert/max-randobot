@@ -1668,20 +1668,13 @@
     organizerTabs();
     if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
-    var theme = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️ Светлая' : '🌙 Тёмная';
     app.innerHTML = roleswitch() + '<header><div><h1>Инфо</h1></div>' + themeBtn('th') + '</header>' +
-      '<div class="card tap" data-a="theme"><div class="row"><div class="title">Тема оформления</div><span class="badge">' + theme + '</span></div>' +
-      '<div class="meta">переключить чёрно-белую тему</div></div>' +
       '<div class="card tap" data-a="go-help"><div class="row"><div class="title">Справка</div><span>→</span></div>' +
       '<div class="meta">как всё работает</div></div>' +
       '<div class="card tap" data-a="go-support"><div class="row"><div class="title">Поддержка</div><span>→</span></div>' +
       '<div class="meta">написать разработчикам</div></div>';
     bindRoleSwitch();
     bindThemeBtn('th');
-    app.querySelector('[data-a="theme"]').onclick = function () {
-      applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
-      renderMore();
-    };
     app.querySelector('[data-a="go-help"]').onclick = renderHelp;
     app.querySelector('[data-a="go-support"]').onclick = function () {
       fetch('/app/api/support/start?init_data=' + encodeURIComponent(initData), { method: 'POST' })
