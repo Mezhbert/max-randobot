@@ -757,6 +757,7 @@
         title: 'Каналы подписки', selected: subSel,
         onDone: function (sel) {
           subSel = sel; // свободный выбор: любое подмножество, можно пустое
+          dd.sub_set = true; dd.sub_channels = sel; // сводка читает dd — не только localStorage
           persistDraft(DRAFT_GW_KEY, GW_FIELDS, { pub_channels: pubSel, sub_channels: subSel, sub_set: true, step: step });
           refreshStepCh();
         }
