@@ -295,3 +295,30 @@ func TestDeleteGiveaway_FromApp(t *testing.T) {
 	err = s.DeleteGiveaway(ctx, gid, uid)
 	assert.Error(t, err, "повторное удаление — не найден")
 }
+
+func TestArchiveGiveaway(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 7010
+	testutil.EnsureUser(t, s, uid, "archiver")
+
+	g, err := s.CreateDraftGiveaway(ctx, uid, "")
+	require.NoError(t, err)
+
+	require.NoError(t, s.SetGiveawayArchived(ctx, g.ID, uid, true))
+	gg, err := s.GetGiveawayAny(ctx, g.ID)
+	require.NoError(t, err)
+	assert.True(t, gg.Archived, "скрыт в архив")
+
+	require.NoError(t, s.SetGiveawayArchived(ctx, g.ID, uid, false))
+	gg, err = s.GetGiveawayAny(ctx, g.ID)
+	require.NoError(t, err)
+	assert.False(t, gg.Archived, "возвращён из архива")
+
+	// Завершённый тоже удаляется (guard снят).
+	require.NoError(t, s.MarkFinished(ctx, g.ID))
+	require.NoError(t, s.DeleteGiveaway(ctx, g.ID, uid))
+	_, err = s.GetGiveawayAny(ctx, g.ID)
+	assert.Error(t, err, "завершённый удалён навсегда")
+}

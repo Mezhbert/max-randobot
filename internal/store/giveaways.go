@@ -316,10 +316,31 @@ func (s *Store) ListStaleClaimed(ctx context.Context, olderThan time.Time, batch
 	return s.scanGiveaways(rows)
 }
 
-// DeleteGiveaway удаляет розыгрыш (черновики — по ТЗ можно удалять).
+// SetGiveawayArchived — скрыть/вернуть розыгрыш в архив (завершённые
+// убираются из списка, данные и статистика сохраняются).
+func (s *Store) SetGiveawayArchived(ctx context.Context, id, ownerUserID int64, archived bool) error {
+	var val any
+	if archived {
+		val = time.Now().UTC()
+	} else {
+		val = nil
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE giveaways SET archived_at=$3 WHERE id=$1 AND owner_user_id=$2`, id, ownerUserID, val)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteGiveaway удаляет ЛЮБОЙ свой розыгрыш, включая завершённый (участники/
+// подписки сносятся каскадом, трекинг-ссылки отвязываются SET NULL).
 func (s *Store) DeleteGiveaway(ctx context.Context, id, ownerUserID int64) error {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM giveaways WHERE id=$1 AND owner_user_id=$2 AND status!='finished'`, id, ownerUserID)
+		`DELETE FROM giveaways WHERE id=$1 AND owner_user_id=$2`, id, ownerUserID)
 	if err != nil {
 		return err
 	}
@@ -530,7 +551,7 @@ const giveawayCols = `id, owner_user_id, name, post_text, post_format, media_tok
 	publish_at, finish_at, finish_mode, finish_participants_count, winners_count, winners_message,
 	referral_enabled, referral_limit, captcha_mode, captcha_percent, promotion_enabled,
 	draft_step, status, publish_message_ids, results_message_ids, winners_user_ids,
-	winners_notified_user_ids, results_published, channel_select_mid, publish_now, publish_attempts, created_at, updated_at`
+	winners_notified_user_ids, results_published, channel_select_mid, publish_now, publish_attempts, created_at, updated_at, archived_at`
 
 // giveawayColNames — имена колонок в том же порядке, что giveawayCols.
 // Используется giveawayColsAlias для подстановки алиаса в JOIN'ах.
@@ -539,8 +560,8 @@ var giveawayColNames = []string{
 	"subscribe_channel_ids", "publish_channel_ids", "results_in_original_post", "results_post_text",
 	"publish_at", "finish_at", "finish_mode", "finish_participants_count", "winners_count", "winners_message",
 	"referral_enabled", "referral_limit", "captcha_mode", "captcha_percent", "promotion_enabled",
-	"draft_step", "status", "publish_message_ids", "results_message_ids", "winners_user_ids",
-	"winners_notified_user_ids", "results_published", "channel_select_mid", "publish_now", "publish_attempts", "created_at", "updated_at",
+	"archived_at", "draft_step", "status", "publish_message_ids", "results_message_ids", "winners_user_ids",
+	"winners_notified_user_ids", "results_published", "channel_select_mid", "publish_now", "publish_attempts", "created_at", "updated_at", "archived_at",
 }
 
 func giveawayColsAlias(alias string) string {
@@ -589,7 +610,7 @@ func scanDest(g *Giveaway) []any {
 		&g.publishAt, &g.finishAt, &g.FinishMode, &g.FinishParticipantsCount, &g.WinnersCount, &g.WinnersMessage,
 		&g.ReferralEnabled, &g.ReferralLimit, &g.CaptchaMode, &g.CaptchaPercent, &g.PromotionEnabled,
 		&g.draftStep, &g.Status, &g.publishMsgs, &g.resultsMsgs, &g.WinnersUserIDs,
-		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.PublishNow, &g.PublishAttempts, &g.CreatedAt, &g.UpdatedAt,
+		&g.WinnersNotifiedUserIDs, &g.ResultsPublished, &g.channelSelectMID, &g.PublishNow, &g.PublishAttempts, &g.CreatedAt, &g.UpdatedAt, &g.archivedAt,
 	}
 }
 
@@ -608,6 +629,7 @@ func (g *Giveaway) finalizeScan() {
 	if g.finishAt.Valid {
 		g.FinishAt = &g.finishAt.Time
 	}
+	g.Archived = g.archivedAt.Valid
 	if g.MediaTokens == nil {
 		g.MediaTokens = []MediaToken{}
 	}

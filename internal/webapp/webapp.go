@@ -72,6 +72,7 @@ type Deps struct {
 	GiveawayLinks       func(ctx context.Context, uid, giveawayID int64) ([]LinkForGiveawayOut, string, error)
 	GiveawayRename      func(ctx context.Context, uid, giveawayID int64, name string) (string, error)
 	DeleteGiveaway      func(ctx context.Context, uid, giveawayID int64) (string, error)
+	GiveawayArchive     func(ctx context.Context, uid, giveawayID int64, archived bool) (string, error)
 
 	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
 	// (maxapi.IsSubscriber). Первичная проверка в момент клика по
@@ -636,6 +637,38 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg})
 	})
 
+	// Архив: скрыть завершённый из списка (и вернуть).
+	mux.HandleFunc("/app/api/giveaways/archive", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			GiveawayID int64 `json:"giveaway_id"`
+			Archived   bool `json:"archived"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil || req.GiveawayID <= 0 {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		if d.GiveawayArchive == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		vmsg, err := d.GiveawayArchive(r.Context(), userID, req.GiveawayID, req.Archived)
+		if err != nil {
+			log.Warn("app archive giveaway", "err", err, "id", req.GiveawayID, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg})
+	})
+
 	// Переименование черновика (+ его ссылки) — шаг «Название» визарда.
 	mux.HandleFunc("/app/api/giveaways/rename", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -994,12 +1027,13 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			return
 		}
 		type gwOut struct {
-			ID      int64  `json:"id"`
-			Name    string `json:"name"`
-			Status  string `json:"status"`
-			When    string `json:"when"`
-			Parts   int    `json:"parts"`
-			Winners int    `json:"winners"`
+			ID       int64  `json:"id"`
+			Name     string `json:"name"`
+			Status   string `json:"status"`
+			When     string `json:"when"`
+			Parts    int    `json:"parts"`
+			Winners  int    `json:"winners"`
+			Archived bool   `json:"archived"`
 		}
 		out := make([]gwOut, 0, len(items))
 		for _, g := range items {
@@ -1022,7 +1056,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			out = append(out, gwOut{
 				ID: g.ID, Name: name, Status: g.Status,
 				When: when.In(msk()).Format("02.01.2006 15:04"),
-				Parts: parts, Winners: g.WinnersCount,
+				Parts: parts, Winners: g.WinnersCount, Archived: g.Archived,
 			})
 		}
 		writeJSON(w, map[string]any{"giveaways": out})

@@ -398,7 +398,7 @@
     fab.classList.remove('hidden');
     fab.textContent = 'Создать розыгрыш';
     fab.onclick = function () { renderGwWizard(0); };
-    var fn = { all:'Все', draft:'Черновики', scheduled:'Запланированные', active:'Идут', finished:'Завершённые' };
+    var fn = { all:'Все', draft:'Черновики', scheduled:'Запланированные', active:'Идут', finished:'Завершённые', archive:'Архив' };
     app.innerHTML = roleswitch() +
       '<header style="position:relative"><button class="back" id="hh">←</button><div><h1>Розыгрыши</h1></div>' + filterBtn('gw-filter') + '</header>' +
       '<div id="gw-dd"></div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
@@ -409,7 +409,7 @@
       var dd = document.getElementById('gw-dd');
       if (dd.innerHTML) { ddClose(dd); return; }
       var items = '<div class="dsep">Показать</div>';
-      ['all','draft','scheduled','active','finished'].forEach(function (f) {
+      ['all','draft','scheduled','active','finished','archive'].forEach(function (f) {
         items += '<div class="ditem ' + (state.gwFilter === f ? 'on' : '') + '" data-f="' + f + '">' + fn[f] + '</div>';
       });
       items += '<div class="dsep">Сортировка</div>';
@@ -423,7 +423,12 @@
     GET('/app/api/analytics/giveaways').then(function (d) {
       var gws = d.giveaways || [];
       if (state.gwSort === 'name') gws.sort(function (a, b) { return a.name.localeCompare(b.name, 'ru'); });
-      if (state.gwFilter !== 'all') gws = gws.filter(function (g) { return g.status === state.gwFilter; });
+      // Архив скрыт из всех фильтров, кроме «Архив» (там — только он).
+      if (state.gwFilter === 'archive') {
+        gws = gws.filter(function (g) { return g.archived; });
+      } else {
+        gws = gws.filter(function (g) { return !g.archived && (state.gwFilter === 'all' || g.status === state.gwFilter); });
+      }
       var m = { draft:'Черновик', scheduled:'Запланирован', active:'Идёт', finished:'Завершён', cancelled:'Отменён' };
       document.getElementById('list').innerHTML = gws.map(function (g) {
         var when = g.status === 'draft' ? 'изменён ' + esc(g.when) : 'итоги ' + esc(g.when);
@@ -460,16 +465,20 @@
       '<div class="card"><div class="stats">' +
       '<div class="stat"><div class="num">' + g.parts + '</div><div class="lbl">участников</div></div>' +
       '<div class="stat"><div class="num">' + g.winners + '</div><div class="lbl">победителей</div></div>' +
-      '<div class="stat"><div class="num" style="font-size:11px;padding-top:8px">' + esc(g.when) + '</div><div class="lbl">' + esc(g.status) + '</div></div>' +
+      '<div class="stat"><div class="num" style="font-size:11px;padding-top:8px">' + esc(g.when) + '</div><div class="lbl">' + esc(g.status) + (g.archived ? ' · архив' : '') + '</div></div>' +
       '</div></div>' +
       '<div id="g-scope"></div>' +
       '<div class="card tap" data-a="sendpost"><div class="row"><div class="title">Отправить пост мне в чат</div><span>→</span></div>' +
       '<div class="meta">готовый пост точным видом (текст, медиа, кнопка)</div></div>' +
       '<div class="msg" id="sendmsg"></div>' +
-      (g.status === 'finished' ? '' :
-      '<div class="card tap" data-a="delgw"><div class="row"><div class="title" style="color:#c66">🗑 Удалить розыгрыш</div><span>→</span></div>' +
-      '<div class="meta">черновик/запланированный удалится со всей информацией; завершённый удалить нельзя</div></div>' +
-      '<div class="msg" id="delgwmsg"></div>');
+      '<div class="card tap" data-a="archgw"><div class="row"><div class="title">' +
+        (g.archived ? '↩️ Вернуть из архива' : '📦 В архив') + '</div><span>→</span></div>' +
+      '<div class="meta">' + (g.archived
+        ? 'розыгрыш снова появится в списке'
+        : 'скрыть из списка — данные и статистика сохранятся') + '</div></div>' +
+      '<div class="card tap" data-a="delgw"><div class="row"><div class="title" style="color:#c66">🗑 Удалить навсегда</div><span>→</span></div>' +
+      '<div class="meta">розыгрыш удалится вместе с участниками и результатами — отменить нельзя</div></div>' +
+      '<div class="msg" id="delgwmsg"></div>';
     bindRoleSwitch();
     onBack(renderGiveaways);
     document.getElementById('hb').onclick = renderGiveaways;
@@ -489,6 +498,16 @@
               '<span class="badge">' + (l.clicks || 0) + ' км · ' + (l.signups || 0) + ' пп</span></div></div>';
           }).join('') : '');
     });
+    var archBtn = app.querySelector('[data-a="archgw"]');
+    if (archBtn) archBtn.onclick = function () {
+      POST('/app/api/giveaways/archive', { giveaway_id: parseInt(g.id, 10), archived: !g.archived })
+        .then(function (d) {
+          if (d.ok) {
+            g.archived = !g.archived;
+            renderGiveaway(g);
+          }
+        });
+    };
     var delGw = app.querySelector('[data-a="delgw"]');
     if (delGw) delGw.onclick = function () {
       // confirm() в вебвью MAX недоступен — двухтаповое подтверждение.

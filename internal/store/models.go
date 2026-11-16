@@ -101,6 +101,9 @@ type Giveaway struct {
 
 	// Приватные «сырые» поля — приёмники под Scan, расшифровываются в finalizeScan.
 	// Хранятся в структуре, чтобы scanDest() возвращал указатели на валидные адреса.
+	Archived          bool
+
+	archivedAt        pgtype.Timestamptz
 	draftStep         pgtype.Text
 	channelSelectMID  pgtype.Text
 	publishAt         pgtype.Timestamptz
