@@ -322,3 +322,34 @@ func TestArchiveGiveaway(t *testing.T) {
 	_, err = s.GetGiveawayAny(ctx, g.ID)
 	assert.Error(t, err, "завершённый удалён навсегда")
 }
+
+func TestDeleteChannel_BlockedByLinks(t *testing.T) {
+	s, cleanup := testutil.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 7011
+	testutil.EnsureUser(t, s, uid, "chdeleter")
+	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 9110, Title: "На удаление", IsBotAdmin: true})
+	require.NoError(t, err)
+
+	// Со ссылкой — блокируется.
+	_, err = s.CreateUTMLink(ctx, uid, ch.ID, "Ссылка", "referral", "Ссылка", "", "", "", "ChDel1", 0, 0, "unique")
+	require.NoError(t, err)
+	n, err := s.CountChannelLinks(ctx, uid, ch.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "ссылка считается")
+
+	// Без ссылок — удаляется.
+	require.NoError(t, s.DeleteUTMLink(ctx, getLinkIDByCode(t, s, "ChDel1")))
+	require.NoError(t, s.DeleteChannel(ctx, ch.ID, uid))
+	list, err := s.ListChannels(ctx, uid)
+	require.NoError(t, err)
+	assert.Empty(t, list, "канал удалён из списка")
+}
+
+func getLinkIDByCode(t *testing.T, s *store.Store, code string) int64 {
+	t.Helper()
+	l, err := s.GetUTMLinkByCode(context.Background(), code)
+	require.NoError(t, err)
+	return l.ID
+}
