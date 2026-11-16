@@ -1652,23 +1652,27 @@
         document.getElementById('list').innerHTML = chs.map(function (c) {
           return '<div class="card tap" data-a="ch" data-id="' + c.id + '" data-t="' + esc(c.title) + '">' +
             '<div class="row"><div class="title">' + esc(c.title) + '</div><span class="badge ' + (c.admin ? 'inv' : '') + '">' + (c.admin ? 'бот админ' : 'нет прав') + '</span></div>' +
-            '<div class="meta">ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</div>' +
-            '<button class="btn sm sec" data-a="chdel" data-id="' + c.id + '" style="margin-top:8px;color:#c66">🗑 Удалить канал</button></div>';
+            '<div class="meta" style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span>ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</span>' +
+            '<button class="iconbtn" data-a="chdel" data-id="' + c.id + '" title="Удалить канал" style="width:32px;height:28px">🗑</button></div></div>';
         }).join('') || '<div class="empty">Каналов пока нет</div>';
         app.querySelectorAll('button[data-a="chdel"]').forEach(function (b) {
           b.onclick = function (e) {
             e.stopPropagation(); // не открывать канал
             // confirm() в вебвью недоступен — двухтаповое подтверждение.
+            // Иконка: первый тап — «точно?» (красная), второй — удаляет.
             if (!b.classList.contains('armed')) {
               b.classList.add('armed');
-              b.textContent = '🗑 Удалить канал окончательно?';
+              b.style.background = '#c66';
+              b.style.color = '#fff';
+              b.title = 'Удалить канал окончательно?';
               return;
             }
             POST('/app/api/channels/delete', { channel_id: parseInt(b.getAttribute('data-id'), 10) })
               .then(function (d) {
                 if (d.ok) { loadList(); return; }
                 b.classList.remove('armed');
-                b.textContent = '🗑 Удалить канал';
+                b.style.background = '';
+                b.style.color = '';
                 showMsg('ch-msg', '⚠️ ' + (d.error || 'ошибка'), true);
               });
           };
