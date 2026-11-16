@@ -726,29 +726,51 @@
       if (step === 0) {
         var nm0 = val('f-name') || (loadDraft(DRAFT_GW_KEY) || {})['f-name'] || '';
         if (!nm0) return showMsg('f-msg', 'Введите название — по нему найдёте черновик', true);
+        // Черновик создаётся/проверяется сразу С названием — узнаваем в
+        // «Мои розыгрыши», ссылки генерируются уже с именем.
+        function createDraft() {
+          showMsg('f-msg', '⏳ Сохраняю…');
+          POST('/app/api/giveaways/draft', { name: nm0 }).then(function (d) {
+            if (!d.ok) throw 0;
+            var dd2 = loadDraft(DRAFT_GW_KEY) || {};
+            dd2.giveaway_id = d.giveaway_id;
+            saveDraft(DRAFT_GW_KEY, dd2);
+            showMsg('f-msg', '');
+            persistDraft(DRAFT_GW_KEY, GW_FIELDS, { giveaway_id: d.giveaway_id, step: 1 });
+            renderGwWizard(1);
+          }).catch(function () {
+            showMsg('f-msg', '⚠️ Не удалось сохранить черновик — проверьте соединение', true);
+          });
+        }
         var dcur0 = loadDraft(DRAFT_GW_KEY) || {};
         if (dcur0.giveaway_id) {
-          // Существующий черновик: обновляем имя сразу (вместе со ссылками —
-          // лечит старые «без названия» одним прохождением шага).
-          POST('/app/api/giveaways/rename', { giveaway_id: dcur0.giveaway_id, name: nm0 })
-            .then(function () { gotoStep(1); })
-            .catch(function () { gotoStep(1); });
+          // Проверяем, что черновик ещё ЖИВ: могли уйти с прошлого прохождения
+          // (утвердили в чате / удалили) — id в localStorage устарел, и
+          // генерация ссылок падала «уже опубликован».
+          showMsg('f-msg', '⏳ Проверяю черновик…');
+          GET('/app/api/giveaways/edit/' + dcur0.giveaway_id).then(function (d) {
+            if (d.ok) {
+              // Жив: обновляем имя сразу (вместе со ссылками).
+              POST('/app/api/giveaways/rename', { giveaway_id: dcur0.giveaway_id, name: nm0 })
+                .then(function () { gotoStep(1); })
+                .catch(function () { gotoStep(1); });
+              return;
+            }
+            // Устарел: сбросить привязку и создать новый черновик.
+            var dd3 = loadDraft(DRAFT_GW_KEY) || {};
+            delete dd3.giveaway_id;
+            delete dd3.links;
+            delete dd3.pub_channels;
+            delete dd3.sub_channels;
+            delete dd3.sub_set;
+            delete dd3.gen_channels;
+            delete dd3.media_tokens;
+            saveDraft(DRAFT_GW_KEY, dd3);
+            createDraft();
+          }).catch(function () { createDraft(); });
           return;
         }
-        // Черновик создаётся сразу С названием — узнаваем в «Мои розыгрыши»,
-        // ссылки генерируются уже с именем.
-        showMsg('f-msg', '⏳ Сохраняю…');
-        POST('/app/api/giveaways/draft', { name: nm0 }).then(function (d) {
-          if (!d.ok) throw 0;
-          var dd2 = loadDraft(DRAFT_GW_KEY) || {};
-          dd2.giveaway_id = d.giveaway_id;
-          saveDraft(DRAFT_GW_KEY, dd2);
-          showMsg('f-msg', '');
-          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { giveaway_id: d.giveaway_id, step: 1 });
-          renderGwWizard(1);
-        }).catch(function () {
-          showMsg('f-msg', '⚠️ Не удалось сохранить черновик — проверьте соединение', true);
-        });
+        createDraft();
         return;
       }
       if (step === 1) {
