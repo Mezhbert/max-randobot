@@ -243,35 +243,3 @@ func TestDeleteEmptyDrafts_KeepsFresh(t *testing.T) {
 	_, err = s.GetGiveawayAny(ctx, fresh.ID)
 	assert.NoError(t, err, "свежий пустой черновик (в визарде) GC не трогает")
 }
-
-func TestRenameGiveaway_FixesLinks(t *testing.T) {
-	b, s, _, cleanup := newBot(t)
-	defer cleanup()
-	ctx := context.Background()
-	const uid = 7008
-	testutil.EnsureUser(t, s, uid, "renamer")
-	ch, err := s.AddChannel(ctx, store.Channel{OwnerUserID: uid, ChatID: 9109, Title: "Канал А", IsBotAdmin: true})
-	require.NoError(t, err)
-
-	// Старый «безымянный» черновик со ссылкой в старом формате имени.
-	g, err := s.CreateDraftGiveaway(ctx, uid, "")
-	require.NoError(t, err)
-	code := "RenameT1"
-	_, err = s.CreateUTMLink(ctx, uid, ch.ID, "Розыгрыш: без названия", "referral",
-		"Розыгрыш: без названия", "", "", "", code, 0, g.ID, "unique")
-	require.NoError(t, err)
-
-	vmsg, err := b.RenameGiveawayFromApp(ctx, uid, g.ID, "Правильное имя")
-	require.NoError(t, err)
-	assert.Empty(t, vmsg)
-
-	gg, err := s.GetGiveawayAny(ctx, g.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "Правильное имя", gg.Name, "черновик переименован")
-
-	links, err := s.ListUTMLinksByGiveaway(ctx, g.ID)
-	require.NoError(t, err)
-	require.Len(t, links, 1)
-	assert.Equal(t, "Правильное имя | Канал А", links[0].Source,
-		"ссылка переименована в «Новое имя | Канал»")
-}

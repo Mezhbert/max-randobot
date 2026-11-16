@@ -169,9 +169,6 @@ func main() {
 			links, vmsg, err := bot.CreateTrackingForGiveaway(ctx, uid, giveawayID, channelIDs, draftName)
 			return convLinks(links), vmsg, err
 		},
-		GiveawayRename: func(ctx context.Context, uid, giveawayID int64, name string) (string, error) {
-			return bot.RenameGiveawayFromApp(ctx, uid, giveawayID, name)
-		},
 		GiveawayLinks: func(ctx context.Context, uid, giveawayID int64) ([]webapp.LinkForGiveawayOut, string, error) {
 			links, _, err := bot.GiveawayLinksForApp(ctx, uid, giveawayID)
 			return convLinks(links), "", err

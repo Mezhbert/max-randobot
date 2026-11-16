@@ -70,7 +70,6 @@ type Deps struct {
 	TrackingForGiveaway func(ctx context.Context, uid, giveawayID int64, channelIDs []int64, draftName string) ([]LinkForGiveawayOut, string, error)
 	GiveawayForEdit     func(ctx context.Context, uid, giveawayID int64) (GiveawayEditOut, string, error)
 	GiveawayLinks       func(ctx context.Context, uid, giveawayID int64) ([]LinkForGiveawayOut, string, error)
-	GiveawayRename      func(ctx context.Context, uid, giveawayID int64, name string) (string, error)
 
 	// CheckSubscriber — живая проверка «подписан ли юзер на канал»
 	// (maxapi.IsSubscriber). Первичная проверка в момент клика по
@@ -602,38 +601,6 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "links": links})
-	})
-
-	// Переименование черновика (+ его ссылки) — шаг «Название» визарда.
-	mux.HandleFunc("/app/api/giveaways/rename", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
-			return
-		}
-		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
-		if !ok || userID == 0 {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
-		var req struct {
-			GiveawayID int64  `json:"giveaway_id"`
-			Name       string `json:"name"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil || req.GiveawayID <= 0 {
-			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
-			return
-		}
-		if d.GiveawayRename == nil {
-			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
-			return
-		}
-		vmsg, err := d.GiveawayRename(r.Context(), userID, req.GiveawayID, req.Name)
-		if err != nil {
-			log.Warn("app rename giveaway", "err", err, "id", req.GiveawayID, "user", userID)
-			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
-			return
-		}
-		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg})
 	})
 
 	// Скоп ссылок розыгрыша (авто + привязанные вручную) со статистикой.
