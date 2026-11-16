@@ -894,6 +894,9 @@
       POST('/app/api/tracking/create', body).then(function (d) {
         if (!d.ok) return showMsg('t-msg', '⚠️ ' + (d.error || 'ошибка'), true);
         clearDraft(DRAFT_TR_KEY);
+        // Ссылка создана: визард завершён — «назад» ведёт в список, а не в форму.
+        document.getElementById('hb').onclick = renderTrackingTab;
+        onBack(renderTrackingTab);
         var links = (d.codes || []).map(function (c) { return 'https://max.ru/' + (d.bot || '') + '?startapp=u_' + c; });
         showMsg('t-msg', '✅ Готово!');
         document.getElementById('t-result').innerHTML =
