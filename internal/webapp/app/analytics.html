@@ -478,12 +478,13 @@
   }
 
   // ================================================================
-  //  ПОШАГОВЫЙ ВИЗАРД РОЗЫГРЫША: Каналы → Пост → Основное → Итоги → Старт →
-  //  Дополнительно (▰▰▱▱ + Назад/Далее). Каналы — первым шагом: под них сразу
-  //  генерятся уникальные трекинг-ссылки, их можно вшить в пост. Финал — пост
-  //  уходит в чат на утверждение (Да — публикация, Нет — редактура тут).
+  //  ПОШАГОВЫЙ ВИЗАРД РОЗЫГРЫША (7 шагов): Название → Каналы → Ссылки →
+  //  Пост → Итоги → Старт → Дополнительно (▰▰▱▱ + Назад/Далее). Название —
+  //  первым (черновик сразу узнаваем в списке). Ссылки — отдельный ЯВНЫЙ шаг:
+  //  под каждый канал генерится уникальная ссылка (видно/скопировать);
+  //  вшивание — на шаге «Пост». Финал — пост в чат на утверждение (Да/Нет).
   // ================================================================
-  var GW_STEPS = ['Каналы', 'Пост', 'Основное', 'Итоги', 'Старт', 'Дополнительно'];
+  var GW_STEPS = ['Название', 'Каналы', 'Ссылки', 'Пост', 'Итоги', 'Старт', 'Дополнительно'];
 
   // ---------- Модальный пикер каналов (с поиском; каналов может быть сотни) ----------
   function openChannelPicker(opts) {
@@ -583,17 +584,26 @@
     onBack(function () { step > 0 ? gotoStep(step - 1) : renderHome(); });
 
     var GW_FIELDS = ['f-post','f-name','f-btn','f-winners','f-finat','f-fincnt','f-pubat','f-winmsg'];
-    var html = roleswitch() + header('Создание розыгрыша', 'шаг ' + (step + 1) + ' из 6', true) +
-      progress(step, 6) + '<div class="steptitle">' + GW_STEPS[step] + '</div><div id="wz">';
+    var html = roleswitch() + header('Создание розыгрыша', 'шаг ' + (step + 1) + ' из 7', true) +
+      progress(step, 7) + '<div class="steptitle">' + GW_STEPS[step] + '</div><div id="wz">';
 
     if (step === 0) html +=
-      '<div class="meta" style="margin-top:0">Под выбранные каналы сразу сгенерируем уникальные трекинг-ссылки — их можно будет вшить в текст поста.</div>' +
+      '<label class="lbl" style="margin-top:0">Название розыгрыша *</label>' +
+      '<input class="inp" id="f-name" placeholder="Например: iPhone в декабре">' +
+      '<div class="meta">По названию черновик легко найти в «Мои розыгрыши».</div>';
+    else if (step === 1) html +=
+      '<div class="meta" style="margin-top:0">Под выбранные каналы сразу сгенерируем уникальные трекинг-ссылки — следующий шаг покажет их списком.</div>' +
       '<label class="lbl">Каналы публикации *</label>' +
       '<div class="card tap" data-a="pick-pub" style="margin-top:4px"><div class="row"><div class="title" id="f-pubsum">Выбрать каналы…</div><span>→</span></div></div>' +
       '<label class="lbl">Каналы обязательной подписки</label>' +
       '<div class="card tap" data-a="pick-sub" style="margin-top:4px"><div class="row"><div class="title" id="f-subsum">Каналы публикации (по умолчанию)</div><span>→</span></div></div>' +
       '<div class="meta" id="f-linksinfo"></div>';
-    else if (step === 1) html +=
+    else if (step === 2) html +=
+      '<div class="meta" style="margin-top:0">Уникальные трекинг-ссылки под каждый канал розыгрыша (уже сгенерированы):</div>' +
+      '<div id="f-linklist"><div class="skel"></div></div>' +
+      '<div class="meta">Клики и подписки по ним — в «Трекинг». На шаге «Пост» вставьте нужные в текст кнопкой «Вшить ссылку».</div>' +
+      '<button class="btn sec sm" id="f-gotrack" style="margin-top:8px">Открыть Трекинг →</button>';
+    else if (step === 3) html +=
       '<label class="lbl" style="margin-top:0">Текст поста *</label>' +
       '<textarea id="f-post" placeholder="🎁 РОЗЫГРЫШ!&#10;&#10;Условия простые: подпишись и нажми «Участвовать»…"></textarea>' +
       '<div class="fmtbar">' +
@@ -612,14 +622,7 @@
       '<div class="thumbs" id="f-media"></div>' +
       '<label class="btn sec sm" id="f-addmedia" for="f-file" style="margin-top:8px;display:inline-block">＋ Добавить медиа</label>' +
       '<input type="file" id="f-file" accept="image/*,video/*" style="position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0">';
-    else if (step === 2) html +=
-      '<label class="lbl" style="margin-top:0">Название (для списка)</label>' +
-      '<input class="inp" id="f-name" placeholder="Например: iPhone в декабре">' +
-      '<label class="lbl">Текст кнопки участия</label>' +
-      '<input class="inp" id="f-btn" placeholder="Участвовать" value="Участвовать">' +
-      '<label class="lbl">Победителей (1–100)</label>' +
-      '<input class="inp" id="f-winners" type="number" value="1" min="1" max="100">';
-    else if (step === 3) html +=
+    else if (step === 4) html +=
       '<label class="lbl" style="margin-top:0">Итоги подвести</label>' +
       '<div class="seg" id="f-finmode"><div class="chip on" data-v="time">⏰ По времени</div><div class="chip" data-v="count">👥 По числу</div></div>' +
       '<div id="f-fintime"><label class="lbl">Дата итогов (МСК) — ДД.ММ.ГГГГ ЧЧ:ММ</label>' +
@@ -630,8 +633,10 @@
         '<div class="chip" data-dd="7" data-h="21">+7 дней</div></div>' +
       '<div class="meta" id="f-finval" style="margin-top:4px"></div></div>' +
       '<div id="f-fincount" class="hidden"><label class="lbl">Целевое число участников (от 10)</label>' +
-      '<input class="inp" id="f-fincnt" type="number" placeholder="100" min="10"></div>';
-    else if (step === 4) html +=
+      '<input class="inp" id="f-fincnt" type="number" placeholder="100" min="10"></div>' +
+      '<label class="lbl">Победителей (1–100)</label>' +
+      '<input class="inp" id="f-winners" type="number" value="1" min="1" max="100">';
+    else if (step === 5) html +=
       '<label class="lbl" style="margin-top:0">Старт публикации</label>' +
       '<div class="seg" id="f-pubmode"><div class="chip on" data-v="now">🚀 Сразу</div><div class="chip" data-v="at">🕐 По времени</div></div>' +
       '<div id="f-pubat-w" class="hidden"><label class="lbl">Дата публикации (МСК) — ДД.ММ.ГГГГ ЧЧ:ММ</label>' +
@@ -643,6 +648,8 @@
     else html +=
       '<label class="lbl" style="margin-top:0">Дополнительно</label>' +
       '<div class="seg"><div class="chip on" id="f-captcha">🛡 Капча</div><div class="chip" id="f-referral">👥 Друзья</div><div class="chip on" id="f-resinpost">📍 Итоги в посте</div></div>' +
+      '<label class="lbl">Текст кнопки участия</label>' +
+      '<input class="inp" id="f-btn" placeholder="Участвовать" value="Участвовать">' +
       '<label class="lbl">Сообщение победителям (необязательно)</label>' +
       '<textarea id="f-winmsg" style="min-height:60px" placeholder="Поздравляем! Напишите @manager…"></textarea>' +
       '<div class="card"><div class="meta">После отправки пост придёт вам в чат MAX с кнопками <b>Да / Нет</b>: «Да» — публикуем (сразу или по расписанию), «Нет» — вернём сюда на правку.</div></div>';
@@ -650,20 +657,24 @@
     html += '<div class="msg" id="f-msg"></div><div id="wz-after"></div></div>' +
       '<div class="wznav">' +
       (step > 0 ? '<button class="btn sec" id="wz-prev">← Назад</button>' : '') +
-      (step < 5 ? '<button class="btn" id="wz-next">Далее →</button>' : '') +
-      (step === 5 ? '<button class="btn sec" id="wz-draft">💾 Черновик</button><button class="btn" id="wz-go">📤 На утверждение</button>' : '') +
+      (step < 6 ? '<button class="btn" id="wz-next">Далее →</button>' : '') +
+      (step === 6 ? '<button class="btn sec" id="wz-draft">💾 Черновик</button><button class="btn" id="wz-go">📤 На утверждение</button>' : '') +
       '</div>';
     app.innerHTML = html;
     bindRoleSwitch();
     document.getElementById('hb').onclick = function () { step > 0 ? gotoStep(step - 1) : renderHome(); };
     if (step > 0) document.getElementById('wz-prev').onclick = function () { gotoStep(step - 1); };
-    if (step < 5) document.getElementById('wz-next').onclick = function () {
+    if (step < 6) document.getElementById('wz-next').onclick = function () {
       if (step === 0) {
+        if (!val('f-name') && !(loadDraft(DRAFT_GW_KEY) || {})['f-name']) return showMsg('f-msg', 'Введите название — по нему найдёте черновик', true);
+        gotoStep(1); return;
+      }
+      if (step === 1) {
         var d0 = loadDraft(DRAFT_GW_KEY) || {};
         if (!(pubSel.length ? pubSel : (d0.pub_channels || [])).length) return showMsg('f-msg', 'Выберите хотя бы один канал публикации', true);
         ensureDraftAndLinks(); return; // переход после генерации ссылок
       }
-      if (step === 1 && !val('f-post') && !media.length) return showMsg('f-msg', 'Добавьте текст поста или медиа', true);
+      if (step === 3 && !val('f-post') && !media.length) return showMsg('f-msg', 'Добавьте текст поста или медиа', true);
       gotoStep(step + 1);
     };
 
@@ -684,16 +695,15 @@
 
     function val(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
 
-    // ---------- Шаг 0: каналы + автогенерация ссылок ----------
+    // ---------- Шаг «Каналы»: пикеры + сводка ----------
     function pubNames() {
-      var names = [];
       return GET('/app/api/analytics/channels').then(function (d) {
         var by = {};
         (d.channels || []).forEach(function (c) { by[c.id] = c.title; });
         return by;
       });
     }
-    function refreshStep0() {
+    function refreshStepCh() {
       pubNames().then(function (by) {
         var p = document.getElementById('f-pubsum'), s = document.getElementById('f-subsum');
         if (p) p.textContent = pubSel.length ? pubSel.map(function (id) { return by[id] || ('#' + id); }).join(', ') : 'Выбрать каналы…';
@@ -703,7 +713,7 @@
           s.textContent = all.length ? all.map(function (id) { return by[id] || ('#' + id); }).join(', ') : 'Каналы публикации (по умолчанию)';
         }
         var li = document.getElementById('f-linksinfo');
-        if (li) li.textContent = (dd.links || []).length ? '🔗 Ссылок под розыгрыш: ' + dd.links.length + ' — вшить можно на шаге «Пост»' : '';
+        if (li) li.textContent = (dd.links || []).length ? '🔗 Ссылок под розыгрыш: ' + dd.links.length + ' — список на следующем шаге' : '';
       });
     }
     var ppBtn = app.querySelector('[data-a="pick-pub"]');
@@ -712,9 +722,8 @@
         title: 'Каналы публикации', adminOnly: true, selected: pubSel,
         onDone: function (sel) {
           pubSel = sel;
-          subSel = subSel.filter(function (id) { return pubSel.indexOf(id) > -1 || true; });
           persistDraft(DRAFT_GW_KEY, GW_FIELDS, { pub_channels: pubSel, sub_channels: subSel, step: step });
-          refreshStep0();
+          refreshStepCh();
         }
       });
     };
@@ -725,11 +734,37 @@
         onDone: function (sel) {
           subSel = sel;
           persistDraft(DRAFT_GW_KEY, GW_FIELDS, { pub_channels: pubSel, sub_channels: subSel, step: step });
-          refreshStep0();
+          refreshStepCh();
         }
       });
     };
-    refreshStep0();
+    refreshStepCh();
+
+    // ---------- Шаг «Ссылки»: явный список сгенерированных ссылок ----------
+    var linkList = document.getElementById('f-linklist');
+    if (linkList) {
+      pubNames().then(function (by) {
+        var links = dd.links || [];
+        linkList.innerHTML = links.map(function (l, i) {
+          return '<div class="card"><div class="row"><div class="title">🔗 ' + esc(by[l.channel_id] || 'Канал') + '</div></div>' +
+            '<div class="linkline" style="margin:4px 0;font-size:12px">' + esc(l.url) + '</div>' +
+            '<button class="btn sm sec" data-copy="' + i + '">📋 Скопировать</button></div>';
+        }).join('') || '<div class="empty">Ссылок нет — вернитесь на шаг «Каналы»</div>';
+        linkList.querySelectorAll('[data-copy]').forEach(function (b) {
+          b.onclick = function () {
+            var url = links[parseInt(b.getAttribute('data-copy'), 10)].url;
+            if (navigator.clipboard) navigator.clipboard.writeText(url);
+            b.textContent = '✅ Скопировано';
+            setTimeout(function () { b.textContent = '📋 Скопировать'; }, 1500);
+          };
+        });
+      });
+    }
+    var goTrack = document.getElementById('f-gotrack');
+    if (goTrack) goTrack.onclick = function () {
+      // Черновик сохранён — из Трекинга вернётесь через «Создать розыгрыш».
+      state.tab = 'tr'; state.view = 'tab'; render();
+    };
 
     function ensureDraftAndLinks() {
       showMsg('f-msg', '⏳ Готовлю ссылки под каналы…');
@@ -738,7 +773,7 @@
         ? POST('/app/api/giveaways/draft', {}).then(function (d) {
             if (!d.ok) throw 0;
             dd.giveaway_id = d.giveaway_id;
-            persistDraft(DRAFT_GW_KEY, GW_FIELDS, { giveaway_id: d.giveaway_id, step: 0 });
+            persistDraft(DRAFT_GW_KEY, GW_FIELDS, { giveaway_id: d.giveaway_id, step: 1 });
             return d.giveaway_id;
           })
         : Promise.resolve(dd.giveaway_id);
@@ -746,16 +781,16 @@
         return POST('/app/api/tracking/for-giveaway', { giveaway_id: gid, channel_ids: pubSel }).then(function (d) {
           if (!d.ok) throw 0;
           dd.links = (d.links || []).slice();
-          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { links: dd.links, step: 1 });
+          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { links: dd.links, step: 2 });
           showMsg('f-msg', dd.links.length ? '✅ Уникальные ссылки для каналов сгенерированы' : '');
-          setTimeout(function () { renderGwWizard(1); }, needDraft ? 150 : 0);
+          setTimeout(function () { renderGwWizard(2); }, needDraft ? 150 : 0);
         });
       }).catch(function () {
         showMsg('f-msg', '⚠️ Не удалось подготовить ссылки — проверьте соединение', true);
       });
     }
 
-    // ---------- Шаг 1: пост + вшивание ссылок ----------
+    // ---------- Шаг «Пост»: форматирование + вшивание ссылок + медиа ----------
     app.querySelectorAll('[data-fmt]').forEach(function (b) {
       b.onclick = function () { wrapSel('f-post', b.getAttribute('data-fmt')); };
     });
@@ -816,7 +851,7 @@
       });
     }
 
-    // ---------- Шаги 3-5: сегменты/тогглы/даты ----------
+    // ---------- Итоги/Старт/Дополнительно: сегменты, тогглы, даты ----------
     segBind('f-finmode', function (v) {
       document.getElementById('f-fintime').classList.toggle('hidden', v !== 'time');
       document.getElementById('f-fincount').classList.toggle('hidden', v !== 'count');
@@ -878,9 +913,9 @@
     }
     function submit(saveDraftFlag) {
       var body = collect(saveDraftFlag, !saveDraftFlag);
-      if (!body.post_text && !body.media_tokens.length) return showMsg('f-msg', 'Заполните шаг 2: текст поста или медиа', true);
-      if (!body.pub_channels.length) return showMsg('f-msg', 'Заполните шаг 1: выберите каналы публикации', true);
-      if (!body.giveaway_id) return showMsg('f-msg', 'Сначала пройдите шаг с каналами', true);
+      if (!body.name) return showMsg('f-msg', 'Шаг 1: введите название', true);
+      if (!body.pub_channels.length) return showMsg('f-msg', 'Шаг 2: выберите каналы публикации', true);
+      if (!body.post_text && !body.media_tokens.length) return showMsg('f-msg', 'Шаг 4: добавьте текст поста или медиа', true);
       if (!saveDraftFlag) {
         // Даты: клиентская проверка формата до запроса (сервер валидирует так же).
         if (body.finish_mode === 'time' && body.finish_at && !dateOK(body.finish_at))
@@ -916,39 +951,11 @@
   }
 
   // hydrateWizardFromServer — черновик с сервера → драфт визарда (редактура).
-  // Шаг ставим на «Пост» (1): каналы уже выбраны, правят пост/прочее.
+  // Шаг ставим на «Пост» (3): название/каналы/ссылки уже выбраны, правят пост/прочее.
   function hydrateWizardFromServer(g) {
     if (!g) return;
     var d = loadDraft(DRAFT_GW_KEY) || {};
-    d.step = 1;
-    d.giveaway_id = g.giveaway_id;
-    d['f-post'] = g.post_text || '';
-    d['f-name'] = g.name || '';
-    d['f-btn'] = g.button_text || 'Участвовать';
-    d['f-winners'] = String(g.winners || 1);
-    d['f-finat'] = g.finish_at || '';
-    d['f-fincnt'] = String(g.finish_count || '');
-    d['f-pubat'] = g.publish_at || '';
-    d['f-winmsg'] = g.winners_message || '';
-    d.pub_channels = g.pub_channels || [];
-    d.sub_channels = g.sub_channels || [];
-    d.finish_mode = g.finish_mode === 'count' ? 'count' : 'time';
-    d.publish_mode = g.publish_now ? 'now' : 'at';
-    d.captcha = !!g.captcha;
-    d.referral = !!g.referral;
-    d.results_in_post = !!g.results_in_post;
-    d.media_tokens = g.media_tokens || [];
-    d.links = (g.links || []).map(function (l) { return { url: l.url, name: l.name, channel_id: l.channel_id }; });
-    saveDraft(DRAFT_GW_KEY, d);
-    renderGwWizard(0); // резюм перепрыгнет на сохранённый шаг
-  }
-
-  // hydrateWizardFromServer — черновик с сервера → драфт визарда (редактура).
-  // Шаг ставим на «Пост» (1): каналы уже выбраны, правят пост/прочее.
-  function hydrateWizardFromServer(g) {
-    if (!g) return;
-    var d = loadDraft(DRAFT_GW_KEY) || {};
-    d.step = 1;
+    d.step = 3;
     d.giveaway_id = g.giveaway_id;
     d['f-post'] = g.post_text || '';
     d['f-name'] = g.name || '';
