@@ -403,18 +403,12 @@ func (b *Bot) rejectUnexpectedDraftInput(ctx context.Context, uid int64, g store
 	b.morphError(ctx, uid, gg, "Здесь не нужен текст — нужно "+what)
 }
 
-// sendMainMenu отправляет главное меню пользователю. Если есть незаконченный
-// черновик — первой строкой «📝 Продолжить черновик» (мануал §11).
+// sendMainMenu отправляет служебные сообщения (стоп, «Главное меню»).
+// Кнопка черновика не лепится: незаконченное создание доступно в приложении
+// («Мои розыгрыши») и в классическом меню («Мои розыгрыши → Черновики»).
 func (b *Bot) sendMainMenu(ctx context.Context, userID int64, text string) {
 	if b.botUsername != "" {
-		// Миниапп — единственный интерфейс; вход — нативная кнопка приложения
-		// в профиле/чате бота (регистрируется на business.max.ru). Инлайн-кнопки
-		// в чате больше не выдаём: всё управление в приложении.
-		kb := model.NewKeyboard()
-		if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
-			kb.AddRow().AddCallBack("📝 Продолжить черновик", util.CBGwList)
-		}
-		_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
+		_ = b.api.SendText(ctx, userID, text)
 		return
 	}
 	kb := util.MainMenuKeyboard()
@@ -455,9 +449,6 @@ func (b *Bot) sendWelcome(ctx context.Context, userID int64) {
 		kb.AddRow().AddLink("🎟 Приложение для участников", util.StartappLink(b.botUsername, "participant"))
 	}
 	kb.AddRow().AddCallBack("☰ Меню (кнопки)", util.CBOldMenu)
-	if _, err := b.db.GetDraftGiveaway(ctx, userID); err == nil {
-		kb.AddRow().AddCallBack("📝 Продолжить черновик", util.CBGwList)
-	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 }
 
