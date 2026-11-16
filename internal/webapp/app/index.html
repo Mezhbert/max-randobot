@@ -496,9 +496,11 @@
     };
 
     // Черновик: первый вход — вернуться на сохранённый шаг; поля — из черновика.
+    // Резюм рендерит НАПРЯМУЮ (без persistDraft): gotoStep сохраняет значения
+    // текущего DOM шага 0 — он только что отрендерен пустым и затёр бы черновик.
     var dd = loadDraft(DRAFT_GW_KEY) || {};
     if (step === 0 && dd.step > 0) {
-      gotoStep(dd.step); return;
+      renderGwWizard(dd.step); return;
     }
     restoreDraft(DRAFT_GW_KEY, GW_FIELDS);
     autosaveDraft(DRAFT_GW_KEY, GW_FIELDS);
