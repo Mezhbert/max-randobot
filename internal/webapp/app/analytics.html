@@ -57,11 +57,11 @@
   .btnrow{display:flex;gap:8px;margin-top:10px}
   .btnrow .btn{margin-top:0;flex:1}
   /* Визард: Назад/Далее закреплены внизу (как кнопка создания); контент выше */
-  .wznav{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));display:flex;gap:8px;z-index:49}
+  .wznav{position:fixed;left:12px;right:12px;bottom:calc(64px + env(safe-area-inset-bottom));display:flex;gap:8px;z-index:49}
   .wznav .btn{margin-top:0;flex:1}
   #wz{padding-bottom:calc(78px + env(safe-area-inset-bottom))}
   /* Текст поста — на всё свободное место (навигация больше не занимает низ формы) */
-  #f-post{height:calc(100vh - 300px);height:calc(100dvh - 300px);min-height:230px;resize:none}
+  #f-post{height:calc(100vh - 355px);height:calc(100dvh - 355px);min-height:230px;resize:none}
   .createbar{position:fixed;left:12px;right:12px;bottom:92px;padding:13px;border-radius:13px;background:var(--inv);color:var(--inv-fg);border:none;font-size:15px;font-weight:800;cursor:pointer;z-index:49;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.25)}
   .inp,textarea,select{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:11px;color:var(--fg);padding:12px;font-size:15px;outline:none;margin-top:6px}
   textarea{min-height:90px;resize:vertical}
@@ -96,17 +96,6 @@
   .dropdown .dsep{font-size:10px;color:var(--muted);padding:6px 12px 2px;text-transform:uppercase;letter-spacing:.4px}
   .iconbtn{width:34px;height:34px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--muted);cursor:pointer;flex:none;display:flex;align-items:center;justify-content:center;padding:0}
   .iconbtn svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8}
-  /* Версия с плитками (ui-v2): домашний экран — сетка плиток, нижних табов нет */
-  .tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:2px}
-  .tile{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-start;gap:5px;min-height:96px;cursor:pointer}
-  .tile:active{background:var(--card2)}
-  .tile .tico{font-size:26px;line-height:1}
-  .tile .tlbl{font-size:13.5px;font-weight:800;line-height:1.25}
-  .tile .tsub{font-size:10.5px;color:var(--muted);line-height:1.3}
-  .tile.t2x{min-height:206px}
-  .tile.tw{grid-column:1/-1;min-height:74px}
-  body{padding-bottom:20px}
-  .createbar{bottom:calc(16px + env(safe-area-inset-bottom))}
   #tabbar{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:50}
   #tabbar .tab{flex:1;background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;padding:4px 0}
   #tabbar .tab .ico{font-size:20px;display:block;margin-bottom:2px}
@@ -123,7 +112,6 @@
   .sheet .srow.on{background:var(--inv);color:var(--inv-fg);border-color:var(--inv)}
   .sheet .srow .l{font-size:14px;font-weight:700}
   .sheet .srow .m{font-size:11px;opacity:.7;word-break:break-all}
-
   /* Активный таб — подложка-пилюля (не только текст); смена таба — слайд */
   #tabbar .tab{border-radius:12px;margin:0 2px;padding:6px 0;transition:background .18s,color .18s}
   #tabbar .tab.on{background:var(--inv);color:var(--inv-fg)}
@@ -217,14 +205,13 @@
     var ptabs = ['feed', 'mine', 'pinfo'];
     if (r === 'participant' && ptabs.indexOf(state.tab) === -1) state.tab = 'feed';
     if (r === 'organizer' && ptabs.indexOf(state.tab) > -1) state.tab = 'gw';
-    if (r === 'organizer') state.view = 'home';
     try { localStorage.setItem(ROLE_KEY, r); } catch (e) {}
     render();
   }
 
   var state = { tab: 'gw', sort: 'date', filter: 'all', dynDays: 14,
                 gwSort: 'date', gwFilter: 'all',
-                chID: null, chTitle: '', view: 'home' };
+                chID: null, chTitle: '', view: 'tab' };
 
   // Единый регистратор BackButton (onClick добавляет, не заменяет!)
   var curBack = null;
@@ -383,27 +370,29 @@
       };
     });
   }
-  // Версия с плитками: нижних табов нет — «назад» ведёт на домашний экран.
   function organizerTabs() {
-    tabbar.classList.add('hidden');
-    tabbar.innerHTML = '';
-    if (backBtn) backBtn.show();
-    onBack(goHome);
+    tabbar.innerHTML =
+      '<button class="tab ' + (state.tab === 'gw' ? 'on' : '') + '" data-tab="gw"><span class="ico">🎲</span>Розыгрыши</button>' +
+      '<button class="tab ' + (state.tab === 'tr' ? 'on' : '') + '" data-tab="tr"><span class="ico">🔗</span>Трекинг</button>' +
+      '<button class="tab ' + (state.tab === 'ch' ? 'on' : '') + '" data-tab="ch"><span class="ico">📻</span>Каналы</button>' +
+      '<button class="tab ' + (state.tab === 'me' ? 'on' : '') + '" data-tab="me"><span class="ico">⚙</span>Инфо</button>';
+    bindTabs();
   }
 
   // ---------- Список розыгрышей ----------
   function renderGiveaways() {
     state.tab = 'gw'; state.view = 'tab';
     organizerTabs();
+    if (backBtn) backBtn.hide();
     fab.classList.remove('hidden');
     fab.textContent = 'Создать розыгрыш';
     fab.onclick = function () { renderGwWizard(0); };
     var fn = { all:'Все', draft:'Черновики', scheduled:'Запланированные', active:'Идут', finished:'Завершённые' };
     app.innerHTML = roleswitch() +
-      '<header style="position:relative"><button class="back" id="hh">←</button><div><h1>Розыгрыши</h1></div>' + filterBtn('gw-filter') + '</header>' +
+      '<header style="position:relative"><div><h1>Розыгрыши</h1></div>' + themeBtn('th') + filterBtn('gw-filter') + '</header>' +
       '<div id="gw-dd"></div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
     bindRoleSwitch();
-    document.getElementById('hh').onclick = goHome;
+    bindThemeBtn('th');
     document.getElementById('gw-filter').onclick = function (e) {
       e.stopPropagation();
       var dd = document.getElementById('gw-dd');
@@ -433,10 +422,10 @@
         return '<div class="card tap" data-a="gw" data-id="' + g.id + '">' +
           '<div class="row"><div class="title">' + esc(g.name) + '</div><span class="badge ' + (g.status === 'active' ? 'inv' : '') + '">' + (m[g.status] || g.status) + '</span></div>' +
           '<div class="meta">' + when + ' · участников: ' + g.parts + ' · победителей: ' + g.winners + '</div>' + editBtn + '</div>';
-      }).join('') || '<div class="empty">Пока пусто.<br>Создайте розыгрыш с домашнего экрана 🎁</div>';
+      }).join('') || '<div class="empty">Пока пусто.<br>Нажмите «Создать розыгрыш».</div>';
       app.querySelectorAll('button[data-a="gwedit"]').forEach(function (b) {
         b.onclick = function (e) {
-          e.stopPropagation(); // кнопка внутри карточки — карточку не открывать
+          e.stopPropagation(); // не открывать карточку розыгрыша
           GET('/app/api/giveaways/edit/' + b.getAttribute('data-id')).then(function (d) {
             if (!d.ok) return;
             hydrateWizardFromServer(d.giveaway);
@@ -581,7 +570,7 @@
       persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: n });
       renderGwWizard(n);
     }
-    onBack(function () { step > 0 ? gotoStep(step - 1) : renderHome(); });
+    onBack(function () { step > 0 ? gotoStep(step - 1) : renderGiveaways(); });
 
     var GW_FIELDS = ['f-post','f-name','f-btn','f-winners','f-finat','f-fincnt','f-pubat','f-winmsg'];
     var html = roleswitch() + header('Создание розыгрыша', 'шаг ' + (step + 1) + ' из 7', true) +
@@ -662,7 +651,7 @@
       '</div>';
     app.innerHTML = html;
     bindRoleSwitch();
-    document.getElementById('hb').onclick = function () { step > 0 ? gotoStep(step - 1) : renderHome(); };
+    document.getElementById('hb').onclick = function () { step > 0 ? gotoStep(step - 1) : renderGiveaways(); };
     if (step > 0) document.getElementById('wz-prev').onclick = function () { gotoStep(step - 1); };
     if (step < 6) document.getElementById('wz-next').onclick = function () {
       if (step === 0) {
@@ -933,7 +922,7 @@
         if (saveDraftFlag) {
           clearDraft(DRAFT_GW_KEY);
           showMsg('f-msg', '✅ Черновик сохранён');
-          setTimeout(renderHome, 1200);
+          setTimeout(renderGiveaways, 1200);
           return;
         }
         // Пост ушёл в чат на утверждение: открываем чат MAX.
@@ -1082,18 +1071,15 @@
   function renderTrackingTab() {
     state.tab = 'tr'; state.view = 'tab';
     organizerTabs();
-    if (state.an) {
-      fab.classList.add('hidden');
-    } else {
-      fab.classList.remove('hidden');
-      fab.textContent = 'Создать трекинг-ссылку';
-      fab.onclick = function () { renderTrWizard(0); };
-    }
+    if (backBtn) backBtn.hide();
+    fab.classList.remove('hidden');
+    fab.textContent = 'Создать трекинг-ссылку';
+    fab.onclick = function () { renderTrWizard(0); };
     app.innerHTML = roleswitch() +
-      '<header style="position:relative"><button class="back" id="hh">←</button><div><h1>' + (state.an ? 'Аналитика' : 'Трекинг') + '</h1></div>' + filterBtn('tr-filter') + '</header>' +
+      '<header style="position:relative"><div><h1>Трекинг</h1></div>' + themeBtn('th') + filterBtn('tr-filter') + '</header>' +
       '<div id="tr-dd"></div><div id="list"><div class="skel"></div><div class="skel"></div></div>';
     bindRoleSwitch();
-    document.getElementById('hh').onclick = goHome;
+    bindThemeBtn('th');
     document.getElementById('tr-filter').onclick = function (e) {
       e.stopPropagation();
       var dd = document.getElementById('tr-dd');
@@ -1116,7 +1102,7 @@
           '<div class="stat"><div class="num">' + fmt(c.clicks) + '</div><div class="lbl">клики</div></div>' +
           '<div class="stat"><div class="num">' + fmt(c.signups) + '</div><div class="lbl">подписки</div></div>' +
           '<div class="stat"><div class="num">' + pct(c.signups, c.clicks) + '</div><div class="lbl">конверсия</div></div></div></div>';
-      }).join('') || '<div class="empty">Пока пусто.<br>Создайте ссылку с экрана Трекинга 🔗</div>';
+      }).join('') || '<div class="empty">Пока пусто.<br>Нажмите «Создать трекинг-ссылку».</div>';
       app.querySelectorAll('.card[data-a="ch"]').forEach(function (c) {
         c.onclick = function () { renderChannel(parseInt(c.getAttribute('data-id'), 10), c.getAttribute('data-t')); };
       });
@@ -1128,7 +1114,7 @@
     state.view = 'create';
     fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    onBack(function () { step > 0 ? gotoStep(step - 1) : goHome(); });
+    onBack(function () { step > 0 ? gotoStep(step - 1) : renderTrackingTab(); });
     var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
 
     var html = roleswitch() + header('Создание ссылки', 'шаг ' + (step + 1) + ' из 3', true) + progress(step, 3) + '<div id="wz">';
@@ -1165,7 +1151,7 @@
       persistDraft(DRAFT_TR_KEY, TR_FIELDS, { step: n });
       renderTrWizard(n);
     }
-    document.getElementById('hb').onclick = function () { step > 0 ? gotoStep(step - 1) : goHome(); };
+    document.getElementById('hb').onclick = function () { step > 0 ? gotoStep(step - 1) : renderTrackingTab(); };
     if (step > 0) document.getElementById('wz-prev').onclick = function () { gotoStep(step - 1); };
     if (step < 2) document.getElementById('wz-next').onclick = function () { nextStep(); };
 
@@ -1409,15 +1395,16 @@
   function renderChannelsTab() {
     state.tab = 'ch'; state.view = 'tab';
     organizerTabs();
+    if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
-    app.innerHTML = roleswitch() + header('Мои каналы', '', true) +
+    app.innerHTML = roleswitch() + '<header><div><h1>Мои каналы</h1></div>' + themeBtn('th') + '</header>' +
       '<div class="card"><label class="lbl" style="margin-top:0">Ссылка на канал (@username или https://max.ru/...)</label>' +
       '<input class="inp" id="ch-link" placeholder="@mychannel">' +
       '<button class="btn" id="ch-add">＋ Подключить канал</button><div class="msg" id="ch-msg"></div>' +
       '<div class="meta">Перед этим добавьте бота админом в канал (права «Читать все сообщения» и «Публиковать, редактировать и удалять сообщения»). Приватный канал — перешлите пост из канала боту в чат.</div></div>' +
       '<div id="list"><div class="skel"></div></div>';
     bindRoleSwitch();
-    document.getElementById('hb').onclick = goHome;
+    bindThemeBtn('th');
     document.getElementById('ch-add').onclick = function () {
       var link = document.getElementById('ch-link').value.trim();
       if (!link) return showMsg('ch-msg', 'Введите ссылку', true);
@@ -1448,9 +1435,10 @@
   function renderMore() {
     state.tab = 'me'; state.view = 'tab';
     organizerTabs();
+    if (backBtn) backBtn.hide();
     fab.classList.add('hidden');
     var theme = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️ Светлая' : '🌙 Тёмная';
-    app.innerHTML = roleswitch() + header('Инфо', '', true) +
+    app.innerHTML = roleswitch() + '<header><div><h1>Инфо</h1></div>' + themeBtn('th') + '</header>' +
       '<div class="card tap" data-a="theme"><div class="row"><div class="title">Тема оформления</div><span class="badge">' + theme + '</span></div>' +
       '<div class="meta">переключить чёрно-белую тему</div></div>' +
       '<div class="card tap" data-a="go-help"><div class="row"><div class="title">Справка</div><span>→</span></div>' +
@@ -1458,22 +1446,21 @@
       '<div class="card tap" data-a="go-support"><div class="row"><div class="title">Поддержка</div><span>→</span></div>' +
       '<div class="meta">написать разработчикам</div></div>';
     bindRoleSwitch();
-    document.getElementById('hb').onclick = goHome;
+    bindThemeBtn('th');
     app.querySelector('[data-a="theme"]').onclick = function () {
       applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
       renderMore();
     };
     app.querySelector('[data-a="go-help"]').onclick = renderHelp;
     app.querySelector('[data-a="go-support"]').onclick = function () {
-      var card = app.querySelector('[data-a="go-support"] .meta');
-      if (card) card.textContent = '⏳ Открываю поддержку…';
       fetch('/app/api/support/start?init_data=' + encodeURIComponent(initData), { method: 'POST' })
         .then(function (r) { return r.json(); }).then(function (d) {
           if (d.ok) {
             try { if (api.openMaxLink) api.openMaxLink('https://max.ru/'); } catch (e) {}
+            var card = app.querySelector('[data-a="go-support"] .meta');
             if (card) card.textContent = '✅ Бот написал вам в чат — продолжите там';
-          } else if (card) card.textContent = '⚠️ Не получилось, попробуйте позже';
-        }).catch(function () { if (card) card.textContent = '⚠️ Ошибка сети'; });
+          }
+        });
     };
   }
 
@@ -1491,59 +1478,13 @@
     document.getElementById('hb').onclick = renderMore;
   }
 
-  // ---------- Домашний экран: плитки ----------
-  function renderHome() {
-    state.view = 'home';
-    tabbar.classList.add('hidden');
-    fab.classList.add('hidden');
-    if (backBtn) backBtn.hide();
-    app.innerHTML = '<header><div><h1>RandoMaster</h1><div class="sub">панель организатора</div></div>' + themeBtn('th') + '</header>' +
-      '<div class="tiles">' +
-      '<div class="tile t2x tap" data-t="create"><span class="tico">🎁</span><span class="tlbl">Создать розыгрыш</span><span class="tsub">пошаговый мастер · пост, каналы, итоги</span></div>' +
-      '<div class="tile t2x tap" data-t="gw"><span class="tico">📋</span><span class="tlbl">Мои розыгрыши</span><span class="tsub">список, статусы, участники</span></div>' +
-      '<div class="tile t2x tap" data-t="tr"><span class="tico">🔗</span><span class="tlbl">Трекинг</span><span class="tsub">ссылки на закупки, конверсии</span></div>' +
-      '<div class="tile t2x tap" data-t="an"><span class="tico">📊</span><span class="tlbl">Аналитика</span><span class="tsub">каналы, клики, удержание</span></div>' +
-      '<div class="tile tw tap" data-t="ch"><span class="tico">📢</span><span class="tlbl">Мои каналы</span><span class="tsub">подключение и права бота</span></div>' +
-      '<div class="tile tap" data-t="mine"><span class="tico">🎟</span><span class="tlbl">Мои участия</span></div>' +
-      '<div class="tile tap" data-t="support"><span class="tico">🆘</span><span class="tlbl">Поддержка</span></div>' +
-      '</div><div class="msg" id="home-msg"></div>';
-    bindThemeBtn('th');
-    app.querySelectorAll('.tile').forEach(function (t) {
-      t.onclick = function () {
-        slideDir = 1; // проваливание в плитку — слайд вправо
-        var a = t.getAttribute('data-t');
-        if (a === 'create') { renderGwWizard(0); return; }
-        if (a === 'mine') { setRole('participant'); state.tab = 'mine'; render(); return; }
-        if (a === 'support') { startSupport(document.getElementById('home-msg')); return; }
-        state.an = (a === 'an');
-        state.tab = state.an ? 'tr' : a;
-        state.view = 'tab';
-        render();
-      };
-    });
-    animateSlide(); // вход/возврат домой — тоже со слайдом (goHome задаёт направление)
-  }
-
-  // Возврат на домашний экран — со слайдом влево.
-  function goHome() { slideDir = -1; renderHome(); }
-  function startSupport(el) {
-    if (el) { el.textContent = '⏳ Открываю поддержку…'; el.className = 'msg ok'; }
-    fetch('/app/api/support/start?init_data=' + encodeURIComponent(initData), { method: 'POST' })
-      .then(function (r) { return r.json(); }).then(function (d) {
-        if (d.ok) {
-          try { if (api.openMaxLink) api.openMaxLink('https://max.ru/'); } catch (e) {}
-          if (el) el.textContent = '✅ Бот написал вам в чат — продолжите там';
-        } else if (el) { el.textContent = '⚠️ Не получилось, попробуйте позже'; el.className = 'msg err'; }
-      }).catch(function () { if (el) { el.textContent = '⚠️ Ошибка сети'; el.className = 'msg err'; } });
-  }
-
   // ---------- Роутер ----------
   function render() {
-    if (role === 'participant') { tabbar.classList.remove('hidden'); renderParticipant(); animateSlide(); return; }
-    if (state.view === 'home') { renderHome(); animateSlide(); return; }
-    renderOrganizer();
+    if (role === 'participant') renderParticipant();
+    else { organizerTabs(); renderOrganizer(); }
     animateSlide();
   }
+  tabbar.classList.remove('hidden');
   render();
 })();
 
