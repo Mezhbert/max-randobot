@@ -819,16 +819,31 @@ type GiveawayDraftFromApp struct {
 	Captcha        bool     `json:"captcha"`
 	ResultsInPost  bool     `json:"results_in_post"`
 	ResultsText    string   `json:"results_text"`
-	SaveDraft      bool     `json:"save_draft"` // true → черновик, не планировать
+	SaveDraft      bool     `json:"save_draft"`  // true → черновик, не планировать
+	GiveawayID     int64    `json:"giveaway_id"` // >0 → доизменить существующий черновик (редактура из приложения)
+	Approval       bool     `json:"approval"`    // true → не публиковать: отправить пост в чат на утверждение (Да/Нет)
 }
 
-// CreateGiveawayFromApp — создание розыгрыша из миниаппа: пишет поля черновика,
-// валидирует (engine.Confirm) и планирует/публикует. Возвращает id и ошибку
-// валидации (авторский текст).
+// CreateGiveawayFromApp — создание розыгрыша из миниаппа: пишет поля черновика
+// и либо публикует (engine.Confirm), либо отправляет пост в чат на утверждение
+// (Approval: Да — публикация/план, Нет — редактура в приложении).
+// GiveawayID>0 — доизменение существующего черновика (ссылки под розыгрыш уже
+// созданы и не должны отвязаться).
 func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayDraftFromApp) (int64, string, error) {
-	g, err := b.db.CreateDraftGiveaway(ctx, uid, "")
-	if err != nil {
-		return 0, "", err
+	var g store.Giveaway
+	var err error
+	if in.GiveawayID > 0 {
+		// Редактура: только свой черновик (опубликованное менять нельзя).
+		gg, gerr := b.db.GetGiveaway(ctx, in.GiveawayID, uid)
+		if gerr != nil || gg.Status != store.StatusDraft {
+			return in.GiveawayID, "Розыгрыш не найден или уже опубликован", nil
+		}
+		g = gg
+	} else {
+		g, err = b.db.CreateDraftGiveaway(ctx, uid, "")
+		if err != nil {
+			return 0, "", err
+		}
 	}
 	set := func(field string, val any) {
 		if err == nil {
@@ -837,6 +852,9 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 	}
 	if in.Name != "" {
 		set("name", in.Name)
+	} else {
+		// engine.Confirm требует название — дефолт, чтобы утверждение не падало.
+		set("name", "Розыгрыш "+time.Now().In(util.MoscowLocation()).Format("02.01.2006"))
 	}
 	if in.PostText != "" {
 		// Markdown-посты (миниапп): голые URL оборачиваются в [url](url) —
@@ -922,6 +940,16 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 		go b.SendGiveawayPostToOwner(context.Background(), uid, mustGiveaway(b.db, g.ID))
 		return g.ID, "", nil
 	}
+	if in.Approval {
+		// Пост на утверждение в чат: Да — публикация/план, Нет — редактура
+		// в приложении. Сам черновик остаётся draft до нажатия «Да».
+		gg := mustGiveaway(b.db, g.ID)
+		if err := b.SendGiveawayForApproval(ctx, uid, gg); err != nil {
+			b.log.Warn("app approval send", "err", err, "id", g.ID, "user", uid)
+			return g.ID, "Не удалось отправить пост в чат — попробуйте ещё раз", nil
+		}
+		return g.ID, "", nil
+	}
 	if err := b.engine.Confirm(ctx, g.ID); err != nil {
 		var ve *fsm.ValidationError
 		if e, ok := err.(*fsm.ValidationError); ok {
@@ -953,6 +981,186 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 		_ = b.api.SendText(c, uid, status+"\n\n⬆️ Готовый пост — выше; кнопки в карточке розыгрыша в приложении.")
 	}()
 	return g.ID, "", nil
+}
+
+// SendGiveawayForApproval — пост на утверждение админу в чат: превью поста
+// (точный вид с кнопкой участия) + вопрос с кнопками Да/Нет. «Да» публикует
+// (или планирует), «Нет» возвращает в редактуру в приложении.
+func (b *Bot) SendGiveawayForApproval(ctx context.Context, uid int64, g store.Giveaway) error {
+	buttonText := g.ButtonText
+	if buttonText == "" {
+		buttonText = "Участвовать"
+	}
+	mediaSimple := make([]util.MediaTokenSimple, 0, len(g.MediaTokens))
+	for _, mt := range g.MediaTokens {
+		mediaSimple = append(mediaSimple, util.MediaTokenSimple{Type: mt.Type, Token: mt.Token})
+	}
+	attachments := util.GiveawayAttachments(buttonText, g.ID, mediaSimple, true)
+	if err := b.api.SendWithAttachments(ctx, uid, g.PostText, attachments, model.TextFormat(g.PostFormat)); err != nil {
+		return err
+	}
+	kb := model.NewKeyboard()
+	kb.AddRow().
+		AddCallBack("✅ Да", fmt.Sprintf("%s%d", util.CBApproveGwYes, g.ID)).
+		AddCallBack("✏️ Нет — редактировать", fmt.Sprintf("%s%d", util.CBApproveGwNo, g.ID))
+	_, err := b.api.SendTextWithKeyboard(ctx, uid,
+		"⬆️ Так будет выглядеть пост в каналах (с кнопкой «"+buttonText+"»).\n\n"+
+			"Утверждаем публикацию?", kb)
+	return err
+}
+
+// approveGiveawayFromChat — колбэк Да/Нет из чата (утверждение поста).
+func (b *Bot) approveGiveawayFromChat(ctx context.Context, uid int64, p, cbID string) {
+	yes := strings.HasPrefix(p, util.CBApproveGwYes)
+	idStr := strings.TrimPrefix(p, util.CBApproveGwYes)
+	if !yes {
+		idStr = strings.TrimPrefix(p, util.CBApproveGwNo)
+	}
+	gid, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		b.api.AnswerCallback(ctx, cbID, "Не найдено.")
+		return
+	}
+	g, err := b.db.GetGiveaway(ctx, gid, uid)
+	if err != nil || g.Status != store.StatusDraft {
+		b.api.AnswerCallback(ctx, cbID, "Уже обработано.")
+		return
+	}
+	if !yes {
+		b.api.AnswerCallbackEdit(ctx, cbID,
+			"✏️ Розыгрыш вернулся в черновики. Откройте приложение — «Мои розыгрыши → ✏️», "+
+				"внесите правки и отправьте на утверждение снова.", nil)
+		return
+	}
+	if err := b.engine.Confirm(ctx, gid); err != nil {
+		msg := "⚠️ Не удалось опубликовать."
+		if ve, ok := err.(*fsm.ValidationError); ok {
+			msg = "⚠️ " + ve.Msg + "\n\nОткройте приложение, поправьте и отправьте снова."
+		} else {
+			b.log.Warn("app approve confirm", "err", err, "id", gid, "user", uid)
+		}
+		b.api.AnswerCallbackEdit(ctx, cbID, msg, nil)
+		return
+	}
+	b.api.AnswerCallback(ctx, cbID, "🚀 Публикую…")
+	published := false
+	if b.publishNow != nil {
+		if gg, e := b.db.GetGiveawayAny(ctx, gid); e == nil && gg.PublishNow {
+			b.publishNow(ctx, gid)
+			published = true
+		}
+	}
+	if published {
+		b.sendMainMenu(ctx, uid, "🚀 Розыгрыш опубликован! Пост уже в каналах, кнопка «Участвовать» активна.")
+	} else {
+		b.sendMainMenu(ctx, uid, "✅ Розыгрыш запланирован! Пост выйдет автоматически в назначенное время («Мои розыгрыши → Запланированные»).")
+	}
+}
+
+// TrackingLinkForGiveawayOut — ссылка под розыгрыш для миниаппа.
+type TrackingLinkForGiveawayOut struct {
+	LinkURL    string `json:"url"`
+	Name       string `json:"name"`
+	ChannelID  int64  `json:"channel_id"`
+	LinkType   string `json:"link_type"`
+}
+
+// CreateTrackingForGiveaway — уникальные ссылки под розыгрыш: по одной на каждый
+// выбранный канал (идемпотентно: существующие не дублируются). Вызывается из
+// визарда сразу после выбора каналов — ссылки сразу можно вшивать в пост.
+func (b *Bot) CreateTrackingForGiveaway(ctx context.Context, uid, giveawayID int64, channelIDs []int64) ([]TrackingLinkForGiveawayOut, string, error) {
+	g, err := b.db.GetGiveaway(ctx, giveawayID, uid)
+	if err != nil || g.Status != store.StatusDraft {
+		return nil, "Розыгрыш не найден или уже опубликован", nil
+	}
+	name := "Розыгрыш: " + ifEmpty(g.Name, "без названия")
+	if err := util.ValidateUTMSource(name); err != nil {
+		name = "Розыгрыш #" + strconv.FormatInt(giveawayID, 10)
+	}
+	botName := b.botUsername
+	if botName == "" {
+		botName = "ВАШ_БОТ"
+	}
+	out := make([]TrackingLinkForGiveawayOut, 0, len(channelIDs))
+	for _, chID := range channelIDs {
+		if _, err := b.db.GetChannel(ctx, chID, uid); err != nil {
+			continue // чужой/удалённый канал — пропускаем
+		}
+		has, err := b.db.HasGiveawayChannelLink(ctx, giveawayID, chID)
+		if err == nil && has {
+			continue // уже создана (повторный заход в визард)
+		}
+		code := util.RandomCode(10)
+		if _, err := b.db.CreateUTMLink(ctx, uid, chID, name, "referral", name,
+			"", "", "", code, 0, giveawayID, "unique"); err != nil {
+			b.log.Warn("for-giveaway link", "err", err, "ch", chID, "gw", giveawayID)
+			continue
+		}
+		out = append(out, TrackingLinkForGiveawayOut{
+			LinkURL:   util.StartappLink(botName, "u_"+code),
+			Name:      name,
+			ChannelID: chID,
+			LinkType:  "unique",
+		})
+	}
+	return out, "", nil
+}
+
+// GiveawayForEditFromApp — поля черновика для гидрации визарда (редактура).
+type GiveawayForEditFromApp struct {
+	GiveawayID    int64               `json:"giveaway_id"`
+	Name          string              `json:"name"`
+	PostText      string              `json:"post_text"`
+	PostFormat    string              `json:"post_format"`
+	MediaTokens   []store.MediaToken  `json:"media_tokens"`
+	ButtonText    string              `json:"button_text"`
+	PubChannels   []int64             `json:"pub_channels"`
+	SubChannels   []int64             `json:"sub_channels"`
+	FinishMode    string              `json:"finish_mode"`
+	FinishAt      string              `json:"finish_at"`
+	FinishCount   int                 `json:"finish_count"`
+	PublishNow    bool                `json:"publish_now"`
+	PublishAt     string              `json:"publish_at"`
+	Winners       int                 `json:"winners"`
+	Captcha       bool                `json:"captcha"`
+	Referral      bool                `json:"referral"`
+	ResultsInPost bool                `json:"results_in_post"`
+	WinnersMsg    string              `json:"winners_message"`
+	Links         []TrackingLinkForGiveawayOut `json:"links"`
+}
+
+// GetGiveawayForEdit — черновик для редактуры в миниаппе (+ ссылки под розыгрыш).
+func (b *Bot) GetGiveawayForEdit(ctx context.Context, uid, giveawayID int64) (GiveawayForEditFromApp, string, error) {
+	var out GiveawayForEditFromApp
+	g, err := b.db.GetGiveaway(ctx, giveawayID, uid)
+	if err != nil || g.Status != store.StatusDraft {
+		return out, "Розыгрыш не найден или уже опубликован", nil
+	}
+	out = GiveawayForEditFromApp{
+		GiveawayID: g.ID, Name: g.Name, PostText: g.PostText, PostFormat: g.PostFormat,
+		MediaTokens: g.MediaTokens, ButtonText: g.ButtonText,
+		PubChannels: g.PublishChannelIDs, SubChannels: g.SubscribeChannelIDs,
+		FinishMode: g.FinishMode, FinishCount: g.FinishParticipantsCount,
+		PublishNow: g.PublishNow, Winners: g.WinnersCount,
+		Captcha: g.CaptchaMode == "all", Referral: g.ReferralEnabled,
+		ResultsInPost: g.ResultsInOriginalPost, WinnersMsg: g.WinnersMessage,
+	}
+	if g.FinishAt != nil {
+		out.FinishAt = g.FinishAt.In(util.MoscowLocation()).Format("02.01.2006 15:04")
+	}
+	if g.PublishAt != nil && !g.PublishNow {
+		out.PublishAt = g.PublishAt.In(util.MoscowLocation()).Format("02.01.2006 15:04")
+	}
+	if links, err := b.db.ListUTMLinksByGiveaway(ctx, g.ID); err == nil {
+		out.Links = make([]TrackingLinkForGiveawayOut, 0, len(links))
+		for _, l := range links {
+			out.Links = append(out.Links, TrackingLinkForGiveawayOut{
+				LinkURL:   util.StartappLink(b.botUsername, "u_"+l.Code),
+				Name:      l.Source, ChannelID: l.ChannelID, LinkType: l.LinkType,
+			})
+		}
+	}
+	return out, "", nil
 }
 
 // mustGiveaway — перечитать розыгрыш (для фоновой отправки поста админу).

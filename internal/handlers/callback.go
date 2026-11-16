@@ -33,6 +33,13 @@ func (b *Bot) onMessageCallback(ctx context.Context, u model.Update) {
 		return
 	}
 
+	// 2а. Утверждение поста из миниаппа (Да/Нет в чате) — сами отвечают
+	//     и меняют сообщение вопроса.
+	if strings.HasPrefix(p, util.CBApproveGwYes) || strings.HasPrefix(p, util.CBApproveGwNo) {
+		b.approveGiveawayFromChat(ctx, uid, p, cb.CallbackID)
+		return
+	}
+
 	// Прочие callback'и — снимаем "часики" с кнопки.
 	defer b.api.AnswerCallback(ctx, cb.CallbackID, "")
 

@@ -49,6 +49,42 @@ func (s *Store) CreateUTMLink(ctx context.Context, ownerUserID, channelID int64,
 	return id, err
 }
 
+// HasGiveawayChannelLink — есть ли уже ссылка, привязанная к розыгрышу,
+// для этого канала (дедуп автогенерации: повторный заход в визард не плодит копии).
+func (s *Store) HasGiveawayChannelLink(ctx context.Context, giveawayID, channelID int64) (bool, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM utm_links WHERE giveaway_id=$1 AND channel_id=$2
+	`, giveawayID, channelID).Scan(&n)
+	return n > 0, err
+}
+
+// ListUTMLinksByGiveaway — все ссылки розыгрыша (для пикера «вшить ссылку»
+// и гидрации визарда при редактуре).
+func (s *Store) ListUTMLinksByGiveaway(ctx context.Context, giveawayID int64) ([]UTMLink, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, COALESCE(owner_user_id,0), COALESCE(channel_id,0), source, medium, campaign,
+		       utm_term, utm_content, COALESCE(giveaway_id,0), post_ref, code, cost, link_type,
+		       clicks, signups, COALESCE(unsubs,0), COALESCE(enabled,true)
+		FROM utm_links WHERE giveaway_id=$1 ORDER BY id
+	`, giveawayID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []UTMLink
+	for rows.Next() {
+		var u UTMLink
+		if err := rows.Scan(&u.ID, &u.OwnerUserID, &u.ChannelID, &u.Source, &u.Medium, &u.Campaign,
+			&u.UTMTerm, &u.UTMContent, &u.GiveawayID, &u.PostRef, &u.Code, &u.Cost, &u.LinkType,
+			&u.Clicks, &u.Signups, &u.Unsubs, &u.Enabled); err != nil {
+			return nil, err
+		}
+		res = append(res, u)
+	}
+	return res, rows.Err()
+}
+
 // GetUTMLinkByID — ссылка по внутреннему id (для очереди первичных проверок).
 func (s *Store) GetUTMLinkByID(ctx context.Context, id int64) (UTMLink, error) {
 	var u UTMLink

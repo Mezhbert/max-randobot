@@ -132,8 +132,43 @@ func main() {
 				Winners: in.Winners, WinnersMessage: in.WinnersMessage,
 				Referral: in.Referral, Captcha: in.Captcha,
 				ResultsInPost: in.ResultsInPost, ResultsText: in.ResultsText,
-				SaveDraft: in.SaveDraft,
+				SaveDraft: in.SaveDraft, GiveawayID: in.GiveawayID, Approval: in.Approval,
 			})
+		},
+		// Визард «каналы → ссылки → пост»: черновик + автоссылки + редактура.
+		CreateDraftGiveaway: func(ctx context.Context, uid int64) (int64, string, error) {
+			// GC брошенных пустых черновиков, затем новый draft.
+			_ = db.DeleteEmptyDrafts(ctx, uid)
+			g, err := db.CreateDraftGiveaway(ctx, uid, "")
+			return g.ID, "", err
+		},
+		TrackingForGiveaway: func(ctx context.Context, uid, giveawayID int64, channelIDs []int64) ([]webapp.LinkForGiveawayOut, string, error) {
+			links, vmsg, err := bot.CreateTrackingForGiveaway(ctx, uid, giveawayID, channelIDs)
+			out := make([]webapp.LinkForGiveawayOut, 0, len(links))
+			for _, l := range links {
+				out = append(out, webapp.LinkForGiveawayOut{
+					LinkURL: l.LinkURL, Name: l.Name, ChannelID: l.ChannelID, LinkType: l.LinkType,
+				})
+			}
+			return out, vmsg, err
+		},
+		GiveawayForEdit: func(ctx context.Context, uid, giveawayID int64) (webapp.GiveawayEditOut, string, error) {
+			e, vmsg, err := bot.GetGiveawayForEdit(ctx, uid, giveawayID)
+			out := webapp.GiveawayEditOut{
+				GiveawayID: e.GiveawayID, Name: e.Name, PostText: e.PostText, PostFormat: e.PostFormat,
+				MediaTokens: e.MediaTokens, ButtonText: e.ButtonText,
+				PubChannels: e.PubChannels, SubChannels: e.SubChannels,
+				FinishMode: e.FinishMode, FinishAt: e.FinishAt, FinishCount: e.FinishCount,
+				PublishNow: e.PublishNow, PublishAt: e.PublishAt, Winners: e.Winners,
+				Captcha: e.Captcha, Referral: e.Referral, ResultsInPost: e.ResultsInPost,
+				WinnersMsg: e.WinnersMsg,
+			}
+			for _, l := range e.Links {
+				out.Links = append(out.Links, webapp.LinkForGiveawayOut{
+					LinkURL: l.LinkURL, Name: l.Name, ChannelID: l.ChannelID, LinkType: l.LinkType,
+				})
+			}
+			return out, vmsg, err
 		},
 		CreateTracking: func(ctx context.Context, uid int64, in webapp.CreateTrackingReq) ([]string, string, error) {
 			return bot.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{
