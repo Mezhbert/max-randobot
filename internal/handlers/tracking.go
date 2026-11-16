@@ -808,6 +808,7 @@ type GiveawayDraftFromApp struct {
 	ButtonText     string   `json:"button_text"`
 	PubChannels    []int64  `json:"pub_channels"`
 	SubChannels    []int64  `json:"sub_channels"`
+	SubChannelsSet bool     `json:"sub_channels_set"` // true → подписки ровно как выбрано (пусть и пусто)
 	PublishNow     bool     `json:"publish_now"`
 	PublishAt      string   `json:"publish_at"` // DD.MM.YYYY HH:MM (МСК) или ISO
 	FinishMode     string   `json:"finish_mode"` // time | count
@@ -885,10 +886,15 @@ func (b *Bot) CreateGiveawayFromApp(ctx context.Context, uid int64, in GiveawayD
 	if len(in.PubChannels) > 0 {
 		set("publish_channel_ids", in.PubChannels)
 	}
-	if len(in.SubChannels) > 0 {
+	switch {
+	case in.SubChannelsSet:
+		// Явный выбор из визарда: ровно то, что выбрал юзер (может быть меньше
+		// публикационных и даже пустым — розыгрыш без проверки подписки).
 		set("subscribe_channel_ids", in.SubChannels)
-	} else if len(in.PubChannels) > 0 {
-		// Канал публикации всегда входит в подписки (как в чат-мастере).
+	case len(in.SubChannels) > 0:
+		set("subscribe_channel_ids", in.SubChannels)
+	case len(in.PubChannels) > 0:
+		// Дефолт (не трогал выбор): канал публикации входит в подписки.
 		set("subscribe_channel_ids", in.PubChannels)
 	}
 	set("publish_now", in.PublishNow)
@@ -1071,45 +1077,83 @@ type TrackingLinkForGiveawayOut struct {
 	LinkType   string `json:"link_type"`
 }
 
-// CreateTrackingForGiveaway — уникальные ссылки под розыгрыш: по одной на каждый
-// выбранный канал (идемпотентно: существующие не дублируются). Вызывается из
-// визарда сразу после выбора каналов — ссылки сразу можно вшивать в пост.
-func (b *Bot) CreateTrackingForGiveaway(ctx context.Context, uid, giveawayID int64, channelIDs []int64) ([]TrackingLinkForGiveawayOut, string, error) {
+// CreateTrackingForGiveaway — уникальные ссылки под розыгрыш для ВЫБРАННЫХ
+// каналов публикации (идемпотентно: по каналу — одна ссылка). Имя —
+// «Название розыгрыша | Канал»: скоп ссылок группируется розыгрышем, имя
+// сразу говорит, откуда трафик. draftName — название из визарда (шаг 1):
+// сохраняется в черновик ДО генерации (иначе ссылки получали «без названия»).
+// Возврат — весь скоп розыгрыша (включая ранее созданные и привязанные вручную).
+func (b *Bot) CreateTrackingForGiveaway(ctx context.Context, uid, giveawayID int64, channelIDs []int64, draftName string) ([]GiveawayLinkStatOut, string, error) {
 	g, err := b.db.GetGiveaway(ctx, giveawayID, uid)
 	if err != nil || g.Status != store.StatusDraft {
 		return nil, "Розыгрыш не найден или уже опубликован", nil
 	}
-	name := "Розыгрыш: " + ifEmpty(g.Name, "без названия")
-	if err := util.ValidateUTMSource(name); err != nil {
-		name = "Розыгрыш #" + strconv.FormatInt(giveawayID, 10)
+	if g.Name == "" && strings.TrimSpace(draftName) != "" {
+		if uerr := b.db.UpdateGiveawayFieldAny(ctx, giveawayID, "name", strings.TrimSpace(draftName)); uerr == nil {
+			g.Name = strings.TrimSpace(draftName)
+		}
 	}
+	base := ifEmpty(g.Name, "Розыгрыш #"+strconv.FormatInt(giveawayID, 10))
 	botName := b.botUsername
 	if botName == "" {
 		botName = "ВАШ_БОТ"
 	}
-	out := make([]TrackingLinkForGiveawayOut, 0, len(channelIDs))
 	for _, chID := range channelIDs {
-		if _, err := b.db.GetChannel(ctx, chID, uid); err != nil {
+		ch, cerr := b.db.GetChannel(ctx, chID, uid)
+		if cerr != nil {
 			continue // чужой/удалённый канал — пропускаем
 		}
-		has, err := b.db.HasGiveawayChannelLink(ctx, giveawayID, chID)
-		if err == nil && has {
-			continue // уже создана (повторный заход в визард)
+		has, herr := b.db.HasGiveawayChannelLink(ctx, giveawayID, chID)
+		if herr == nil && has {
+			continue // уже создана (повторная генерация)
+		}
+		name := base + " | " + ifEmpty(ch.Title, "канал #"+strconv.FormatInt(chID, 10))
+		if verr := util.ValidateUTMSource(name); verr != nil {
+			name = base + " | #" + strconv.FormatInt(chID, 10)
 		}
 		code := util.RandomCode(10)
-		if _, err := b.db.CreateUTMLink(ctx, uid, chID, name, "referral", name,
-			"", "", "", code, 0, giveawayID, "unique"); err != nil {
-			b.log.Warn("for-giveaway link", "err", err, "ch", chID, "gw", giveawayID)
+		if _, lerr := b.db.CreateUTMLink(ctx, uid, chID, name, "referral", name,
+			"", "", "", code, 0, giveawayID, "unique"); lerr != nil {
+			b.log.Warn("for-giveaway link", "err", lerr, "ch", chID, "gw", giveawayID)
 			continue
 		}
-		out = append(out, TrackingLinkForGiveawayOut{
-			LinkURL:   util.StartappLink(botName, "u_"+code),
-			Name:      name,
-			ChannelID: chID,
-			LinkType:  "unique",
+	}
+	links, _, lerr := b.GiveawayLinksForApp(ctx, uid, giveawayID)
+	if lerr != nil {
+		return nil, "", lerr
+	}
+	return links, "", nil
+}
+
+// GiveawayLinkStatOut — ссылка скопа со статистикой (шаг «Ссылки» визарда,
+// карточка розыгрыша): клики/подписки по каждой, сумма считается клиентом.
+type GiveawayLinkStatOut struct {
+	LinkURL   string `json:"url"`
+	Name      string `json:"name"`
+	ChannelID int64  `json:"channel_id"`
+	LinkType  string `json:"link_type"`
+	Clicks    int64  `json:"clicks"`
+	Signups   int64  `json:"signups"`
+}
+
+// GiveawayLinksForApp — все ссылки, привязанные к розыгрышу (скоп), со статами.
+func (b *Bot) GiveawayLinksForApp(ctx context.Context, uid, giveawayID int64) ([]GiveawayLinkStatOut, int64, error) {
+	if _, err := b.db.GetGiveaway(ctx, giveawayID, uid); err != nil {
+		return nil, 0, err
+	}
+	links, err := b.db.ListUTMLinksByGiveaway(ctx, giveawayID)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]GiveawayLinkStatOut, 0, len(links))
+	for _, l := range links {
+		out = append(out, GiveawayLinkStatOut{
+			LinkURL: util.StartappLink(b.botUsername, "u_"+l.Code),
+			Name:    l.Source, ChannelID: l.ChannelID, LinkType: l.LinkType,
+			Clicks: l.Clicks, Signups: l.Signups,
 		})
 	}
-	return out, "", nil
+	return out, int64(len(out)), nil
 }
 
 // GiveawayForEditFromApp — поля черновика для гидрации визарда (редактура).
@@ -1188,6 +1232,7 @@ type TrackingLinkFromApp struct {
 	Cost      float64 `json:"cost"`
 	LinkType  string  `json:"link_type"` // unique | super
 	PostRef   string  `json:"post_ref"`
+	GiveawayID int64  `json:"giveaway_id"` // >0 → привязать к розыгрышу (скоп ссылок)
 }
 
 // CreateTrackingLinkFromApp возвращает коды созданных ссылок.
@@ -1205,6 +1250,13 @@ func (b *Bot) CreateTrackingLinkFromApp(ctx context.Context, uid int64, in Track
 			return nil, "Ссылка «" + in.Name + "» в этом канале уже есть — придумайте другое название", nil
 		}
 	}
+	// Привязка к розыгрышу (скоп): только свой и не завершённый.
+	if in.GiveawayID > 0 {
+		if gg, err := b.db.GetGiveawayAny(ctx, in.GiveawayID); err != nil || gg.OwnerUserID != uid ||
+			gg.Status == store.StatusFinished || gg.Status == store.StatusCancelled {
+			return nil, "Розыгрыш для привязки не найден", nil
+		}
+	}
 	botName := b.botUsername
 	if botName == "" {
 		botName = "ВАШ_БОТ"
@@ -1213,7 +1265,7 @@ func (b *Bot) CreateTrackingLinkFromApp(ctx context.Context, uid int64, in Track
 	make := func(chID int64, linkType, postRef string, cost float64) string {
 		code := util.RandomCode(10)
 		if _, err := b.db.CreateUTMLink(ctx, uid, chID, in.Name, "referral", in.Name,
-			"", "", postRef, code, cost, 0, linkType); err != nil {
+			"", "", postRef, code, cost, in.GiveawayID, linkType); err != nil {
 			return ""
 		}
 		return code

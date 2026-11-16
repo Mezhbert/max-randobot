@@ -106,6 +106,18 @@ func main() {
 	// Узнаём публичное имя бота — нужно для startapp-кнопок участия/итогов и
 	// UTM-диплинков. Заодно регистрируем меню команд бота (PatchCommands), чтобы
 	// при вводе «/» в MAX появлялся список доступных команд, а не «команды не найдены».
+	// convLinks — скоп ссылок розыгрыша: handlers → webapp-тип.
+	convLinks := func(links []handlers.GiveawayLinkStatOut) []webapp.LinkForGiveawayOut {
+		out := make([]webapp.LinkForGiveawayOut, 0, len(links))
+		for _, l := range links {
+			out = append(out, webapp.LinkForGiveawayOut{
+				LinkURL: l.LinkURL, Name: l.Name, ChannelID: l.ChannelID, LinkType: l.LinkType,
+				Clicks: l.Clicks, Signups: l.Signups,
+			})
+		}
+		return out
+	}
+
 	appDeps := &webapp.Deps{
 		DB:       db,
 		BotToken: cfg.BotToken,
@@ -133,6 +145,7 @@ func main() {
 				Referral: in.Referral, Captcha: in.Captcha,
 				ResultsInPost: in.ResultsInPost, ResultsText: in.ResultsText,
 				SaveDraft: in.SaveDraft, GiveawayID: in.GiveawayID, Approval: in.Approval,
+				SubChannelsSet: in.SubChannelsSet,
 			})
 		},
 		// Визард «каналы → ссылки → пост»: черновик + автоссылки + редактура.
@@ -142,15 +155,13 @@ func main() {
 			g, err := db.CreateDraftGiveaway(ctx, uid, "")
 			return g.ID, "", err
 		},
-		TrackingForGiveaway: func(ctx context.Context, uid, giveawayID int64, channelIDs []int64) ([]webapp.LinkForGiveawayOut, string, error) {
-			links, vmsg, err := bot.CreateTrackingForGiveaway(ctx, uid, giveawayID, channelIDs)
-			out := make([]webapp.LinkForGiveawayOut, 0, len(links))
-			for _, l := range links {
-				out = append(out, webapp.LinkForGiveawayOut{
-					LinkURL: l.LinkURL, Name: l.Name, ChannelID: l.ChannelID, LinkType: l.LinkType,
-				})
-			}
-			return out, vmsg, err
+		TrackingForGiveaway: func(ctx context.Context, uid, giveawayID int64, channelIDs []int64, draftName string) ([]webapp.LinkForGiveawayOut, string, error) {
+			links, vmsg, err := bot.CreateTrackingForGiveaway(ctx, uid, giveawayID, channelIDs, draftName)
+			return convLinks(links), vmsg, err
+		},
+		GiveawayLinks: func(ctx context.Context, uid, giveawayID int64) ([]webapp.LinkForGiveawayOut, string, error) {
+			links, _, err := bot.GiveawayLinksForApp(ctx, uid, giveawayID)
+			return convLinks(links), "", err
 		},
 		GiveawayForEdit: func(ctx context.Context, uid, giveawayID int64) (webapp.GiveawayEditOut, string, error) {
 			e, vmsg, err := bot.GetGiveawayForEdit(ctx, uid, giveawayID)
@@ -174,6 +185,7 @@ func main() {
 			return bot.CreateTrackingLinkFromApp(ctx, uid, handlers.TrackingLinkFromApp{
 				Mode: in.Mode, ChannelID: in.ChannelID, ChannelIDs: in.ChannelIDs,
 				Name: in.Name, Cost: in.Cost, LinkType: in.LinkType, PostRef: in.PostRef,
+				GiveawayID: in.GiveawayID,
 			})
 		},
 		AddChannel:  bot.AddChannelFromApp,

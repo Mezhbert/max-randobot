@@ -451,12 +451,29 @@
       '<div class="stat"><div class="num">' + g.winners + '</div><div class="lbl">победителей</div></div>' +
       '<div class="stat"><div class="num" style="font-size:11px;padding-top:8px">' + esc(g.when) + '</div><div class="lbl">' + esc(g.status) + '</div></div>' +
       '</div></div>' +
+      '<div id="g-scope"></div>' +
       '<div class="card tap" data-a="sendpost"><div class="row"><div class="title">Отправить пост мне в чат</div><span>→</span></div>' +
       '<div class="meta">готовый пост точным видом (текст, медиа, кнопка)</div></div>' +
       '<div class="msg" id="sendmsg"></div>';
     bindRoleSwitch();
     onBack(renderGiveaways);
     document.getElementById('hb').onclick = renderGiveaways;
+    // Скоп трекинг-ссылок розыгрыша (авто + привязанные): клики/подписки.
+    GET('/app/api/analytics/giveaway-links/' + g.id).then(function (d) {
+      if (!d.ok) return;
+      var links = d.links || [], t = d.totals || {};
+      var el = document.getElementById('g-scope');
+      if (!el) return;
+      el.innerHTML = '<div class="sect">Трекинг розыгрыша · ' + (t.links || 0) + '</div>' +
+        (links.length ? '<div class="card"><div class="stats">' +
+          '<div class="stat"><div class="num">' + (t.clicks || 0) + '</div><div class="lbl">клики (сумма)</div></div>' +
+          '<div class="stat"><div class="num">' + (t.signups || 0) + '</div><div class="lbl">подписки (сумма)</div></div>' +
+          '<div class="stat"><div class="num">' + (t.links || 0) + '</div><div class="lbl">ссылок</div></div></div></div>' +
+          links.map(function (l) {
+            return '<div class="card"><div class="row"><div class="title" style="font-size:13.5px">' + esc(l.name) + '</div>' +
+              '<span class="badge">' + (l.clicks || 0) + ' км · ' + (l.signups || 0) + ' пп</span></div></div>';
+          }).join('') : '');
+    });
     app.querySelector('[data-a="sendpost"]').onclick = function () {
       POST('/app/api/analytics/send-post', { giveaway_id: parseInt(g.id, 10) }).then(function (d) {
         var el = document.getElementById('sendmsg');
@@ -584,14 +601,17 @@
       '<div class="meta" style="margin-top:0">Под выбранные каналы сразу сгенерируем уникальные трекинг-ссылки — следующий шаг покажет их списком.</div>' +
       '<label class="lbl">Каналы публикации *</label>' +
       '<div class="card tap" data-a="pick-pub" style="margin-top:4px"><div class="row"><div class="title" id="f-pubsum">Выбрать каналы…</div><span>→</span></div></div>' +
-      '<label class="lbl">Каналы обязательной подписки</label>' +
-      '<div class="card tap" data-a="pick-sub" style="margin-top:4px"><div class="row"><div class="title" id="f-subsum">Каналы публикации (по умолчанию)</div><span>→</span></div></div>' +
+      '<label class="lbl">Каналы обязательной подписки — только выбранные вами</label>' +
+      '<div class="card tap" data-a="pick-sub" style="margin-top:4px"><div class="row"><div class="title" id="f-subsum">Все каналы публикации (по умолчанию)</div><span>→</span></div></div>' +
+      '<div class="meta">Подписка нужна не на все каналы публикации — уберите лишние в выборе. Пусто = без проверки подписки.</div>' +
       '<div class="meta" id="f-linksinfo"></div>';
     else if (step === 2) html +=
-      '<div class="meta" style="margin-top:0">Уникальные трекинг-ссылки под каждый канал розыгрыша (уже сгенерированы):</div>' +
-      '<div id="f-linklist"><div class="skel"></div></div>' +
-      '<div class="meta">Клики и подписки по ним — в «Трекинг». На шаге «Пост» вставьте нужные в текст кнопкой «Вшить ссылку».</div>' +
-      '<button class="btn sec sm" id="f-gotrack" style="margin-top:8px">Открыть Трекинг →</button>';
+      '<div class="meta" style="margin-top:0">Ссылки считают переходы с каждого канала, где выйдет пост. Отметьте каналы и сгенерируйте скоп — он привяжется к розыгрышу.</div>' +
+      '<div id="f-chsel" class="pick"></div>' +
+      '<button class="btn" id="f-genlinks">🔗 Сгенерировать ссылки для отмеченных</button>' +
+      '<div id="f-scope"></div>' +
+      '<div class="card"><div class="meta">Нужны <b>суперссылки</b> (на конкретный пост)? Создайте их в Трекинге и привяжите к этому розыгрышу — они встанут в общий скоп и статистику.</div>' +
+      '<button class="btn sec sm" id="f-gotrack" style="margin-top:8px">Открыть Трекинг →</button></div>';
     else if (step === 3) html +=
       '<label class="lbl" style="margin-top:0">Текст поста *</label>' +
       '<textarea id="f-post" placeholder="🎁 РОЗЫГРЫШ!&#10;&#10;Условия простые: подпишись и нажми «Участвовать»…"></textarea>' +
@@ -697,9 +717,13 @@
         var p = document.getElementById('f-pubsum'), s = document.getElementById('f-subsum');
         if (p) p.textContent = pubSel.length ? pubSel.map(function (id) { return by[id] || ('#' + id); }).join(', ') : 'Выбрать каналы…';
         if (s) {
-          var all = subSel.slice();
-          pubSel.forEach(function (id) { if (all.indexOf(id) === -1) all.push(id); });
-          s.textContent = all.length ? all.map(function (id) { return by[id] || ('#' + id); }).join(', ') : 'Каналы публикации (по умолчанию)';
+          if (dd.sub_set) {
+            s.textContent = subSel.length
+              ? '✓ ' + subSel.length + ' из ' + pubSel.length + ': ' + subSel.map(function (id) { return by[id] || ('#' + id); }).join(', ')
+              : 'Без проверки подписки (пусто)';
+          } else {
+            s.textContent = 'Все каналы публикации (по умолчанию)';
+          }
         }
         var li = document.getElementById('f-linksinfo');
         if (li) li.textContent = (dd.links || []).length ? '🔗 Ссылок под розыгрыш: ' + dd.links.length + ' — список на следующем шаге' : '';
@@ -719,35 +743,92 @@
     var psBtn = app.querySelector('[data-a="pick-sub"]');
     if (psBtn) psBtn.onclick = function () {
       openChannelPicker({
-        title: 'Каналы подписки', selected: subSel, locked: pubSel,
+        title: 'Каналы подписки', selected: subSel,
         onDone: function (sel) {
-          subSel = sel;
-          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { pub_channels: pubSel, sub_channels: subSel, step: step });
+          subSel = sel; // свободный выбор: любое подмножество, можно пустое
+          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { pub_channels: pubSel, sub_channels: subSel, sub_set: true, step: step });
           refreshStepCh();
         }
       });
     };
     refreshStepCh();
 
-    // ---------- Шаг «Ссылки»: явный список сгенерированных ссылок ----------
-    var linkList = document.getElementById('f-linklist');
-    if (linkList) {
+    // ---------- Шаг «Ссылки»: выбор каналов → генерация → скоп со статами ----------
+    var genSelKeep = (dd.gen_channels || null);
+    var chSel = document.getElementById('f-chsel');
+    if (chSel) {
       pubNames().then(function (by) {
-        var links = dd.links || [];
-        linkList.innerHTML = links.map(function (l, i) {
-          return '<div class="card"><div class="row"><div class="title">🔗 ' + esc(by[l.channel_id] || 'Канал') + '</div></div>' +
-            '<div class="linkline" style="margin:4px 0;font-size:12px">' + esc(l.url) + '</div>' +
-            '<button class="btn sm sec" data-copy="' + i + '">📋 Скопировать</button></div>';
-        }).join('') || '<div class="empty">Ссылок нет — вернитесь на шаг «Каналы»</div>';
-        linkList.querySelectorAll('[data-copy]').forEach(function (b) {
-          b.onclick = function () {
-            var url = links[parseInt(b.getAttribute('data-copy'), 10)].url;
-            if (navigator.clipboard) navigator.clipboard.writeText(url);
-            b.textContent = '✅ Скопировано';
-            setTimeout(function () { b.textContent = '📋 Скопировать'; }, 1500);
+        var genSel = genSelKeep || pubSel.slice(); // по умолчанию все каналы публикации
+        chSel.innerHTML = pubSel.map(function (id) {
+          return '<div class="chip ' + (genSel.indexOf(id) > -1 ? 'on' : '') + '" data-gid="' + id + '">' +
+            (genSel.indexOf(id) > -1 ? '✓ ' : '') + esc(by[id] || ('#' + id)) + '</div>';
+        }).join('');
+        chSel.querySelectorAll('[data-gid]').forEach(function (c) {
+          c.onclick = function () {
+            var id = parseInt(c.getAttribute('data-gid'), 10);
+            var i = genSel.indexOf(id);
+            if (i > -1) genSel.splice(i, 1); else genSel.push(id);
+            genSelKeep = genSel;
+            persistDraft(DRAFT_GW_KEY, GW_FIELDS, { gen_channels: genSel, step: step });
+            c.classList.toggle('on');
+            c.textContent = (genSel.indexOf(id) > -1 ? '✓ ' : '') + (by[id] || ('#' + id));
           };
         });
+        var gb = document.getElementById('f-genlinks');
+        if (gb) gb.onclick = function () {
+          if (!genSel.length) return showMsg('f-msg', 'Отметьте хотя бы один канал', true);
+          if (!dd.giveaway_id) return showMsg('f-msg', 'Сначала пройдите шаг «Каналы»', true);
+          showMsg('f-msg', '⏳ Генерирую…');
+          POST('/app/api/tracking/for-giveaway', {
+            giveaway_id: dd.giveaway_id, channel_ids: genSel,
+            name: dd['f-name'] || ''
+          }).then(function (d) {
+            if (!d.ok) return showMsg('f-msg', '⚠️ ' + (d.error || 'Ошибка'), true);
+            dd.links = d.links || [];
+            persistDraft(DRAFT_GW_KEY, GW_FIELDS, { links: dd.links, step: step });
+            showMsg('f-msg', '✅ Готово — ссылки в скопе розыгрыша');
+            renderScope(dd.links);
+          });
+        };
       });
+    }
+    function renderScope(links) {
+      var scope = document.getElementById('f-scope');
+      if (!scope) return;
+      var totC = 0, totS = 0;
+      links.forEach(function (l) { totC += l.clicks || 0; totS += l.signups || 0; });
+      scope.innerHTML = '<div class="sect">Скоп ссылок розыгрыша · ' + links.length + '</div>' +
+        (links.length ? '<div class="card"><div class="stats">' +
+          '<div class="stat"><div class="num">' + totC + '</div><div class="lbl">клики (сумма)</div></div>' +
+          '<div class="stat"><div class="num">' + totS + '</div><div class="lbl">подписки (сумма)</div></div>' +
+          '<div class="stat"><div class="num">' + links.length + '</div><div class="lbl">ссылок</div></div></div></div>' : '') +
+        links.map(function (l, i) {
+          return '<div class="card"><div class="row"><div class="title" style="font-size:13.5px">' + esc(l.name) + '</div>' +
+            '<span class="badge">' + (l.clicks || 0) + ' км · ' + (l.signups || 0) + ' пп</span></div>' +
+            '<div class="linkline" style="margin:4px 0;font-size:12px">' + esc(l.url) + '</div>' +
+            '<button class="btn sm sec" data-copy="' + i + '">📋 Скопировать</button></div>';
+        }).join('');
+      scope.querySelectorAll('[data-copy]').forEach(function (b) {
+        b.onclick = function () {
+          var url = links[parseInt(b.getAttribute('data-copy'), 10)].url;
+          if (navigator.clipboard) navigator.clipboard.writeText(url);
+          b.textContent = '✅ Скопировано';
+          setTimeout(function () { b.textContent = '📋 Скопировать'; }, 1500);
+        };
+      });
+    }
+    var scopeEl = document.getElementById('f-scope');
+    if (scopeEl) {
+      // Свежие статы с сервера (включая привязанные вручную ссылки).
+      if (dd.giveaway_id) {
+        GET('/app/api/analytics/giveaway-links/' + dd.giveaway_id).then(function (d) {
+          if (!d.ok) return;
+          dd.links = d.links || [];
+          renderScope(dd.links);
+        });
+      } else {
+        renderScope([]);
+      }
     }
     var goTrack = document.getElementById('f-gotrack');
     if (goTrack) goTrack.onclick = function () {
@@ -767,15 +848,10 @@
           })
         : Promise.resolve(dd.giveaway_id);
       p.then(function (gid) {
-        return POST('/app/api/tracking/for-giveaway', { giveaway_id: gid, channel_ids: pubSel }).then(function (d) {
-          if (!d.ok) throw 0;
-          dd.links = (d.links || []).slice();
-          persistDraft(DRAFT_GW_KEY, GW_FIELDS, { links: dd.links, step: 2 });
-          showMsg('f-msg', dd.links.length ? '✅ Уникальные ссылки для каналов сгенерированы' : '');
-          setTimeout(function () { renderGwWizard(2); }, needDraft ? 150 : 0);
-        });
+        persistDraft(DRAFT_GW_KEY, GW_FIELDS, { step: 2 });
+        renderGwWizard(2);
       }).catch(function () {
-        showMsg('f-msg', '⚠️ Не удалось подготовить ссылки — проверьте соединение', true);
+        showMsg('f-msg', '⚠️ Не удалось подготовить черновик — проверьте соединение', true);
       });
     }
 
@@ -885,6 +961,7 @@
         media_tokens: media,
         pub_channels: pubSel.length ? pubSel : (dd.pub_channels || []),
         sub_channels: subSel.length ? subSel : (dd.sub_channels || []),
+        sub_channels_set: dd.sub_set === true,
         name: val('f-name') || dd['f-name'] || '',
         button_text: val('f-btn') || 'Участвовать',
         winners: parseInt(val('f-winners') || dd['f-winners'] || '1', 10) || 1,
@@ -1118,7 +1195,8 @@
     var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
 
     var html = roleswitch() + header('Создание ссылки', 'шаг ' + (step + 1) + ' из 3', true) + progress(step, 3) + '<div id="wz">';
-    if (step === 0) html += '<label class="lbl" style="margin-top:0">Канал, на который будет вести ссылка *</label><div id="t-chs" class="pick"></div>';
+    if (step === 0) html += '<label class="lbl" style="margin-top:0">Канал, на который будет вести ссылка *</label>' +
+      '<div class="card tap" data-a="t-pick" style="margin-top:4px"><div class="row"><div class="title" id="t-chsum">Выбрать канал…</div><span>→</span></div></div>';
     else if (step === 1) html +=
       '<label class="lbl" style="margin-top:0">Механика</label>' +
       '<div class="seg" id="t-mode"><div class="chip on" data-v="ads">📣 Реклама</div><div class="chip" data-v="contest">🏁 Конкурс</div></div>' +
@@ -1130,6 +1208,9 @@
       '<div id="t-type-w"><label class="lbl">Тип ссылки</label>' +
       '<div class="seg" id="t-type"><div class="chip on" data-v="unique">Уникальная (на канал)</div><div class="chip" data-v="super">Супер (на конкретный пост)</div></div></div>' +
       '</div>' +
+      '<label class="lbl">Привязать к розыгрышу (скоп статистики)</label>' +
+      '<div class="card tap" data-a="t-gwpick" style="margin-top:4px"><div class="row"><div class="title" id="t-gwsum">Без привязки</div><span>→</span></div></div>' +
+      '<div class="meta">Привязанная ссылка встанет в скоп розыгрыша — общая статистика в карточке розыгрыша и на шаге «Ссылки».</div>' +
       '<div id="t-contest" class="hidden">' +
       '<label class="lbl">Название (для всей группы ссылок) *</label>' +
       '<input class="inp" id="t-name2" placeholder="Например: Новый год">' +
@@ -1167,20 +1248,24 @@
         // Первый вход с предвыбором канала (кнопка на экране канала).
         if (forceAdsWithChannel && !adsCh) { adsCh = forceAdsWithChannel; }
         if (dd.step > 0 && dd.adsCh) { renderTrWizard(dd.step); return; }
-        function renderPick() {
-          document.getElementById('t-chs').innerHTML = chs.map(function (c) {
-            return '<div class="chip ' + (adsCh === c.id ? 'on' : '') + '" data-cid="' + c.id + '" data-pub="' + (c.is_public ? 1 : 0) + '">' +
-              (adsCh === c.id ? '✓ ' : '') + esc(c.title) + '</div>';
-          }).join('') || '<div class="meta">Нет каналов — добавьте во вкладке «📻 Каналы»</div>';
-          app.querySelectorAll('[data-cid]').forEach(function (el) {
-            el.onclick = function () {
-              adsCh = parseInt(el.getAttribute('data-cid'), 10);
-              persistDraft(DRAFT_TR_KEY, TR_FIELDS, { adsCh: adsCh, step: 1, isPub: el.getAttribute('data-pub') === '1' });
+        var by = {};
+        chs.forEach(function (c) { by[c.id] = c; });
+        var sum = document.getElementById('t-chsum');
+        if (sum) sum.textContent = adsCh && by[adsCh] ? '✓ ' + by[adsCh].title : 'Выбрать канал…';
+        var pk = app.querySelector('[data-a="t-pick"]');
+        if (pk) pk.onclick = function () {
+          // Список каналов — модальное окно с поиском (как в визарде розыгрыша).
+          openChannelPicker({
+            title: 'Канал ссылки', adminOnly: true, selected: adsCh ? [adsCh] : [],
+            onDone: function (sel) {
+              if (!sel.length) return;
+              var c = by[sel[0]];
+              if (!c) return;
+              persistDraft(DRAFT_TR_KEY, TR_FIELDS, { adsCh: c.id, step: 1, isPub: c.is_public });
               renderTrWizard(1);
-            };
+            }
           });
-        }
-        renderPick();
+        };
       } else {
         segBind('t-mode', function (v) {
           document.getElementById('t-ads').classList.toggle('hidden', v !== 'ads');
@@ -1191,6 +1276,54 @@
           persistDraft(DRAFT_TR_KEY, TR_FIELDS, { step: step, link_type: v });
           maybeGoPost();
         });
+        // Привязка к розыгрышу: свои черновики/запланированные/идущие.
+        var gwSum = document.getElementById('t-gwsum');
+        var gwPick = app.querySelector('[data-a="t-gwpick"]');
+        var attachedGw = dd.giveaway_id || 0;
+        var gwList = [];
+        if (gwSum) gwSum.textContent = dd.giveaway_name || 'Без привязки';
+        if (gwPick) gwPick.onclick = function () {
+          GET('/app/api/analytics/giveaways').then(function (d) {
+            gwList = (d.giveaways || []).filter(function (g) {
+              return g.status === 'draft' || g.status === 'scheduled' || g.status === 'active';
+            });
+            var wrap = document.createElement('div');
+            wrap.className = 'sheetwrap';
+            wrap.innerHTML = '<div class="sheet">' +
+              '<div class="sh"><div class="t">Привязать к розыгрышу</div><button class="x" id="gw-x">✕</button></div>' +
+              '<input class="inp" id="gw-q" placeholder="Поиск розыгрыша…">' +
+              '<div class="list" id="gw-list"></div></div>';
+            document.body.appendChild(wrap);
+            function close() { wrap.remove(); }
+            function render(q) {
+              q = (q || '').toLowerCase();
+              wrap.querySelector('#gw-list').innerHTML =
+                '<div class="srow ' + (attachedGw === 0 ? 'on' : '') + '" data-g="0"><div><div class="l">Без привязки</div></div></div>' +
+                gwList.filter(function (g) { return !q || g.name.toLowerCase().indexOf(q) > -1; })
+                  .map(function (g) {
+                    return '<div class="srow ' + (attachedGw === g.id ? 'on' : '') + '" data-g="' + g.id + '">' +
+                      '<div><div class="l">' + (attachedGw === g.id ? '✓ ' : '') + esc(g.name) + '</div>' +
+                      '<div class="m">' + esc(g.status) + '</div></div></div>';
+                  }).join('');
+              wrap.querySelectorAll('.srow').forEach(function (r) {
+                r.onclick = function () {
+                  var id = parseInt(r.getAttribute('data-g'), 10);
+                  attachedGw = id;
+                  var g = gwList.filter(function (x) { return x.id === id; })[0];
+                  dd.giveaway_id = id;
+                  dd.giveaway_name = g ? g.name : '';
+                  persistDraft(DRAFT_TR_KEY, TR_FIELDS, { giveaway_id: id, giveaway_name: dd.giveaway_name, step: step });
+                  if (gwSum) gwSum.textContent = id ? dd.giveaway_name : 'Без привязки';
+                  close();
+                };
+              });
+            }
+            wrap.querySelector('#gw-x').onclick = close;
+            wrap.onclick = function (e) { if (e.target === wrap) close(); };
+            wrap.querySelector('#gw-q').oninput = function () { render(this.value); };
+            render();
+          });
+        };
         if (dd.mode) segSet('t-mode', dd.mode);
         if (dd.link_type) segSet('t-type', dd.link_type);
         // Приватный канал: без супер-типа.
@@ -1228,7 +1361,8 @@
         var pr = val('t-post') || dd['t-post'] || '';
         if (lt === 'super' && !pr) return showMsg('t-msg', 'Вставьте ссылку на пост (шаг 3)', true);
         body = { mode: 'ads', channel_id: adsCh, name: (val('t-name') || dd['t-name'] || ''),
-                 cost: parseFloat(val('t-cost') || dd['t-cost'] || '0') || 0, link_type: lt, post_ref: pr };
+                 cost: parseFloat(val('t-cost') || dd['t-cost'] || '0') || 0, link_type: lt, post_ref: pr,
+                 giveaway_id: dd.giveaway_id || 0 };
         if (!body.name) return showMsg('t-msg', 'Введите название', true);
       }
       showMsg('t-msg', '⏳ Создаю…');
