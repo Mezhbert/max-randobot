@@ -730,15 +730,26 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 		if kind != "image" && kind != "video" {
 			kind = "image"
 		}
-		data, err := io.ReadAll(io.LimitReader(file, 50<<20))
+		// Лимит: читаем 50 МБ + 1 байт — молчаливое обрезание LimitReader'ом
+		// портило большие файлы (MAX отвечал INVALID_FORMAT, причина скрыта).
+		data, err := io.ReadAll(io.LimitReader(file, 50<<20+1))
 		if err != nil {
 			http.Error(w, `{"error":"read"}`, http.StatusBadRequest)
 			return
 		}
+		if len(data) > 50<<20 {
+			writeJSON(w, map[string]any{"ok": false, "error": "Файл больше 50 МБ — уменьшите размер"})
+			return
+		}
+		if len(data) == 0 {
+			writeJSON(w, map[string]any{"ok": false, "error": "Пустой файл"})
+			return
+		}
 		token, attType, err := d.UploadMedia(r.Context(), data, hdr.Filename, kind)
 		if err != nil {
-			log.Warn("app upload", "err", err, "user", userID)
-			writeJSON(w, map[string]any{"ok": false, "error": "Не удалось загрузить файл (до 50 МБ, JPG/PNG/MP4)"})
+			log.Warn("app upload", "err", err, "kind", kind, "name", hdr.Filename,
+				"size", len(data), "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Не удалось загрузить файл (до 50 МБ; фото — JPG/PNG/GIF, видео — MP4/MOV)"})
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "token": token, "type": attType})
