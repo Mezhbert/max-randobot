@@ -4,6 +4,7 @@
 package main
 
 import (
+	"strings"
 	"bytes"
 	"context"
 	"crypto/subtle"
@@ -149,11 +150,20 @@ func main() {
 			})
 		},
 		// Визард «каналы → ссылки → пост»: черновик + автоссылки + редактура.
-		CreateDraftGiveaway: func(ctx context.Context, uid int64) (int64, string, error) {
-			// GC брошенных пустых черновиков, затем новый draft.
+		CreateDraftGiveaway: func(ctx context.Context, uid int64, name string) (int64, string, error) {
+			// GC брошенных пустых черновиков, затем новый draft (с названием —
+			// черновик узнаваем в списке с первого шага визарда).
 			_ = db.DeleteEmptyDrafts(ctx, uid)
 			g, err := db.CreateDraftGiveaway(ctx, uid, "")
-			return g.ID, "", err
+			if err != nil {
+				return 0, "", err
+			}
+			if nm := strings.TrimSpace(name); nm != "" {
+				if uerr := db.UpdateGiveawayFieldAny(ctx, g.ID, "name", nm); uerr == nil {
+					g.Name = nm
+				}
+			}
+			return g.ID, "", nil
 		},
 		TrackingForGiveaway: func(ctx context.Context, uid, giveawayID int64, channelIDs []int64, draftName string) ([]webapp.LinkForGiveawayOut, string, error) {
 			links, vmsg, err := bot.CreateTrackingForGiveaway(ctx, uid, giveawayID, channelIDs, draftName)
