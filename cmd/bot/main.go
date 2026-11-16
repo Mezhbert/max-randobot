@@ -220,7 +220,9 @@ func main() {
 				GiveawayID: in.GiveawayID,
 			})
 		},
-		AddChannel:  bot.AddChannelFromApp,
+		AddChannel: func(ctx context.Context, uid int64, link string) (string, string, string, error) {
+			return bot.AddChannelFromApp(ctx, uid, link)
+		},
 		DeleteChannel: func(ctx context.Context, uid, channelID int64) (string, error) {
 			// Канал со ссылками не удаляем: статистика/подписчики не должны
 			// пропасть молча — юзер сначала удаляет ссылки в Трекинге.

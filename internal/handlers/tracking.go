@@ -1341,32 +1341,41 @@ func (b *Bot) CreateTrackingLinkFromApp(ctx context.Context, uid int64, in Track
 
 // AddChannelFromApp — добавить канал из миниаппа по ссылке/@username.
 // Возвращает название канала (или авторскую ошибку).
-func (b *Bot) AddChannelFromApp(ctx context.Context, uid int64, link string) (string, string, error) {
+func (b *Bot) AddChannelFromApp(ctx context.Context, uid int64, link string) (string, string, string, error) {
 	text := strings.TrimSpace(link)
 	if !isChannelLink(text) {
-		return "", "Похоже, это не ссылка на канал. Отправьте @username или https://max.ru/channel", nil
+		return "", "", "Похоже, это не ссылка на канал. Отправьте @username, https://max.ru/channel или числовой ID", nil
 	}
-	chat, err := b.api.GetChatByLink(ctx, text)
-	if err != nil {
-		return "", "Канал по ссылке не найден (он должен быть публичным)", nil
+	// MAX Bot API НЕ умеет искать канал по юзернейму (проверено живьём:
+	// /chats/{username} → 404; числовой id — единственный мгновенный путь).
+	var chatID int64
+	if n, err := strconv.ParseInt(strings.TrimPrefix(strings.TrimPrefix(text, "https://max.ru/"), "@"), 10, 64); err == nil {
+		chatID = n
+	} else if c, err := b.api.GetChatByLink(ctx, text); err == nil {
+		chatID = c.ChatID
 	}
-	info, isAdmin, err := b.api.CheckChannelAdmin(ctx, chat.ChatID)
+	if chatID == 0 {
+		// Ссылка/юзернейм: ждём событие bot_added (бота делают админом) —
+		// канал подключится автоматически и появится в «Мои каналы».
+		return "", "ℹ️ MAX не даёт ботам искать каналы по ссылке. Подключите так:\n\n1️⃣ Откройте канал → добавьте бота администратором (если уже добавлен — удалите и добавьте снова, чтобы пришло событие).\n2️⃣ Бот пришлёт «Канал подключён» — вернитесь сюда и обновите список.\n\nИли введите числовой ID канала — он подключится сразу.", "", nil
+	}
+	info, isAdmin, err := b.api.CheckChannelAdmin(ctx, chatID)
 	if err != nil {
-		return "", "Не удалось получить доступ к каналу. Добавьте бота админом и повторите", nil
+		return "", "", "Не удалось получить доступ к каналу. Добавьте бота админом и повторите", nil
 	}
 	if !isAdmin {
-		return "", "Бот НЕ администратор в этом канале. Добавьте бота админом и повторите", nil
+		return "", "", "Бот НЕ администратор в этом канале. Добавьте бота админом и повторите", nil
 	}
 	c, err := b.db.AddChannel(ctx, store.Channel{
-		OwnerUserID: uid, ChatID: chat.ChatID, Title: info.Title, Link: info.Link,
+		OwnerUserID: uid, ChatID: chatID, Title: info.Title, Link: info.Link,
 		IsPublic: info.IsPublic, IsBotAdmin: true,
 	})
 	if err != nil {
 		// Уже добавлен — не ошибка, вернём название.
-		if ch, gerr := b.db.GetChannelByChat(ctx, uid, chat.ChatID); gerr == nil {
-			return ifEmpty(ch.Title, "канал"), "", nil
+		if ch, gerr := b.db.GetChannelByChat(ctx, uid, chatID); gerr == nil {
+			return ifEmpty(ch.Title, "канал"), "", "", nil
 		}
-		return "", "Не удалось сохранить канал", nil
+		return "", "", "Не удалось сохранить канал", nil
 	}
-	return ifEmpty(c.Title, "канал"), "", nil
+	return ifEmpty(c.Title, "канал"), "", "", nil
 }
