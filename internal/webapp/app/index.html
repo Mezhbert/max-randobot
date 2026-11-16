@@ -189,6 +189,10 @@
   try { role = localStorage.getItem(ROLE_KEY) || 'organizer'; } catch (e) {}
   function setRole(r) {
     role = r;
+    // Дефолтные вкладки роли (организаторские gw/tr/ch/me, участника feed/mine/pinfo).
+    var ptabs = ['feed', 'mine', 'pinfo'];
+    if (r === 'participant' && ptabs.indexOf(state.tab) === -1) state.tab = 'feed';
+    if (r === 'organizer' && ptabs.indexOf(state.tab) > -1) state.tab = 'gw';
     if (r === 'organizer') state.view = 'home';
     try { localStorage.setItem(ROLE_KEY, r); } catch (e) {}
     render();
@@ -288,6 +292,7 @@
     else if (state.tab === 'mine') body = '<div class="empty">Здесь будет список конкурсов, в которых вы участвуете</div>';
     else body = '<div class="card"><div class="title">RandoMaster</div><div class="meta">Тут будет какая-то инфо.</div></div>';
     app.innerHTML = roleswitch() + body;
+    bindRoleSwitch();
   }
 
   function roleswitch() {
