@@ -400,7 +400,7 @@
     state.view = 'create';
     fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    onBack(function () { step > 0 ? renderGwWizard(step - 1) : renderGiveaways(); });
+    onBack(function () { step > 0 ? gotoStep(step - 1) : renderGiveaways(); });
 
     var GW_FIELDS = ['f-post','f-name','f-btn','f-winners','f-finat','f-fincnt','f-pubat','f-winmsg'];
     var html = roleswitch() + header('Создание розыгрыша', 'шаг ' + (step + 1) + ' из 6', true) +
@@ -753,7 +753,7 @@
     state.view = 'create';
     fab.classList.add('hidden');
     if (backBtn) backBtn.show();
-    onBack(function () { step > 0 ? renderTrWizard(step - 1) : renderTrackingTab(); });
+    onBack(function () { step > 0 ? gotoStep(step - 1) : renderTrackingTab(); });
     var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
 
     var html = roleswitch() + header('Создание ссылки', 'шаг ' + (step + 1) + ' из 3', true) + progress(step, 3) + '<div id="wz">';
