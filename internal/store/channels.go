@@ -225,3 +225,14 @@ func (s *Store) ChannelDynamics(ctx context.Context, channelID int64, days int) 
 	}
 	return res, rows.Err()
 }
+
+// CountChannelLinks — сколько трекинг-ссылок ведёт на канал (удаление канала
+// со ссылками блокируется — статистика не должна теряться молча).
+func (s *Store) CountChannelLinks(ctx context.Context, ownerUserID, channelID int64) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM utm_links WHERE owner_user_id=$1 AND channel_id=$2
+	`, ownerUserID, channelID).Scan(&n)
+	return n, err
+}
+

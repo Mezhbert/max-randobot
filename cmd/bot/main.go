@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"bytes"
 	"context"
@@ -220,6 +221,24 @@ func main() {
 			})
 		},
 		AddChannel:  bot.AddChannelFromApp,
+		DeleteChannel: func(ctx context.Context, uid, channelID int64) (string, error) {
+			// Канал со ссылками не удаляем: статистика/подписчики не должны
+			// пропасть молча — юзер сначала удаляет ссылки в Трекинге.
+			n, err := db.CountChannelLinks(ctx, uid, channelID)
+			if err != nil {
+				return "", err
+			}
+			if n > 0 {
+				return fmt.Sprintf("В канале %d ссылок — сначала удалите их в Трекинге", n), nil
+			}
+			if err := db.DeleteChannel(ctx, channelID, uid); err != nil {
+				if err == store.ErrNotFound {
+					return "Канал не найден", nil
+				}
+				return "", err
+			}
+			return "", nil
+		},
 		StartSupport: bot.StartSupportDialog,
 		UploadMedia: api.UploadMedia,
 	}

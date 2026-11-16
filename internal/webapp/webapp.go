@@ -61,6 +61,7 @@ type Deps struct {
 	CreateGiveaway   func(ctx context.Context, uid int64, in CreateGiveawayReq) (int64, string, error)
 	CreateTracking   func(ctx context.Context, uid int64, in CreateTrackingReq) ([]string, string, error)
 	AddChannel       func(ctx context.Context, uid int64, link string) (string, string, error)
+	DeleteChannel    func(ctx context.Context, uid, channelID int64) (string, error)
 	StartSupport     func(ctx context.Context, uid int64)
 	UploadMedia      func(ctx context.Context, data []byte, filename, kind string) (string, string, error)
 
@@ -836,6 +837,37 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg, "title": title})
+	})
+
+	// Удаление канала (без ссылок; со ссылками — отказ с числом).
+	mux.HandleFunc("/app/api/channels/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"post only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		userID, ok := d.authorize(r, r.URL.Query().Get("init_data"))
+		if !ok || userID == 0 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			ChannelID int64 `json:"channel_id"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil || req.ChannelID <= 0 {
+			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+			return
+		}
+		if d.DeleteChannel == nil {
+			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		vmsg, err := d.DeleteChannel(r.Context(), userID, req.ChannelID)
+		if err != nil {
+			log.Warn("app delete channel", "err", err, "id", req.ChannelID, "user", userID)
+			writeJSON(w, map[string]any{"ok": false, "error": "Внутренняя ошибка, попробуйте позже"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": vmsg == "", "error": vmsg})
 	})
 
 	// Загрузка медиа (multipart: file=..., kind=image|video) → токен.
