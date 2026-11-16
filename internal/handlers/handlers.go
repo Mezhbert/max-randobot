@@ -423,12 +423,9 @@ func (b *Bot) showOldMenu(ctx context.Context, uid int64) {
 	b.sendMainMenuText(ctx, uid, "Старое меню (все разделы):", util.MainMenuKeyboard())
 }
 
-// sendMainMenuText — меню с произвольной клавиатурой.
+// sendMainMenuText — меню с произвольной клавиатурой (как есть, без
+// приклеивания кнопки приложения: в миниапп заходят нативной кнопкой).
 func (b *Bot) sendMainMenuText(ctx context.Context, userID int64, text string, kb *model.Keyboard) {
-	if b.botUsername != "" {
-		row := kb.AddRow()
-		row.AddLink("📱 Открыть приложение", util.StartappLink(b.botUsername, "analytics"))
-	}
 	_, _ = b.api.SendTextWithKeyboard(ctx, userID, text, kb)
 }
 
