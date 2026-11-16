@@ -172,7 +172,16 @@ func main() {
 		DeleteGiveaway: func(ctx context.Context, uid, giveawayID int64) (string, error) {
 			if err := db.DeleteGiveaway(ctx, giveawayID, uid); err != nil {
 				if err == store.ErrNotFound {
-					return "Розыгрыш не найден или уже завершён", nil
+					return "Розыгрыш не найден", nil
+				}
+				return "", err
+			}
+			return "", nil
+		},
+		GiveawayArchive: func(ctx context.Context, uid, giveawayID int64, archived bool) (string, error) {
+			if err := db.SetGiveawayArchived(ctx, giveawayID, uid, archived); err != nil {
+				if err == store.ErrNotFound {
+					return "Розыгрыш не найден", nil
 				}
 				return "", err
 			}
