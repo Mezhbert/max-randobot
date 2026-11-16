@@ -40,6 +40,9 @@
   .meta{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.45}
   .badge{font-size:10px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);flex:none}
   .badge.inv{background:var(--inv);color:var(--inv-fg);border-color:var(--inv)}
+  .badge.ok{background:#2e7d32;color:#fff;border-color:#2e7d32}
+  .badge.warn{background:#f9a825;color:#222;border-color:#f9a825}
+  .delico{flex:none;width:28px;height:22px;border-radius:7px;background:#c66;color:#fff;border:none;font-size:12px;cursor:pointer;line-height:1}
   .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
   .stats.c5{grid-template-columns:repeat(5,1fr)}
   .stat{background:var(--card2);border-radius:11px;padding:9px 4px;text-align:center}
@@ -424,8 +427,9 @@
         var editBtn = g.status === 'draft'
           ? '<button class="btn sm sec" data-a="gwedit" data-id="' + g.id + '" style="margin-top:8px">✏️ Редактировать</button>'
           : '';
+        var bc = g.status === 'active' ? 'ok' : (g.status === 'draft' ? 'warn' : '');
         return '<div class="card tap" data-a="gw" data-id="' + g.id + '">' +
-          '<div class="row"><div class="title">' + esc(g.name) + '</div><span class="badge ' + (g.status === 'active' ? 'inv' : '') + '">' + (m[g.status] || g.status) + '</span></div>' +
+          '<div class="row"><div class="title">' + esc(g.name) + '</div><span class="badge ' + bc + '">' + (g.archived ? 'архив' : (m[g.status] || g.status)) + '</span></div>' +
           '<div class="meta">' + when + ' · участников: ' + g.parts + ' · победителей: ' + g.winners + '</div>' + editBtn + '</div>';
       }).join('') || '<div class="empty">Пока пусто.<br>Нажмите «Создать розыгрыш».</div>';
       app.querySelectorAll('button[data-a="gwedit"]').forEach(function (b) {
@@ -1651,19 +1655,19 @@
         if (state.sort === 'name') chs.sort(function (a, b) { return a.title.localeCompare(b.title, 'ru'); });
         document.getElementById('list').innerHTML = chs.map(function (c) {
           return '<div class="card tap" data-a="ch" data-id="' + c.id + '" data-t="' + esc(c.title) + '">' +
-            '<div class="row"><div class="title">' + esc(c.title) + '</div><span class="badge ' + (c.admin ? 'inv' : '') + '">' + (c.admin ? 'бот админ' : 'нет прав') + '</span></div>' +
-            '<div class="meta" style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span>ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</span>' +
-            '<button class="iconbtn" data-a="chdel" data-id="' + c.id + '" title="Удалить канал" style="width:32px;height:28px">🗑</button></div></div>';
+            '<div class="row"><div class="title">' + esc(c.title) + '</div><span style="display:flex;align-items:center;gap:6px">' +
+            '<span class="badge ' + (c.admin ? 'ok' : 'warn') + '">' + (c.admin ? 'бот админ' : 'нет прав') + '</span>' +
+            '<button class="delico" data-a="chdel" data-id="' + c.id + '" title="Удалить канал">🗑</button></span></div>' +
+            '<div class="meta">ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</div></div>';
         }).join('') || '<div class="empty">Каналов пока нет</div>';
         app.querySelectorAll('button[data-a="chdel"]').forEach(function (b) {
           b.onclick = function (e) {
             e.stopPropagation(); // не открывать канал
             // confirm() в вебвью недоступен — двухтаповое подтверждение.
-            // Иконка: первый тап — «точно?» (красная), второй — удаляет.
+            // Первый тап — «точно?» (темнеет), второй — удаляет.
             if (!b.classList.contains('armed')) {
               b.classList.add('armed');
-              b.style.background = '#c66';
-              b.style.color = '#fff';
+              b.style.background = '#8e2020';
               b.title = 'Удалить канал окончательно?';
               return;
             }
@@ -1672,7 +1676,7 @@
                 if (d.ok) { loadList(); return; }
                 b.classList.remove('armed');
                 b.style.background = '';
-                b.style.color = '';
+                b.title = 'Удалить канал';
                 showMsg('ch-msg', '⚠️ ' + (d.error || 'ошибка'), true);
               });
           };
