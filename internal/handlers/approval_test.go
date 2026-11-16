@@ -275,3 +275,23 @@ func TestRenameGiveaway_FixesLinks(t *testing.T) {
 	assert.Equal(t, "Правильное имя | Канал А", links[0].Source,
 		"ссылка переименована в «Новое имя | Канал»")
 }
+
+func TestDeleteGiveaway_FromApp(t *testing.T) {
+	b, s, _, cleanup := newBot(t)
+	defer cleanup()
+	ctx := context.Background()
+	const uid = 7009
+	testutil.EnsureUser(t, s, uid, "deleter")
+
+	gid, _, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
+		Name: "На удаление", PostText: "Пост", ButtonText: "Участвовать",
+		PublishNow: true, FinishMode: "time", FinishAt: "01.01.2099 21:00",
+		Winners: 1, Approval: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.DeleteGiveaway(ctx, gid, uid))
+	_, err = s.GetGiveawayAny(ctx, gid)
+	assert.Error(t, err, "черновик удалён")
+	err = s.DeleteGiveaway(ctx, gid, uid)
+	assert.Error(t, err, "повторное удаление — не найден")
+}

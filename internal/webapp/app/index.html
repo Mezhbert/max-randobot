@@ -465,7 +465,11 @@
       '<div id="g-scope"></div>' +
       '<div class="card tap" data-a="sendpost"><div class="row"><div class="title">Отправить пост мне в чат</div><span>→</span></div>' +
       '<div class="meta">готовый пост точным видом (текст, медиа, кнопка)</div></div>' +
-      '<div class="msg" id="sendmsg"></div>';
+      '<div class="msg" id="sendmsg"></div>' +
+      (g.status === 'finished' ? '' :
+      '<div class="card tap" data-a="delgw"><div class="row"><div class="title" style="color:#c66">🗑 Удалить розыгрыш</div><span>→</span></div>' +
+      '<div class="meta">черновик/запланированный удалится со всей информацией; завершённый удалить нельзя</div></div>' +
+      '<div class="msg" id="delgwmsg"></div>');
     bindRoleSwitch();
     onBack(renderGiveaways);
     document.getElementById('hb').onclick = renderGiveaways;
@@ -485,6 +489,21 @@
               '<span class="badge">' + (l.clicks || 0) + ' км · ' + (l.signups || 0) + ' пп</span></div></div>';
           }).join('') : '');
     });
+    var delGw = app.querySelector('[data-a="delgw"]');
+    if (delGw) delGw.onclick = function () {
+      // confirm() в вебвью MAX недоступен — двухтаповое подтверждение.
+      if (!delGw.classList.contains('armed')) {
+        delGw.classList.add('armed');
+        var tt = delGw.querySelector('.title');
+        if (tt) tt.textContent = '🗑 Удалить окончательно?';
+        return;
+      }
+      POST('/app/api/giveaways/delete', { giveaway_id: parseInt(g.id, 10) }).then(function (d) {
+        if (d.ok) { renderGiveaways(); return; }
+        var m = document.getElementById('delgwmsg');
+        if (m) { m.textContent = '⚠️ ' + (d.error || 'ошибка'); m.className = 'msg err'; }
+      });
+    };
     app.querySelector('[data-a="sendpost"]').onclick = function () {
       POST('/app/api/analytics/send-post', { giveaway_id: parseInt(g.id, 10) }).then(function (d) {
         var el = document.getElementById('sendmsg');

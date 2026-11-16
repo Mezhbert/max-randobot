@@ -169,6 +169,15 @@ func main() {
 			links, vmsg, err := bot.CreateTrackingForGiveaway(ctx, uid, giveawayID, channelIDs, draftName)
 			return convLinks(links), vmsg, err
 		},
+		DeleteGiveaway: func(ctx context.Context, uid, giveawayID int64) (string, error) {
+			if err := db.DeleteGiveaway(ctx, giveawayID, uid); err != nil {
+				if err == store.ErrNotFound {
+					return "Розыгрыш не найден или уже завершён", nil
+				}
+				return "", err
+			}
+			return "", nil
+		},
 		GiveawayRename: func(ctx context.Context, uid, giveawayID int64, name string) (string, error) {
 			return bot.RenameGiveawayFromApp(ctx, uid, giveawayID, name)
 		},
