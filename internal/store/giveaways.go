@@ -113,6 +113,7 @@ func (s *Store) ListMyParticipations(ctx context.Context, userID int64) ([]Givea
 var fieldWhitelist = map[string]bool{
 	"name": true, "post_text": true, "button_text": true,
 	"media_tokens": true,
+	"post_format": true, // миниапп шлёт markdown: без него create падал not found
 	"subscribe_channel_ids": true, "publish_channel_ids": true,
 	"results_in_original_post": true, "results_post_text": true,
 	"publish_at": true, "finish_at": true, "finish_mode": true, "finish_participants_count": true,

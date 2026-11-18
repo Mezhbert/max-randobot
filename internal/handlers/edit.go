@@ -122,13 +122,17 @@ func (b *Bot) startEditField(ctx context.Context, uid int64, g store.Giveaway, k
 		"field":       key,
 	})
 	prompt := fmt.Sprintf("%s\n\nТекущее значение:\n%s\n\nОтправьте новое значение:", def.title, cur)
+	kb := util.CancelEditKeyboard(g.ID)
 	if def.kind == "date" {
 		prompt += "\n(формат ЧЧ:ММ или ДД.ММ.ГГГГ ЧЧ:ММ, по МСК)"
+		// Копирование шаблона даты: «:» и «.» неудобно набирать на телефоне.
+		tpl := util.FormatMoscowTime(time.Now().Add(24 * time.Hour))
+		kb.AddRow().AddClipboard("📋 Скопировать формат даты", tpl)
 	}
 	if def.kind == "number" {
 		prompt += "\n(целое число)"
 	}
-	_, _ = b.api.SendTextWithKeyboard(ctx, uid, prompt, util.CancelEditKeyboard(g.ID))
+	_, _ = b.api.SendTextWithKeyboard(ctx, uid, prompt, kb)
 }
 
 // fieldCurrentValue — строковое представление текущего значения поля.

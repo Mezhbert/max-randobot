@@ -28,7 +28,7 @@ func TestAppGiveawayApproval_YesPublishes(t *testing.T) {
 	require.NoError(t, err)
 
 	gid, vmsg, err := b.CreateGiveawayFromApp(ctx, uid, handlers.GiveawayDraftFromApp{
-		Name: "Тест утверждения", PostText: "Пост на утверждение", ButtonText: "Участвовать",
+		Name: "Тест утверждения", PostText: "Пост [со ссылкой](https://max.ru/x)", PostFormat: "markdown", ButtonText: "Участвовать",
 		PubChannels: []int64{ch.ID}, SubChannels: []int64{ch.ID},
 		PublishNow: true, FinishMode: "time", FinishAt: "01.01.2099 21:00",
 		Winners: 1, Approval: true,

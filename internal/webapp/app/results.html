@@ -35,6 +35,21 @@
 </div>
 <script src="https://st.max.ru/js/max-web-app.js"></script>
 <script>
+// Выход из вебвью: close() в бридже нет, history.back тоже не работает —
+// уводим юзера наружу в MAX (openMaxLink); если бридж недоступен — подсказка.
+document.addEventListener('DOMContentLoaded', function () {
+  var b = document.getElementById('close-btn');
+  if (!b) return;
+  b.onclick = function () {
+    try { if (window.WebApp && WebApp.close) { WebApp.close(); return; } } catch (e) {}
+    try {
+      if (window.WebApp && WebApp.openMaxLink) { WebApp.openMaxLink('https://max.ru/'); return; }
+    } catch (e) {}
+    b.textContent = 'Окно можно закрыть: смахните вниз или ✕';
+  };
+});
+</script>
+<script>
 // Страница итогов (P4/P5). Открывается кнопкой «🏆 Проверить результаты» под
 // постом завершённого розыгрыша (startapp-ссылка results_<id>); маршрутизатор
 // в index.html передаёт start_param query-параметром. Фолбэк — из моста.
