@@ -1301,13 +1301,14 @@
 
   // Пошаговый визард ссылки: 1 канал → 2 механика+название+стоимость+тип → 3 пост (если супер)
   function renderTrWizard(step, forceAdsWithChannel) {
+    if (step > 1) step = 1; // шаг «пост» упразднён — поле теперь в основной форме
     state.view = 'create';
     fab.classList.add('hidden');
     if (backBtn) backBtn.show();
     onBack(function () { step > 0 ? gotoStep(step - 1) : goHome(); });
     var TR_FIELDS = ['t-name','t-cost','t-post','t-name2'];
 
-    var html = roleswitch() + header('Создание ссылки', 'шаг ' + (step + 1) + ' из 3', true) + progress(step, 3) + '<div id="wz">';
+    var html = roleswitch() + header('Создание ссылки', 'шаг ' + (step + 1) + ' из 2', true) + progress(step, 2) + '<div id="wz">';
     if (step === 0) html += '<label class="lbl" style="margin-top:0">Канал, на который будет вести ссылка *</label>' +
       '<div class="card tap" data-a="t-pick" style="margin-top:4px"><div class="row"><div class="title" id="t-chsum">Выбрать канал…</div><span>→</span></div></div>';
     else if (step === 1) html +=
@@ -1318,8 +1319,9 @@
       '<input class="inp" id="t-name" placeholder="Например: Реклама у Иванова">' +
       '<label class="lbl">Стоимость размещения, ₽ (посчитаем цену за подписчика)</label>' +
       '<input class="inp" id="t-cost" type="number" placeholder="1500">' +
-      '<div id="t-type-w"><label class="lbl">Тип ссылки</label>' +
-      '<div class="seg" id="t-type"><div class="chip on" data-v="unique">Уникальная (на канал)</div><div class="chip" data-v="super">Супер (на конкретный пост)</div></div></div>' +
+      '<label class="lbl">Ссылка на конкретный пост (необязательно)</label>' +
+      '<input class="inp" id="t-post" placeholder="https://max.ru/mychannel/42">' +
+      '<div class="meta">Пусто — ссылка ведёт на последний пост канала. Вставьте адрес поста — ссылка будет вести на него.</div>' +
       '</div>' +
       '<label class="lbl">Привязать к розыгрышу (общая статистика)</label>' +
       '<div class="card tap" data-a="t-gwpick" style="margin-top:4px"><div class="row"><div class="title" id="t-gwsum">Без привязки</div><span>→</span></div></div>' +
@@ -1328,10 +1330,7 @@
       '<label class="lbl">Название (для всей группы ссылок) *</label>' +
       '<input class="inp" id="t-name2" placeholder="Например: Новый год">' +
       '<div class="meta">Конкурс — люди подписываются на ваши каналы, вы выбираете победителя. Ссылки ведут на последний пост канала; под каждый канал — своя.</div></div>';
-    else html +=
-      '<label class="lbl" style="margin-top:0">Ссылка на пост *</label>' +
-      '<input class="inp" id="t-post" placeholder="https://max.ru/mychannel/42">' +
-      '<div class="meta">Скопируйте адрес поста из канала — ссылка будет вести именно на него.</div>';
+    else html += ''; // шаг 3 упразднён (старые черновики: склейка ниже)
     html += '</div><div class="btnrow">' +
       (step > 0 ? '<button class="btn sec" id="wz-prev">← Назад</button>' : '') +
       (step < 2 ? '<button class="btn" id="wz-next">Далее →</button>' : '') +
@@ -1385,10 +1384,6 @@
           document.getElementById('t-contest').classList.toggle('hidden', v !== 'contest');
           persistDraft(DRAFT_TR_KEY, TR_FIELDS, { step: step, mode: v });
         });
-        segBind('t-type', function (v) {
-          persistDraft(DRAFT_TR_KEY, TR_FIELDS, { step: step, link_type: v });
-          maybeGoPost();
-        });
         // Привязка к розыгрышу: свои черновики/запланированные/идущие.
         var gwSum = document.getElementById('t-gwsum');
         var gwPick = app.querySelector('[data-a="t-gwpick"]');
@@ -1438,11 +1433,6 @@
           });
         };
         if (dd.mode) segSet('t-mode', dd.mode);
-        if (dd.link_type) segSet('t-type', dd.link_type);
-        // Приватный канал: без супер-типа.
-        var isPub = dd.isPub !== false;
-        if (document.getElementById('t-type-w')) document.getElementById('t-type-w').classList.toggle('hidden', !isPub);
-        if (!isPub) segSet('t-type', 'unique');
       }
     });
 
@@ -1451,15 +1441,7 @@
         if (!adsCh) return showMsg('t-msg', 'Выберите канал', true);
         gotoStep(1); return;
       }
-      if (step === 1) {
-        var isSuper = (segVal('t-type') || dd.link_type || 'unique') === 'super' && dd.isPub !== false;
-        if (isSuper) { gotoStep(2); return; }
-        tryFinish(); return;
-      }
       tryFinish();
-    }
-    function maybeGoPost() {
-      if (step === 1 && segVal('t-type') === 'super') { setTimeout(function () { gotoStep(2); }, 150); }
     }
     var goBtn = document.getElementById('t-go');
     if (goBtn) goBtn.onclick = function () { tryFinish(); };
@@ -1470,9 +1452,9 @@
         body = { mode: 'contest', channel_ids: [adsCh], name: (val('t-name2') || dd['t-name2'] || '') };
         if (!body.name) return showMsg('t-msg', 'Введите название', true);
       } else {
-        var lt = segVal('t-type') || dd.link_type || 'unique';
         var pr = val('t-post') || dd['t-post'] || '';
-        if (lt === 'super' && !pr) return showMsg('t-msg', 'Вставьте ссылку на пост (шаг 3)', true);
+        if (pr && pr.indexOf('http') !== 0) return showMsg('t-msg', 'Ссылка на пост должна начинаться с https://', true);
+        var lt = pr ? 'super' : 'unique';
         body = { mode: 'ads', channel_id: adsCh, name: (val('t-name') || dd['t-name'] || ''),
                  cost: parseFloat(val('t-cost') || dd['t-cost'] || '0') || 0, link_type: lt, post_ref: pr,
                  giveaway_id: dd.giveaway_id || 0 };
