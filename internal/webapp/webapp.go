@@ -950,6 +950,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 			Clicks   int64  `json:"clicks"`
 			Signups  int64  `json:"signups"`
 			AddedAt  string `json:"added_at"`
+			ChatID   int64  `json:"chat_id"` // числовой ID канала (для ручного ввода)
 		}
 		out := make([]chOut, 0, len(channels))
 		for _, c := range channels {
@@ -967,6 +968,7 @@ func Handler(d *Deps, log *slog.Logger) http.Handler {
 				ID: c.ID, Title: title, IsPublic: c.IsPublic, Admin: c.IsBotAdmin,
 				Links: len(stats), Clicks: clicks, Signups: signups,
 				AddedAt: c.CreatedAt.In(msk()).Format("02.01.2006"),
+				ChatID: c.ChatID,
 			})
 		}
 		writeJSON(w, map[string]any{"channels": out})

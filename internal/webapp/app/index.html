@@ -1705,7 +1705,7 @@
             '<div class="row"><div class="title">' + esc(c.title) + '</div><span style="display:flex;align-items:center;gap:6px">' +
             '<span class="badge ' + (c.admin ? 'ok' : 'warn') + '">' + (c.admin ? 'бот админ' : 'нет прав') + '</span>' +
             '<button class="delico" data-a="chdel" data-id="' + c.id + '" title="Удалить канал">🗑</button></span></div>' +
-            '<div class="meta">ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + '</div></div>';
+            '<div class="meta">ссылок: ' + c.links + ' · добавлен ' + esc(c.added_at) + ' · ID: ' + c.chat_id + '</div></div>';
         }).join('') || '<div class="empty">Каналов пока нет</div>';
         app.querySelectorAll('button[data-a="chdel"]').forEach(function (b) {
           b.onclick = function (e) {
