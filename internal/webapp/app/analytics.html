@@ -215,6 +215,13 @@
   var state = { tab: 'gw', sort: 'date', filter: 'all', dynDays: 14,
                 gwSort: 'date', gwFilter: 'all',
                 chID: null, chTitle: '', view: 'tab' };
+  // Таб/вид фиксируются: приложение открывается там, где пользователь был.
+  try {
+    var savedTab = localStorage.getItem('rm_tab');
+    var savedView = localStorage.getItem('rm_view');
+    if (savedTab) state.tab = savedTab;
+    if (savedView) state.view = savedView;
+  } catch (e) {}
 
   // Единый регистратор BackButton (onClick добавляет, не заменяет!)
   var curBack = null;
@@ -922,7 +929,8 @@
     }
     var goTrack = document.getElementById('f-gotrack');
     if (goTrack) goTrack.onclick = function () {
-      // Черновик сохранён — из Трекинга вернётесь через «Создать розыгрыш».
+      // Флаг: при возврате в приложение визард откроется на этом же шаге.
+      try { localStorage.setItem('rm_return_wizard', '1'); } catch (e) {}
       state.tab = 'tr'; state.view = 'tab'; render();
     };
 
@@ -940,8 +948,8 @@
           el.value = v.slice(0, s) + '[' + label + '](' + l.url + ')' + v.slice(e);
           el.dispatchEvent(new Event('input'));
         }, function () {
-          // seamless-переход в Трекинг: черновик сохранён, вернётесь через
-          // «Создать розыгрыш» — визард продолжится с того же шага.
+          // Seamless-переход в Трекинг; при возврате визард откроется здесь же.
+          try { localStorage.setItem('rm_return_wizard', '1'); } catch (e) {}
           state.tab = 'tr'; state.view = 'tab'; render();
         });
       });
@@ -1187,6 +1195,15 @@
   function bindDateField(inpId, hintId) {
     var inp = document.getElementById(inpId), hint = document.getElementById(hintId);
     if (!inp) return;
+    // Цифровая клавиатура не даёт «.»/«:» — маску ставим сами по мере ввода.
+    function mask(v) {
+      var d = (v || '').replace(/\D/g, '').slice(0, 12), out = d.slice(0, 2);
+      if (d.length >= 3) out += '.' + d.slice(2, 4);
+      if (d.length >= 5) out += '.' + d.slice(4, 8);
+      if (d.length >= 9) out += ' ' + d.slice(8, 10);
+      if (d.length >= 11) out += ':' + d.slice(10, 12);
+      return out;
+    }
     function show() {
       if (!hint) return;
       if (!inp.value) { hint.textContent = ''; return; }
@@ -1194,7 +1211,14 @@
       hint.textContent = ok ? '✓ дата распознана' : '✗ формат ДД.ММ.ГГГГ ЧЧ:ММ';
       hint.style.color = ok ? 'var(--muted)' : '#c66';
     }
-    inp.addEventListener('input', show);
+    inp.addEventListener('input', function () {
+      var m = mask(inp.value);
+      if (m !== inp.value) {
+        inp.value = m;
+        inp.setSelectionRange(m.length, m.length);
+      }
+      show();
+    });
     show();
     inp.parentElement.querySelectorAll('[data-dd]').forEach(function (c) {
       c.onclick = function () {
@@ -1741,12 +1765,22 @@
 
   // ---------- Роутер ----------
   function render() {
+    try { localStorage.setItem('rm_tab', state.tab); localStorage.setItem('rm_view', state.view); } catch (e) {}
     if (role === 'participant') renderParticipant();
     else { organizerTabs(); renderOrganizer(); }
     animateSlide();
   }
   tabbar.classList.remove('hidden');
   render();
+
+  // Возврат из Трекинга при живом черновике: продолжить создание с места.
+  try {
+    if (localStorage.getItem('rm_return_wizard') === '1') {
+      localStorage.removeItem('rm_return_wizard');
+      var d0 = loadDraft(DRAFT_GW_KEY) || {};
+      if (d0.giveaway_id && d0.step > 0) renderGwWizard(0); // резюм на d0.step
+    }
+  } catch (e) {}
 })();
 
 </script>
