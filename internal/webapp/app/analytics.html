@@ -622,15 +622,18 @@
   // выбранных каналов (созданные вручную в Трекинге).
   function loadEmbeddableLinks(done) {
     var dd = loadDraft(DRAFT_GW_KEY) || {};
-    var out = [];
-    (dd.links || []).forEach(function (l) { out.push(l); });
+    var out = [], seen = {};
+    // Дедуп по URL: ссылки розыгрыша уже входят в списки его каналов —
+    // без фильтра каждая показывалась дважды.
+    function push(l) { if (l && l.url && !seen[l.url]) { seen[l.url] = 1; out.push(l); } }
+    (dd.links || []).forEach(push);
     var chs = dd.pub_channels || [];
     var left = chs.length;
     if (!left) return done(out);
     chs.forEach(function (chID) {
       GET('/app/api/analytics/channel/' + chID).then(function (d) {
         (d.links || []).forEach(function (l) {
-          if (l.url) out.push({ url: l.url, name: l.name, channel_id: chID });
+          push({ url: l.url, name: l.name, channel_id: chID });
         });
       }).catch(function () {}).then(function () { if (--left === 0) done(out); });
     });
