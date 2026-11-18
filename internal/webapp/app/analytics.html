@@ -165,10 +165,18 @@
     }).then(function (r) { return r.json(); }).then(function (d) {
       var dest = d && d.redirect;
       if (dest && dest.indexOf('http') === 0) {
-        location.replace(dest);
-        setTimeout(function () {
-          var g = document.getElementById('go'); if (g) { g.href = dest; g.style.display = 'inline-block'; }
-        }, 1200);
+        // location.replace ВНУТРИ вебвью не открывает страницу канала — юзер
+        // висел на спиннере. Открываем нативно ЧЕРЕЗ бридж (вне вебвью);
+        // в обычном браузере — обычный переход. Кнопка-фолбэк остаётся.
+        var opened = false;
+        try {
+          if (window.WebApp && window.WebApp.openMaxLink) { window.WebApp.openMaxLink(dest); opened = true; }
+        } catch (e) {}
+        var g = document.getElementById('go');
+        if (g) { g.href = dest; g.style.display = 'inline-block'; }
+        var t1 = document.getElementById('t1');
+        if (t1 && opened) t1.textContent = 'Открываю канал… (окно можно закрыть)';
+        if (!opened) location.replace(dest);
       } else {
         var t = document.getElementById('t1'); if (t) t.textContent = 'Канал недоступен';
       }
